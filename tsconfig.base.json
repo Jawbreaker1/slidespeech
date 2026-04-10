@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@slidespeech/core": ["packages/core/src/index.ts"],
+      "@slidespeech/providers": ["packages/providers/src/index.ts"],
+      "@slidespeech/types": ["packages/types/src/index.ts"],
+      "@slidespeech/ui": ["packages/ui/src/index.ts"]
+    }
+  }
+}
+

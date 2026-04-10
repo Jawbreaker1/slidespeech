@@ -1,0 +1,23 @@
+{
+  "name": "slidespeech",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev --workspace @slidespeech/api\" \"npm run dev --workspace @slidespeech/web\"",
+    "dev:api": "npm run dev --workspace @slidespeech/api",
+    "dev:web": "npm run dev --workspace @slidespeech/web",
+    "verify:api": "./scripts/verify_api_fixed_port.sh",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "tsx --test tests/**/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

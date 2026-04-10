@@ -1,0 +1,60 @@
+{
+  "id": "session_a0wjlqcd",
+  "deckId": "deck_am4cc125",
+  "state": "presenting",
+  "currentSlideId": "slide_ban50epd",
+  "currentSlideIndex": 0,
+  "narrationBySlideId": {
+    "slide_ban50epd": {
+      "slideId": "slide_ban50epd",
+      "narration": "Varför Vad en state machine är och varför den hjälper AI-runtime är värt att lära sig. Vad en state machine är och varför den hjälper AI-runtime kan ses som ett verktyg för att förstå och påverka ett område på ett mer strukturerat sätt. Fokusera särskilt på: Vad en state machine är och varför den hjälper AI-runtime löser ett konkret problem eller ger ny förmåga., Vi börjar från intuition före terminologi., Målet är förståelse, inte memorering..",
+      "summaryLine": "Skapa motivation och en enkel mental modell för Vad en state machine är och varför den hjälper AI-runtime.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Knyt ihop huvudidén och gå vidare till nästa slide."
+    },
+    "slide_t32tsth4": {
+      "slideId": "slide_t32tsth4",
+      "narration": "Vad en state machine är och varför den hjälper AI-runtime i tre byggblock. Vad en state machine är och varför den hjälper AI-runtime blir lättare att förstå om vi delar upp det i vad som kommer in, vad som händer i mitten och vad som kommer ut. Fokusera särskilt på: Input: vad systemet tar emot., Bearbetning: hur förståelse eller transformation sker., Output: vilket resultat användaren får..",
+      "summaryLine": "Bryta ned Vad en state machine är och varför den hjälper AI-runtime i enkla komponenter.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Knyt ihop huvudidén och gå vidare till nästa slide."
+    },
+    "slide_wqrnj4l6": {
+      "slideId": "slide_wqrnj4l6",
+      "narration": "Ett konkret exempel på Vad en state machine är och varför den hjälper AI-runtime. När Vad en state machine är och varför den hjälper AI-runtime kopplas till ett konkret användarfall blir det tydligare varför varje del i lösningen finns. Fokusera särskilt på: Utgå från ett tydligt användarfall., Följ data eller beslut genom flödet., Peka ut vad användaren märker av systemets kvalitet..",
+      "summaryLine": "Förankra ämnet i ett konkret scenario.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Knyt ihop huvudidén och gå vidare till nästa slide."
+    },
+    "slide_94fryudz": {
+      "slideId": "slide_94fryudz",
+      "narration": "Sammanfattning och nästa steg. En bra sammanfattning gör att det viktigaste stannar kvar även om detaljerna glöms bort. Fokusera särskilt på: Återkoppla till ämnets värde., Repetera modell och exempel., Ge ett konkret nästa steg för vidare lärande..",
+      "summaryLine": "Knyta ihop ämnet och ge en tydlig väg vidare.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Avsluta med repetition och kontrollfråga."
+    }
+  },
+  "transcriptTurnIds": [],
+  "pedagogicalProfile": {
+    "audienceLevel": "beginner",
+    "tone": "supportive and concrete",
+    "pace": "balanced",
+    "preferredExampleStyle": "real_world",
+    "wantsFrequentChecks": true,
+    "detailLevel": "standard"
+  },
+  "createdAt": "2026-04-09T19:57:19.430Z",
+  "updatedAt": "2026-04-09T19:57:19.430Z"
+}

@@ -1,0 +1,11 @@
+node_modules
+.next
+dist
+coverage
+.env
+.env.local
+*.log
+data/decks/*.json
+data/sessions/*.json
+data/transcripts/*.json
+

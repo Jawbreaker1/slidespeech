@@ -1,0 +1,153 @@
+{
+  "id": "deck_am4cc125",
+  "title": "Vad en state machine är och varför den hjälper AI-runtime: interaktiv introduktion",
+  "topic": "Vad en state machine är och varför den hjälper AI-runtime",
+  "summary": "En pedagogisk introduktion till Vad en state machine är och varför den hjälper AI-runtime med fokus på intuition, struktur och exempel.",
+  "pedagogicalProfile": {
+    "audienceLevel": "beginner",
+    "tone": "supportive and concrete",
+    "pace": "balanced",
+    "preferredExampleStyle": "real_world",
+    "wantsFrequentChecks": true,
+    "detailLevel": "standard"
+  },
+  "source": {
+    "type": "topic",
+    "topic": "Vad en state machine är och varför den hjälper AI-runtime",
+    "sourceIds": []
+  },
+  "slides": [
+    {
+      "id": "slide_ban50epd",
+      "order": 0,
+      "title": "Varför Vad en state machine är och varför den hjälper AI-runtime är värt att lära sig",
+      "learningGoal": "Skapa motivation och en enkel mental modell för Vad en state machine är och varför den hjälper AI-runtime.",
+      "keyPoints": [
+        "Vad en state machine är och varför den hjälper AI-runtime löser ett konkret problem eller ger ny förmåga.",
+        "Vi börjar från intuition före terminologi.",
+        "Målet är förståelse, inte memorering."
+      ],
+      "requiredContext": [],
+      "speakerNotes": [
+        "Börja med användarens vardag och knyt ämnet till nytta."
+      ],
+      "beginnerExplanation": "Vad en state machine är och varför den hjälper AI-runtime kan ses som ett verktyg för att förstå och påverka ett område på ett mer strukturerat sätt.",
+      "advancedExplanation": "Vad en state machine är och varför den hjälper AI-runtime kombinerar begreppsmodell, metodik och ofta ett operativt arbetssätt som går att generalisera till flera problem.",
+      "examples": [
+        "Om du behöver förklara Vad en state machine är och varför den hjälper AI-runtime för en kollega kan du börja med varför någon skulle bry sig."
+      ],
+      "likelyQuestions": [
+        "Vad används Vad en state machine är och varför den hjälper AI-runtime till i praktiken?",
+        "Behöver jag teknisk bakgrund för att förstå Vad en state machine är och varför den hjälper AI-runtime?"
+      ],
+      "canSkip": false,
+      "dependenciesOnOtherSlides": [],
+      "visualNotes": [
+        "Visa ämnets värde först, detaljer senare."
+      ]
+    },
+    {
+      "id": "slide_t32tsth4",
+      "order": 1,
+      "title": "Vad en state machine är och varför den hjälper AI-runtime i tre byggblock",
+      "learningGoal": "Bryta ned Vad en state machine är och varför den hjälper AI-runtime i enkla komponenter.",
+      "keyPoints": [
+        "Input: vad systemet tar emot.",
+        "Bearbetning: hur förståelse eller transformation sker.",
+        "Output: vilket resultat användaren får."
+      ],
+      "requiredContext": [
+        "Övergripande nytta med Vad en state machine är och varför den hjälper AI-runtime."
+      ],
+      "speakerNotes": [
+        "Använd enkla ord före facktermer och jämför med ett vardagsflöde."
+      ],
+      "beginnerExplanation": "Vad en state machine är och varför den hjälper AI-runtime blir lättare att förstå om vi delar upp det i vad som kommer in, vad som händer i mitten och vad som kommer ut.",
+      "advancedExplanation": "Vad en state machine är och varför den hjälper AI-runtime kan ofta beskrivas som en pipeline med tydliga gränssnitt mellan ingestion, bearbetning och leverans.",
+      "examples": [
+        "Tänk Vad en state machine är och varför den hjälper AI-runtime som ett kök: råvaror kommer in, tillagning sker i mitten och en färdig rätt serveras."
+      ],
+      "likelyQuestions": [
+        "Vilken del är svårast att bygga först?",
+        "Kan man byta ut en del utan att göra om allt?"
+      ],
+      "canSkip": false,
+      "dependenciesOnOtherSlides": [],
+      "visualNotes": [
+        "Tre block med tydliga pilar mellan stegen."
+      ]
+    },
+    {
+      "id": "slide_wqrnj4l6",
+      "order": 2,
+      "title": "Ett konkret exempel på Vad en state machine är och varför den hjälper AI-runtime",
+      "learningGoal": "Förankra ämnet i ett konkret scenario.",
+      "keyPoints": [
+        "Utgå från ett tydligt användarfall.",
+        "Följ data eller beslut genom flödet.",
+        "Peka ut vad användaren märker av systemets kvalitet."
+      ],
+      "requiredContext": [
+        "De tre byggblocken för Vad en state machine är och varför den hjälper AI-runtime."
+      ],
+      "speakerNotes": [
+        "Håll exemplet konsekvent och återkoppla till byggblocken."
+      ],
+      "beginnerExplanation": "När Vad en state machine är och varför den hjälper AI-runtime kopplas till ett konkret användarfall blir det tydligare varför varje del i lösningen finns.",
+      "advancedExplanation": "Genom att följa ett realistiskt use case blir det möjligt att resonera om tradeoffs, felmoder och ansvar mellan moduler.",
+      "examples": [
+        "Om ämnet är maskininlärning kan exemplet vara hur ett system sorterar inkommande supportärenden."
+      ],
+      "likelyQuestions": [
+        "Vad händer om inputen är dålig?",
+        "Hur vet man att resultatet blev bra?"
+      ],
+      "canSkip": false,
+      "dependenciesOnOtherSlides": [],
+      "visualNotes": [
+        "Ett scenario med input, beslutspunkt och resultat."
+      ]
+    },
+    {
+      "id": "slide_94fryudz",
+      "order": 3,
+      "title": "Sammanfattning och nästa steg",
+      "learningGoal": "Knyta ihop ämnet och ge en tydlig väg vidare.",
+      "keyPoints": [
+        "Återkoppla till ämnets värde.",
+        "Repetera modell och exempel.",
+        "Ge ett konkret nästa steg för vidare lärande."
+      ],
+      "requiredContext": [
+        "Hela introduktionen till Vad en state machine är och varför den hjälper AI-runtime."
+      ],
+      "speakerNotes": [
+        "Avsluta med en kort repetition och en fråga som kontrollerar förståelse."
+      ],
+      "beginnerExplanation": "En bra sammanfattning gör att det viktigaste stannar kvar även om detaljerna glöms bort.",
+      "advancedExplanation": "Den avslutande syntesen ska minska kognitiv belastning och samtidigt öppna för fördjupning.",
+      "examples": [
+        "Be användaren beskriva ämnet med en mening och ge ett eget exempel."
+      ],
+      "likelyQuestions": [
+        "Vad ska jag testa själv efter detta?"
+      ],
+      "canSkip": true,
+      "dependenciesOnOtherSlides": [],
+      "visualNotes": [
+        "Kort checklista och tydligt nästa steg."
+      ]
+    }
+  ],
+  "createdAt": "2026-04-09T19:57:19.429Z",
+  "updatedAt": "2026-04-09T19:57:19.429Z",
+  "metadata": {
+    "estimatedDurationMinutes": 6,
+    "tags": [
+      "mvp",
+      "teaching",
+      "interactive-presentation"
+    ],
+    "language": "sv"
+  }
+}

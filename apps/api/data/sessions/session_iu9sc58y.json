@@ -1,0 +1,60 @@
+{
+  "id": "session_iu9sc58y",
+  "deckId": "deck_b0hlxlgb",
+  "state": "presenting",
+  "currentSlideId": "slide_t8m1kto7",
+  "currentSlideIndex": 0,
+  "narrationBySlideId": {
+    "slide_t8m1kto7": {
+      "slideId": "slide_t8m1kto7",
+      "narration": "Varför Hur en interaktiv AI-lärare fungerar är värt att lära sig. Hur en interaktiv AI-lärare fungerar kan ses som ett verktyg för att förstå och påverka ett område på ett mer strukturerat sätt. Fokusera särskilt på: Hur en interaktiv AI-lärare fungerar löser ett konkret problem eller ger ny förmåga., Vi börjar från intuition före terminologi., Målet är förståelse, inte memorering..",
+      "summaryLine": "Skapa motivation och en enkel mental modell för Hur en interaktiv AI-lärare fungerar.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Knyt ihop huvudidén och gå vidare till nästa slide."
+    },
+    "slide_7f7u72a8": {
+      "slideId": "slide_7f7u72a8",
+      "narration": "Hur en interaktiv AI-lärare fungerar i tre byggblock. Hur en interaktiv AI-lärare fungerar blir lättare att förstå om vi delar upp det i vad som kommer in, vad som händer i mitten och vad som kommer ut. Fokusera särskilt på: Input: vad systemet tar emot., Bearbetning: hur förståelse eller transformation sker., Output: vilket resultat användaren får..",
+      "summaryLine": "Bryta ned Hur en interaktiv AI-lärare fungerar i enkla komponenter.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Knyt ihop huvudidén och gå vidare till nästa slide."
+    },
+    "slide_631njqtn": {
+      "slideId": "slide_631njqtn",
+      "narration": "Ett konkret exempel på Hur en interaktiv AI-lärare fungerar. När Hur en interaktiv AI-lärare fungerar kopplas till ett konkret användarfall blir det tydligare varför varje del i lösningen finns. Fokusera särskilt på: Utgå från ett tydligt användarfall., Följ data eller beslut genom flödet., Peka ut vad användaren märker av systemets kvalitet..",
+      "summaryLine": "Förankra ämnet i ett konkret scenario.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Knyt ihop huvudidén och gå vidare till nästa slide."
+    },
+    "slide_qd3rgmmr": {
+      "slideId": "slide_qd3rgmmr",
+      "narration": "Sammanfattning och nästa steg. En bra sammanfattning gör att det viktigaste stannar kvar även om detaljerna glöms bort. Fokusera särskilt på: Återkoppla till ämnets värde., Repetera modell och exempel., Ge ett konkret nästa steg för vidare lärande..",
+      "summaryLine": "Knyta ihop ämnet och ge en tydlig väg vidare.",
+      "promptsForPauses": [
+        "Säg stopp om du vill pausa.",
+        "Be om ett enklare exempel om något känns abstrakt."
+      ],
+      "suggestedTransition": "Avsluta med repetition och kontrollfråga."
+    }
+  },
+  "transcriptTurnIds": [],
+  "pedagogicalProfile": {
+    "audienceLevel": "beginner",
+    "tone": "supportive and concrete",
+    "pace": "balanced",
+    "preferredExampleStyle": "real_world",
+    "wantsFrequentChecks": true,
+    "detailLevel": "standard"
+  },
+  "createdAt": "2026-04-09T19:56:53.597Z",
+  "updatedAt": "2026-04-09T19:56:53.597Z"
+}
