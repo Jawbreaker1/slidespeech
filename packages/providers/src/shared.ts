@@ -75,3 +75,26 @@ export const extractJsonFromText = (text: string): string => {
   throw new Error("No JSON object found in provider response.");
 };
 
+export const splitTextIntoSegments = (text: string): string[] => {
+  const normalized = text.replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  const sentenceLikeSegments = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (sentenceLikeSegments.length > 1) {
+    return sentenceLikeSegments;
+  }
+
+  const clauseSegments = normalized
+    .split(/,\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  return clauseSegments.length > 1 ? clauseSegments : [normalized];
+};

@@ -5,6 +5,7 @@ import type {
   Deck,
   LLMProvider,
   PedagogicalProfile,
+  PresentationPlan,
   ResumePlan,
   ResumePlanner,
   Session,
@@ -17,15 +18,31 @@ import type {
 } from "@slidespeech/types";
 
 import { DEFAULT_PEDAGOGICAL_PROFILE } from "./defaults";
+import {
+  buildDeterministicDeck,
+  buildDeterministicNarration,
+  buildDeterministicPresentationPlan,
+  buildDeterministicReview,
+} from "./deterministic-generation";
 import { RuleBasedConversationTurnEngine } from "./conversation-turn-engine";
-import { NarrationEngine, PresentationPlanner } from "./planners";
+import {
+  NarrationEngine,
+  PresentationPlanner,
+  PresentationQualityReviewer,
+} from "./planners";
 import { SimpleResumePlanner } from "./resume-planner";
 import { transitionSessionState } from "./state-machine";
 import { createId, nowIso } from "./utils";
+import { validateAndRepairDeck, validateAndRepairNarrations } from "./validation";
 
 export interface CreatePresentationSessionInput {
   topic: string;
   pedagogicalProfile?: Partial<PedagogicalProfile> | undefined;
+  groundingSummary?: string | undefined;
+  groundingSourceIds?: string[] | undefined;
+  groundingSourceType?: "topic" | "document" | "pptx" | "mixed" | undefined;
+  targetDurationMinutes?: number | undefined;
+  targetSlideCount?: number | undefined;
 }
 
 export interface CreatePresentationSessionResult {
@@ -56,9 +73,42 @@ export interface SessionSnapshotResult {
   transcripts: TranscriptTurn[];
 }
 
+const splitNarrationIntoSegments = (text: string): string[] => {
+  const normalized = text.replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  const sentenceLikeSegments = normalized
+    .split(/(?<=[.!?])\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (sentenceLikeSegments.length > 1) {
+    return sentenceLikeSegments;
+  }
+
+  const clauseSegments = normalized
+    .split(/,\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  return clauseSegments.length > 1 ? clauseSegments : [normalized];
+};
+
+const ensureNarrationSegments = (narration: SlideNarration): SlideNarration => ({
+  ...narration,
+  segments:
+    narration.segments.length > 0
+      ? narration.segments
+      : splitNarrationIntoSegments(narration.narration),
+});
+
 export class PresentationSessionService {
   private readonly planner: PresentationPlanner;
   private readonly narrationEngine: NarrationEngine;
+  private readonly qualityReviewer: PresentationQualityReviewer;
 
   constructor(
     private readonly llmProvider: LLMProvider,
@@ -70,6 +120,7 @@ export class PresentationSessionService {
   ) {
     this.planner = new PresentationPlanner(llmProvider);
     this.narrationEngine = new NarrationEngine(llmProvider);
+    this.qualityReviewer = new PresentationQualityReviewer(llmProvider);
   }
 
   async createSession(
@@ -80,21 +131,184 @@ export class PresentationSessionService {
       ...input.pedagogicalProfile,
     };
 
-    const deck = await this.planner.generateDeck({
-      topic: input.topic,
-      pedagogicalProfile,
-    });
-    const firstSlide = deck.slides[0];
+    let plan: PresentationPlan;
+    try {
+      plan = await this.planner.plan(
+        input.topic,
+        pedagogicalProfile,
+        input.groundingSummary,
+        input.targetDurationMinutes,
+        input.targetSlideCount,
+      );
+    } catch (error) {
+      console.warn(
+        `[slidespeech] presentation plan fallback for topic "${input.topic}": ${(error as Error).message}`,
+      );
+      plan = buildDeterministicPresentationPlan({
+        topic: input.topic,
+        audienceLevel: pedagogicalProfile.audienceLevel,
+        ...(input.targetSlideCount ? { targetSlideCount: input.targetSlideCount } : {}),
+      });
+    }
 
-    const narrations = firstSlide
-      ? [
+    const generationInput = {
+      topic: input.topic,
+      plan,
+      pedagogicalProfile,
+      ...(input.groundingSummary
+        ? { groundingSummary: input.groundingSummary }
+        : {}),
+      ...(input.groundingSourceIds
+        ? { groundingSourceIds: input.groundingSourceIds }
+        : {}),
+      ...(input.groundingSourceType
+        ? { groundingSourceType: input.groundingSourceType }
+        : {}),
+      ...(input.targetDurationMinutes
+        ? { targetDurationMinutes: input.targetDurationMinutes }
+        : {}),
+      ...(input.targetSlideCount
+        ? { targetSlideCount: input.targetSlideCount }
+        : {}),
+    };
+
+    let generatedDeck: Deck;
+    let usedDeterministicDeckFallback = false;
+
+    try {
+      generatedDeck = await this.planner.generateDeck(generationInput);
+    } catch (error) {
+      console.warn(
+        `[slidespeech] deck generation fallback for topic "${input.topic}": ${(error as Error).message}`,
+      );
+      generatedDeck = buildDeterministicDeck(generationInput);
+      usedDeterministicDeckFallback = true;
+    }
+
+    const deckValidation = validateAndRepairDeck(generatedDeck);
+    let deck = deckValidation.value;
+    const generatedNarrations: SlideNarration[] = [];
+    let usedDeterministicNarrationFallback = false;
+
+    for (const slide of deck.slides) {
+      try {
+        generatedNarrations.push(
           await this.narrationEngine.generateNarration({
             deck,
-            slide: firstSlide,
+            slide,
             pedagogicalProfile,
           }),
-        ]
-      : [];
+        );
+      } catch (error) {
+        console.warn(
+          `[slidespeech] narration fallback for slide "${slide.title}": ${(error as Error).message}`,
+        );
+        generatedNarrations.push(
+          buildDeterministicNarration({
+            deck,
+            slide,
+            pedagogicalProfile,
+          }),
+        );
+        usedDeterministicNarrationFallback = true;
+      }
+    }
+
+    const narrationValidation = validateAndRepairNarrations(
+      deck,
+      generatedNarrations,
+    );
+    let narrations = narrationValidation.value;
+    const shouldUseDeterministicReview =
+      usedDeterministicDeckFallback || usedDeterministicNarrationFallback;
+    const combinedValidationIssues = [
+      ...deckValidation.issues,
+      ...narrationValidation.issues,
+    ];
+    const llmReview = shouldUseDeterministicReview
+      ? buildDeterministicReview({
+          deck,
+          validationIssues: combinedValidationIssues,
+          note:
+            "Deterministic review used because one or more generation stages fell back from the LLM path.",
+        })
+      : await this.qualityReviewer
+          .review({
+            deck,
+            narrations,
+            pedagogicalProfile,
+          })
+          .catch((error) => {
+            console.warn(
+              `[slidespeech] presentation review fallback for topic "${input.topic}": ${(error as Error).message}`,
+            );
+            return buildDeterministicReview({
+              deck,
+              validationIssues: combinedValidationIssues,
+              note:
+                "Deterministic review used because the LLM review step was unavailable.",
+            });
+          });
+    if (llmReview.repairedNarrations.length > 0) {
+      const repairedBySlideId = new Map(
+        llmReview.repairedNarrations.map((narration) => [narration.slideId, narration]),
+      );
+      narrations = deck.slides.map((slide) => {
+        const repaired = repairedBySlideId.get(slide.id);
+        if (repaired) {
+          return repaired;
+        }
+
+        return (
+          narrations.find((narration) => narration.slideId === slide.id) ??
+          ensureNarrationSegments(
+            narrationValidation.value.find((narration) => narration.slideId === slide.id)!,
+          )
+        );
+      });
+    }
+    const postReviewNarrationValidation = validateAndRepairNarrations(deck, narrations);
+    narrations = postReviewNarrationValidation.value;
+    deck = {
+      ...deck,
+      metadata: {
+        ...deck.metadata,
+        ...(deck.metadata.validation
+          ? {
+              validation: {
+                ...deck.metadata.validation,
+                repaired:
+                  deck.metadata.validation.repaired ||
+                  narrationValidation.repaired ||
+                  llmReview.repairedNarrations.length > 0 ||
+                  postReviewNarrationValidation.repaired,
+                summary: llmReview.summary,
+                overallScore: llmReview.overallScore,
+                issues: [
+                  ...deck.metadata.validation.issues,
+                  ...narrationValidation.issues,
+                  ...llmReview.issues.map((issue) => ({
+                    code: issue.code,
+                    message: issue.message,
+                    severity: issue.severity,
+                    ...(issue.slideId ? { slideId: issue.slideId } : {}),
+                  })),
+                  ...postReviewNarrationValidation.issues,
+                ],
+                passed:
+                  deck.metadata.validation.passed &&
+                  llmReview.approved &&
+                  !narrationValidation.issues.some(
+                    (issue) => issue.severity === "error",
+                  ) &&
+                  !postReviewNarrationValidation.issues.some(
+                    (issue) => issue.severity === "error",
+                  ),
+              },
+            }
+          : {}),
+      },
+    };
 
     await this.deckRepository.save(deck);
 
@@ -108,7 +322,11 @@ export class PresentationSessionService {
       state: "presenting",
       currentSlideId: deck.slides[0]?.id,
       currentSlideIndex: 0,
+      currentNarrationIndex: 0,
       narrationBySlideId,
+      narrationProgressBySlideId: deck.slides[0]
+        ? { [deck.slides[0].id]: 0 }
+        : {},
       transcriptTurnIds: [],
       pedagogicalProfile,
       createdAt: nowIso(),
@@ -152,7 +370,7 @@ export class PresentationSessionService {
 
     const existingNarration = session.narrationBySlideId[slideId];
     if (existingNarration) {
-      return existingNarration;
+      return ensureNarrationSegments(existingNarration);
     }
 
     const deck = await this.deckRepository.getById(session.deckId);
@@ -165,11 +383,13 @@ export class PresentationSessionService {
       throw new Error(`Slide ${slideId} was not found in deck ${deck.id}.`);
     }
 
-    const narration = await this.narrationEngine.generateNarration({
-      deck,
-      slide,
-      pedagogicalProfile: session.pedagogicalProfile,
-    });
+    const narration = ensureNarrationSegments(
+      await this.narrationEngine.generateNarration({
+        deck,
+        slide,
+        pedagogicalProfile: session.pedagogicalProfile,
+      }),
+    );
 
     const updatedSession: Session = {
       ...session,
@@ -184,17 +404,31 @@ export class PresentationSessionService {
     return narration;
   }
 
-  async selectSlide(
+  async updateNarrationProgress(
     sessionId: string,
-    slideId: string,
+    slideId: string | undefined,
+    narrationIndex: number,
   ): Promise<SelectSlideResult> {
     const { session, deck } = await this.loadSessionContext(sessionId);
-    const targetSlide = this.requireSlide(deck, slideId);
+    const targetSlide = this.requireSlide(
+      deck,
+      slideId ?? session.currentSlideId ?? deck.slides[session.currentSlideIndex]?.id,
+    );
+    const narration = await this.getOrGenerateNarration(sessionId, targetSlide.id);
+    const clampedNarrationIndex = this.clampNarrationIndex(
+      narration,
+      narrationIndex,
+    );
 
     const updatedSession: Session = {
       ...session,
       currentSlideId: targetSlide.id,
-      currentSlideIndex: targetSlide.order,
+      currentSlideIndex: this.getSlideIndex(deck, targetSlide.id),
+      currentNarrationIndex: clampedNarrationIndex,
+      narrationProgressBySlideId: {
+        ...session.narrationProgressBySlideId,
+        [targetSlide.id]: clampedNarrationIndex,
+      },
       updatedAt: nowIso(),
     };
 
@@ -203,7 +437,41 @@ export class PresentationSessionService {
     return {
       deck,
       session: updatedSession,
-      narration: updatedSession.narrationBySlideId[targetSlide.id],
+      narration,
+    };
+  }
+
+  async selectSlide(
+    sessionId: string,
+    slideId: string,
+  ): Promise<SelectSlideResult> {
+    const { session, deck } = await this.loadSessionContext(sessionId);
+    const targetSlide = this.requireSlide(deck, slideId);
+    const existingNarration = session.narrationBySlideId[targetSlide.id];
+    const narration = existingNarration
+      ? ensureNarrationSegments(existingNarration)
+      : undefined;
+
+    const updatedSession: Session = {
+      ...session,
+      currentSlideId: targetSlide.id,
+      currentSlideIndex: this.getSlideIndex(deck, targetSlide.id),
+      currentNarrationIndex: this.getStoredNarrationProgress(session, targetSlide.id),
+      narrationBySlideId: narration
+        ? {
+            ...session.narrationBySlideId,
+            [targetSlide.id]: narration,
+          }
+        : session.narrationBySlideId,
+      updatedAt: nowIso(),
+    };
+
+    await this.sessionRepository.save(updatedSession);
+
+    return {
+      deck,
+      session: updatedSession,
+      narration,
     };
   }
 
@@ -274,7 +542,10 @@ export class PresentationSessionService {
       case "ack_resume": {
         session = this.resumeSession(session);
         narration = await this.getOrGenerateNarration(session.id, activeSlide.id);
-        assistantMessage = "Resuming from the current slide.";
+        assistantMessage =
+          resumePlan.targetNarrationIndex !== undefined
+            ? `Resuming from point ${resumePlan.targetNarrationIndex + 1} on the current slide.`
+            : "Resuming from the current slide.";
         break;
       }
       case "ack_back": {
@@ -299,7 +570,11 @@ export class PresentationSessionService {
         session = {
           ...session,
           currentSlideId: previousSlide.id,
-          currentSlideIndex: previousSlide.order,
+          currentSlideIndex: this.getSlideIndex(deck, previousSlide.id),
+          currentNarrationIndex: this.getStoredNarrationProgress(
+            session,
+            previousSlide.id,
+          ),
           updatedAt: nowIso(),
         };
         narration = await this.getOrGenerateNarration(session.id, previousSlide.id);
@@ -364,14 +639,21 @@ export class PresentationSessionService {
           "Answering user question in context.",
         );
 
-        const answer = await this.llmProvider.answerQuestion({
-          deck,
-          slide: activeSlide,
-          session,
-          pedagogicalProfile: session.pedagogicalProfile,
-          question: text,
-        });
-        assistantMessage = answer.text;
+        try {
+          const answer = await this.llmProvider.answerQuestion({
+            deck,
+            slide: activeSlide,
+            session,
+            pedagogicalProfile: session.pedagogicalProfile,
+            question: text,
+          });
+          assistantMessage = answer.text;
+        } catch (error) {
+          console.warn(
+            `[slidespeech] question answering fallback for slide ${activeSlide.id}: ${(error as Error).message}`,
+          );
+          assistantMessage = this.buildInteractionFallback("question", activeSlide);
+        }
 
         if (
           turnDecision.runtimeEffects.adaptDetailLevel ||
@@ -400,6 +682,7 @@ export class PresentationSessionService {
       }
     }
 
+    session = this.applyResumePlan(session, resumePlan, narration);
     session = this.applyRuntimeEffects(session, turnDecision);
 
     session = await this.appendTurn(session, {
@@ -453,6 +736,16 @@ export class PresentationSessionService {
     }
 
     return slide;
+  }
+
+  private getSlideIndex(deck: Deck, slideId: string): number {
+    const index = deck.slides.findIndex((candidate) => candidate.id === slideId);
+
+    if (index < 0) {
+      throw new Error(`Slide ${slideId} was not found in deck ${deck.id}.`);
+    }
+
+    return index;
   }
 
   private async appendTurn(
@@ -510,6 +803,22 @@ export class PresentationSessionService {
     );
   }
 
+  private getStoredNarrationProgress(session: Session, slideId: string): number {
+    return session.narrationProgressBySlideId[slideId] ?? 0;
+  }
+
+  private clampNarrationIndex(
+    narration: SlideNarration | undefined,
+    narrationIndex: number,
+  ): number {
+    const segmentCount =
+      narration && ensureNarrationSegments(narration).segments.length > 0
+        ? ensureNarrationSegments(narration).segments.length
+        : 1;
+
+    return Math.max(0, Math.min(narrationIndex, segmentCount - 1));
+  }
+
   private async handleBranchingRequest(
     type: ConversationTurnDecision["responseMode"],
     deck: Deck,
@@ -517,62 +826,96 @@ export class PresentationSessionService {
     session: Session,
     rawText: string,
   ): Promise<string> {
-    switch (type) {
-      case "simplify": {
-        const result =
-          /\?/.test(rawText) || /why|what|how|can you|could you/i.test(rawText)
-            ? await this.llmProvider.answerQuestion({
-                deck,
-                slide,
-                session,
-                pedagogicalProfile: {
-                  ...session.pedagogicalProfile,
-                  detailLevel: "light",
-                  pace: "slow",
-                },
-                question: `${rawText}\n\nPlease answer in simpler terms.`,
-              })
-            : await this.llmProvider.simplifyExplanation({
-                deck,
-                slide,
-                session,
-                pedagogicalProfile: session.pedagogicalProfile,
-                reason: "User asked for a simpler explanation.",
-              });
-        return result.text;
-      }
-      case "example": {
-        const result = await this.llmProvider.generateExample({
-          deck,
-          slide,
-          session,
-          pedagogicalProfile: session.pedagogicalProfile,
-          reason: "User asked for an example.",
-        });
-        return result.text;
-      }
-      case "deepen": {
-        const result = await this.llmProvider.deepenExplanation({
-          deck,
-          slide,
-          session,
-          pedagogicalProfile: session.pedagogicalProfile,
-          reason: "User asked for a deeper explanation.",
-        });
-        return result.text;
-      }
-      case "repeat": {
-        const narration =
-          session.narrationBySlideId[slide.id] ??
-          (await this.narrationEngine.generateNarration({
+    try {
+      switch (type) {
+        case "simplify": {
+          const result =
+            /\?/.test(rawText) || /why|what|how|can you|could you/i.test(rawText)
+              ? await this.llmProvider.answerQuestion({
+                  deck,
+                  slide,
+                  session,
+                  pedagogicalProfile: {
+                    ...session.pedagogicalProfile,
+                    detailLevel: "light",
+                    pace: "slow",
+                  },
+                  question: `${rawText}\n\nPlease answer in simpler terms.`,
+                })
+              : await this.llmProvider.simplifyExplanation({
+                  deck,
+                  slide,
+                  session,
+                  pedagogicalProfile: session.pedagogicalProfile,
+                  reason: "User asked for a simpler explanation.",
+                });
+          return result.text;
+        }
+        case "example": {
+          const result = await this.llmProvider.generateExample({
             deck,
             slide,
+            session,
             pedagogicalProfile: session.pedagogicalProfile,
-          }));
-        return narration.narration;
+            reason: "User asked for an example.",
+          });
+          return result.text;
+        }
+        case "deepen": {
+          const result = await this.llmProvider.deepenExplanation({
+            deck,
+            slide,
+            session,
+            pedagogicalProfile: session.pedagogicalProfile,
+            reason: "User asked for a deeper explanation.",
+          });
+          return result.text;
+        }
+        case "repeat": {
+          const narration =
+            session.narrationBySlideId[slide.id] ??
+            (await this.narrationEngine.generateNarration({
+              deck,
+              slide,
+              pedagogicalProfile: session.pedagogicalProfile,
+            }));
+          return narration.narration;
+        }
+        default:
+          return slide.beginnerExplanation;
       }
+    } catch (error) {
+      console.warn(
+        `[slidespeech] branching request fallback for slide ${slide.id}: ${(error as Error).message}`,
+      );
+      return this.buildInteractionFallback(type, slide);
+    }
+  }
+
+  private buildInteractionFallback(
+    type: ConversationTurnDecision["responseMode"] | "question",
+    slide: Slide,
+  ): string {
+    const keyPoints = slide.keyPoints.slice(0, 3);
+    const mainIdea =
+      keyPoints.length > 0 ? keyPoints.join(", ") : slide.learningGoal;
+
+    switch (type) {
+      case "simplify":
+        return `${slide.beginnerExplanation} In simple terms, the key idea here is ${mainIdea}.`;
+      case "example":
+        return slide.examples[0]
+          ? `A concrete example for this slide is: ${slide.examples[0]}`
+          : `A concrete way to think about this slide is to focus on ${mainIdea}.`;
+      case "deepen":
+        return slide.advancedExplanation.trim().length > 0
+          ? slide.advancedExplanation
+          : `Looking one level deeper, this slide is really about ${mainIdea}.`;
+      case "repeat":
+        return `${slide.beginnerExplanation} The main points are ${mainIdea}.`;
+      case "question":
       default:
-        return slide.beginnerExplanation;
+        return `${slide.beginnerExplanation} On this slide, the important points are ${mainIdea}.`;
     }
   }
 
@@ -602,6 +945,40 @@ export class PresentationSessionService {
 
     return {
       ...updatedSession,
+      updatedAt: nowIso(),
+    };
+  }
+
+  private applyResumePlan(
+    session: Session,
+    resumePlan: ResumePlan,
+    narration?: SlideNarration,
+  ): Session {
+    const currentSlideId = resumePlan.targetSlideId ?? session.currentSlideId;
+
+    if (!currentSlideId) {
+      return session;
+    }
+
+    const targetNarrationIndex =
+      resumePlan.action === "restart_slide"
+        ? 0
+        : this.clampNarrationIndex(
+            narration ??
+              (currentSlideId
+                ? session.narrationBySlideId[currentSlideId]
+                : undefined),
+            resumePlan.targetNarrationIndex ??
+              this.getStoredNarrationProgress(session, currentSlideId),
+          );
+
+    return {
+      ...session,
+      currentNarrationIndex: targetNarrationIndex,
+      narrationProgressBySlideId: {
+        ...session.narrationProgressBySlideId,
+        [currentSlideId]: targetNarrationIndex,
+      },
       updatedAt: nowIso(),
     };
   }

@@ -1,6 +1,8 @@
 export * from "./deck/pptxgenjs-deck-exporter";
 export * from "./deck/topic-only-mock-deck-ingestion-provider";
 export * from "./factory";
+export * from "./illustration/hosted-illustration-provider";
+export * from "./illustration/mock-illustration-provider";
 export * from "./llm/lmstudio-llm-provider";
 export * from "./llm/mock-llm-provider";
 export * from "./llm/openai-compatible";
@@ -8,6 +10,7 @@ export * from "./llm/resilient-llm-provider";
 export * from "./storage/file/repositories";
 export * from "./stt/mock-stt-provider";
 export * from "./tts/mock-tts-provider";
+export * from "./tts/system-tts-provider";
 export * from "./vad/mock-vad-provider";
 export * from "./vision/mock-vision-provider";
 export * from "./web-research/mock-web-research-provider";

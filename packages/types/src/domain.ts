@@ -61,6 +61,94 @@ export const PedagogicalProfileSchema = z.object({
 
 export type PedagogicalProfile = z.infer<typeof PedagogicalProfileSchema>;
 
+export const SlideLayoutTemplateSchema = z.enum([
+  "hero-focus",
+  "three-step-flow",
+  "two-column-callouts",
+  "summary-board",
+]);
+
+export type SlideLayoutTemplate = z.infer<typeof SlideLayoutTemplateSchema>;
+
+export const SlideVisualToneSchema = z.enum([
+  "accent",
+  "neutral",
+  "success",
+  "warning",
+  "info",
+]);
+
+export type SlideVisualTone = z.infer<typeof SlideVisualToneSchema>;
+
+export const SlideVisualCardSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  body: z.string(),
+  tone: SlideVisualToneSchema.default("neutral"),
+});
+
+export type SlideVisualCard = z.infer<typeof SlideVisualCardSchema>;
+
+export const SlideCalloutSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  text: z.string(),
+  tone: SlideVisualToneSchema.default("info"),
+});
+
+export type SlideCallout = z.infer<typeof SlideCalloutSchema>;
+
+export const SlideDiagramNodeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  tone: SlideVisualToneSchema.default("accent"),
+});
+
+export type SlideDiagramNode = z.infer<typeof SlideDiagramNodeSchema>;
+
+export const SlideDiagramEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  label: z.string().optional(),
+});
+
+export type SlideDiagramEdge = z.infer<typeof SlideDiagramEdgeSchema>;
+
+export const SlideImageStyleSchema = z.enum([
+  "diagram",
+  "editorial",
+  "abstract",
+  "screenshot-like",
+]);
+
+export type SlideImageStyle = z.infer<typeof SlideImageStyleSchema>;
+
+export const SlideImageSlotSchema = z.object({
+  id: z.string(),
+  prompt: z.string(),
+  caption: z.string().optional(),
+  altText: z.string().optional(),
+  style: SlideImageStyleSchema.default("diagram"),
+  tone: SlideVisualToneSchema.default("accent"),
+});
+
+export type SlideImageSlot = z.infer<typeof SlideImageSlotSchema>;
+
+export const SlideVisualsSchema = z.object({
+  layoutTemplate: SlideLayoutTemplateSchema.default("hero-focus"),
+  accentColor: z.string().default("1C7C7D"),
+  eyebrow: z.string().optional(),
+  heroStatement: z.string().optional(),
+  cards: z.array(SlideVisualCardSchema).default([]),
+  callouts: z.array(SlideCalloutSchema).default([]),
+  diagramNodes: z.array(SlideDiagramNodeSchema).default([]),
+  diagramEdges: z.array(SlideDiagramEdgeSchema).default([]),
+  imagePrompt: z.string().optional(),
+  imageSlots: z.array(SlideImageSlotSchema).default([]),
+});
+
+export type SlideVisuals = z.infer<typeof SlideVisualsSchema>;
+
 export const SlideSchema = z.object({
   id: z.string(),
   order: z.number().int().nonnegative(),
@@ -76,6 +164,15 @@ export const SlideSchema = z.object({
   canSkip: z.boolean().default(false),
   dependenciesOnOtherSlides: z.array(z.string()).default([]),
   visualNotes: z.array(z.string()).default([]),
+  visuals: SlideVisualsSchema.default({
+    layoutTemplate: "hero-focus",
+    accentColor: "1C7C7D",
+    cards: [],
+    callouts: [],
+    diagramNodes: [],
+    diagramEdges: [],
+    imageSlots: [],
+  }),
 });
 
 export type Slide = z.infer<typeof SlideSchema>;
@@ -102,6 +199,23 @@ export const DeckSchema = z.object({
     estimatedDurationMinutes: z.number().positive(),
     tags: z.array(z.string()).default([]),
     language: z.string().default("sv"),
+    validation: z
+      .object({
+        passed: z.boolean(),
+        repaired: z.boolean().default(false),
+        validatedAt: z.string(),
+        summary: z.string().optional(),
+        overallScore: z.number().min(0).max(1).optional(),
+        issues: z.array(
+          z.object({
+            code: z.string(),
+            message: z.string(),
+            severity: z.enum(["info", "warning", "error"]),
+            slideId: z.string().optional(),
+          }),
+        ).default([]),
+      })
+      .optional(),
   }),
 });
 
@@ -110,12 +224,35 @@ export type Deck = z.infer<typeof DeckSchema>;
 export const SlideNarrationSchema = z.object({
   slideId: z.string(),
   narration: z.string(),
+  segments: z.array(z.string().min(1)).default([]),
   summaryLine: z.string(),
   promptsForPauses: z.array(z.string()).default([]),
   suggestedTransition: z.string(),
 });
 
 export type SlideNarration = z.infer<typeof SlideNarrationSchema>;
+
+export const PresentationQualityIssueSchema = z.object({
+  code: z.string(),
+  severity: z.enum(["info", "warning", "error"]),
+  dimension: z.enum(["deck", "visual", "narration", "coherence", "grounding"]),
+  message: z.string(),
+  slideId: z.string().optional(),
+});
+
+export type PresentationQualityIssue = z.infer<
+  typeof PresentationQualityIssueSchema
+>;
+
+export const PresentationReviewSchema = z.object({
+  approved: z.boolean(),
+  overallScore: z.number().min(0).max(1),
+  summary: z.string(),
+  issues: z.array(PresentationQualityIssueSchema).default([]),
+  repairedNarrations: z.array(SlideNarrationSchema).default([]),
+});
+
+export type PresentationReview = z.infer<typeof PresentationReviewSchema>;
 
 export const PresentationPlanSchema = z.object({
   title: z.string(),
@@ -231,7 +368,11 @@ export const SessionSchema = z.object({
   state: SessionStateSchema,
   currentSlideId: z.string().optional(),
   currentSlideIndex: z.number().int().nonnegative().default(0),
+  currentNarrationIndex: z.number().int().nonnegative().default(0),
   narrationBySlideId: z.record(z.string(), SlideNarrationSchema).default({}),
+  narrationProgressBySlideId: z
+    .record(z.string(), z.number().int().nonnegative())
+    .default({}),
   transcriptTurnIds: z.array(z.string()).default([]),
   pedagogicalProfile: PedagogicalProfileSchema,
   createdAt: z.string(),
@@ -245,6 +386,9 @@ export type Session = z.infer<typeof SessionSchema>;
 export const GeneratePresentationRequestSchema = z.object({
   topic: z.string().min(3),
   pedagogicalProfile: PedagogicalProfileSchema.partial().optional(),
+  useWebResearch: z.boolean().optional(),
+  targetDurationMinutes: z.number().int().positive().max(60).optional(),
+  targetSlideCount: z.number().int().positive().max(30).optional(),
 });
 
 export type GeneratePresentationRequest = z.infer<
@@ -291,6 +435,15 @@ export const SelectSlideRequestSchema = z.object({
 
 export type SelectSlideRequest = z.infer<typeof SelectSlideRequestSchema>;
 
+export const NarrationProgressRequestSchema = z.object({
+  slideId: z.string().min(1).optional(),
+  narrationIndex: z.number().int().nonnegative(),
+});
+
+export type NarrationProgressRequest = z.infer<
+  typeof NarrationProgressRequestSchema
+>;
+
 export const SelectSlideResponseSchema = z.object({
   deck: DeckSchema,
   session: SessionSchema,
@@ -299,6 +452,17 @@ export const SelectSlideResponseSchema = z.object({
 });
 
 export type SelectSlideResponse = z.infer<typeof SelectSlideResponseSchema>;
+
+export const NarrationProgressResponseSchema = z.object({
+  deck: DeckSchema,
+  session: SessionSchema,
+  narration: SlideNarrationSchema.optional(),
+  provider: z.string(),
+});
+
+export type NarrationProgressResponse = z.infer<
+  typeof NarrationProgressResponseSchema
+>;
 
 export const SessionSnapshotResponseSchema = z.object({
   deck: DeckSchema,
@@ -310,6 +474,30 @@ export const SessionSnapshotResponseSchema = z.object({
 
 export type SessionSnapshotResponse = z.infer<
   typeof SessionSnapshotResponseSchema
+>;
+
+export const SlideIllustrationAssetSchema = z.object({
+  slideId: z.string(),
+  slotId: z.string(),
+  mimeType: z.string().min(1),
+  dataUri: z.string().min(1),
+  altText: z.string().optional(),
+  caption: z.string().optional(),
+  sourcePageUrl: z.string().url().optional(),
+  sourceImageUrl: z.string().url().optional(),
+});
+
+export type SlideIllustrationAsset = z.infer<
+  typeof SlideIllustrationAssetSchema
+>;
+
+export const SlideIllustrationResponseSchema = z.object({
+  asset: SlideIllustrationAssetSchema,
+  provider: z.string(),
+});
+
+export type SlideIllustrationResponse = z.infer<
+  typeof SlideIllustrationResponseSchema
 >;
 
 export const WebSearchRequestSchema = z.object({
@@ -358,3 +546,85 @@ export const WebFetchResponseSchema = z.object({
 });
 
 export type WebFetchResponse = z.infer<typeof WebFetchResponseSchema>;
+
+export const VoiceTurnRequestSchema = z.object({
+  audio: z.object({
+    mimeType: z.string().min(1),
+    dataBase64: z.string().min(1),
+  }),
+});
+
+export type VoiceTurnRequest = z.infer<typeof VoiceTurnRequestSchema>;
+
+export const VoiceActivityEventSchema = z.object({
+  hasSpeech: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  startedAt: z.string(),
+  endedAt: z.string().optional(),
+});
+
+export type VoiceActivityEvent = z.infer<typeof VoiceActivityEventSchema>;
+
+export const SpeechToTextResultSchema = z.object({
+  text: z.string(),
+  confidence: z.number().min(0).max(1),
+  isFinal: z.boolean(),
+});
+
+export type SpeechToTextResult = z.infer<typeof SpeechToTextResultSchema>;
+
+export const VoiceTurnResponseSchema = z.object({
+  deck: DeckSchema,
+  session: SessionSchema,
+  provider: z.string(),
+  sttProvider: z.string(),
+  vadProvider: z.string(),
+  speechEvent: VoiceActivityEventSchema,
+  transcript: SpeechToTextResultSchema.optional(),
+  interactionApplied: z.boolean(),
+  interruption: UserInterruptionSchema.optional(),
+  turnDecision: ConversationTurnPlanSchema.optional(),
+  resumePlan: ResumePlanSchema.optional(),
+  assistantMessage: z.string().optional(),
+  narration: SlideNarrationSchema.optional(),
+});
+
+export type VoiceTurnResponse = z.infer<typeof VoiceTurnResponseSchema>;
+
+export const SpeechSynthesisRequestSchema = z.object({
+  text: z.string().min(1).optional(),
+  slideId: z.string().min(1).optional(),
+  narrationIndex: z.number().int().nonnegative().optional(),
+  style: z.enum(["narration", "answer", "summary"]).default("narration"),
+});
+
+export type SpeechSynthesisRequest = z.infer<
+  typeof SpeechSynthesisRequestSchema
+>;
+
+export const SpeechSynthesisSourceSchema = z.object({
+  type: z.enum(["narration_segment", "text"]),
+  slideId: z.string().optional(),
+  narrationIndex: z.number().int().nonnegative().optional(),
+});
+
+export type SpeechSynthesisSource = z.infer<typeof SpeechSynthesisSourceSchema>;
+
+export const SpeechSynthesisResponseSchema = z.object({
+  deck: DeckSchema,
+  session: SessionSchema,
+  provider: z.string(),
+  ttsProvider: z.string(),
+  source: SpeechSynthesisSourceSchema,
+  text: z.string(),
+  narration: SlideNarrationSchema.optional(),
+  audio: z.object({
+    audioBase64: z.string(),
+    mimeType: z.string(),
+    durationMs: z.number().int().nonnegative(),
+  }),
+});
+
+export type SpeechSynthesisResponse = z.infer<
+  typeof SpeechSynthesisResponseSchema
+>;

@@ -73,6 +73,33 @@ class ScriptedTurnPlannerLLMProvider extends MockLLMProvider {
   }
 }
 
+class TrackingPlanLLMProvider extends MockLLMProvider {
+  planCalls = 0;
+
+  async planPresentation(input: { topic: string }) {
+    this.planCalls += 1;
+    return super.planPresentation(input);
+  }
+}
+
+class EmptyResponseLLMProvider extends MockLLMProvider {
+  async planPresentation(input: { topic: string }) {
+    throw new Error("lmstudio returned an empty response.");
+  }
+
+  async generateDeck() {
+    throw new Error("lmstudio returned an empty response.");
+  }
+
+  async generateNarration() {
+    throw new Error("lmstudio returned an empty response.");
+  }
+
+  async reviewPresentation() {
+    throw new Error("lmstudio returned an empty response.");
+  }
+}
+
 const createHarness = () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
@@ -189,7 +216,7 @@ test("llm-backed turn planning can drive branching behavior", async () => {
 
   const result = await service.interact(
     created.session.id,
-    "I want something more concrete here",
+    "Need a concrete scenario from this one ✦",
   );
 
   assert.equal(result.interruption.type, "example");
@@ -197,4 +224,127 @@ test("llm-backed turn planning can drive branching behavior", async () => {
   assert.deepEqual(result.turnDecision.inferredNeeds, ["example"]);
   assert.equal(result.session.state, "slide_paused");
   assert.match(result.assistantMessage, /colleague|care/i);
+});
+
+test("resume plan preserves narration point after a pause", async () => {
+  const { service } = createHarness();
+  const created = await service.createSession({
+    topic: "Voice-first teaching runtimes",
+  });
+
+  const progressed = await service.updateNarrationProgress(
+    created.session.id,
+    created.session.currentSlideId,
+    2,
+  );
+  const paused = await service.interact(created.session.id, "stop");
+  const resumed = await service.interact(created.session.id, "continue");
+
+  assert.equal(progressed.session.currentNarrationIndex, 2);
+  assert.equal(paused.resumePlan.action, "resume_same_point");
+  assert.equal(paused.resumePlan.targetNarrationIndex, 2);
+  assert.equal(paused.session.currentNarrationIndex, 2);
+  assert.equal(resumed.session.currentNarrationIndex, 2);
+  assert.match(resumed.assistantMessage, /point 3|current slide/i);
+});
+
+test("restart-style explanations reset narration progress to the start", async () => {
+  const { service } = createHarness();
+  const created = await service.createSession({
+    topic: "Adaptive tutoring",
+  });
+
+  await service.updateNarrationProgress(
+    created.session.id,
+    created.session.currentSlideId,
+    2,
+  );
+  const repeated = await service.interact(created.session.id, "repeat");
+
+  assert.equal(repeated.resumePlan.action, "restart_slide");
+  assert.equal(repeated.resumePlan.targetNarrationIndex, 0);
+  assert.equal(repeated.session.currentNarrationIndex, 0);
+});
+
+test("grounded session creation persists mixed source metadata", async () => {
+  const { service, deckRepository } = createHarness();
+  const created = await service.createSession({
+    topic: "Latest AI chip export restrictions",
+    groundingSummary: "External research summary for current developments.",
+    groundingSourceIds: ["https://example.com/source-1", "https://example.com/source-2"],
+    groundingSourceType: "mixed",
+  });
+
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.ok(deck);
+  assert.equal(deck.source.type, "mixed");
+  assert.deepEqual(deck.source.sourceIds, [
+    "https://example.com/source-1",
+    "https://example.com/source-2",
+  ]);
+});
+
+test("session creation plans first and gives the intro narration multiple beats", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TrackingPlanLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "Interactive AI teachers",
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.equal(llmProvider.planCalls, 1);
+  assert.ok(deck);
+  assert.equal(created.narrations.length, deck.slides.length);
+  assert.ok(created.narrations[0]);
+  assert.ok((created.narrations[0]?.segments.length ?? 0) >= 4);
+  assert.match(
+    created.narrations[0]?.narration ?? "",
+    /next slide|presentation|structure/i,
+  );
+  assert.ok(deck.metadata.validation);
+});
+
+test("session creation falls back deterministically when llm generation returns empty", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new EmptyResponseLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "Jivr onboarding",
+    groundingSummary:
+      "Jivr is a tool created by Per Hjalhdal. It is used to support onboarding and structured team knowledge sharing.",
+    groundingSourceIds: ["https://jivr.com"],
+    groundingSourceType: "mixed",
+    targetSlideCount: 4,
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.ok(deck);
+  assert.equal(deck.source.type, "mixed");
+  assert.deepEqual(deck.source.sourceIds, ["https://jivr.com"]);
+  assert.match(deck.metadata.tags.join(" "), /deterministic-fallback/);
+  assert.equal(created.narrations.length, deck.slides.length);
+  assert.ok(created.narrations.every((narration) => narration.segments.length >= 3));
+  assert.ok(deck.metadata.validation);
+  assert.match(
+    deck.metadata.validation?.summary ?? "",
+    /Deterministic review used/i,
+  );
 });

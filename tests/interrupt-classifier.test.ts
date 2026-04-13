@@ -10,7 +10,9 @@ const session: Session = {
   state: "presenting",
   currentSlideId: "slide_2",
   currentSlideIndex: 1,
+  currentNarrationIndex: 0,
   narrationBySlideId: {},
+  narrationProgressBySlideId: {},
   transcriptTurnIds: [],
   pedagogicalProfile: {
     audienceLevel: "beginner",
@@ -44,4 +46,3 @@ test("falls back to question when text ends with a question mark", async () => {
 
   assert.equal(result.type, "question");
 });
-

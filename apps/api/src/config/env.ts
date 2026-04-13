@@ -8,9 +8,10 @@ const EnvSchema = z.object({
   LLM_PROVIDER: z
     .enum(["mock", "lmstudio", "openai-compatible", "hosted"])
     .default("mock"),
+  ILLUSTRATION_PROVIDER: z.enum(["mock", "hosted"]).default("mock"),
   VISION_PROVIDER: z.enum(["mock", "lmstudio", "hosted"]).default("mock"),
   STT_PROVIDER: z.enum(["mock", "faster-whisper", "hosted"]).default("mock"),
-  TTS_PROVIDER: z.enum(["mock", "piper", "hosted"]).default("mock"),
+  TTS_PROVIDER: z.enum(["mock", "piper", "system", "hosted"]).default("mock"),
   VAD_PROVIDER: z.enum(["mock", "silero"]).default("mock"),
   WEB_RESEARCH_PROVIDER: z.enum(["mock", "hosted"]).default("mock"),
   STORAGE_PROVIDER: z.enum(["file", "sqlite"]).default("file"),
@@ -24,6 +25,9 @@ const EnvSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   WEB_RESEARCH_TIMEOUT_MS: z.coerce.number().default(15000),
+  VOICE_MAX_AUDIO_BYTES: z.coerce.number().default(5_000_000),
+  SYSTEM_TTS_VOICE: z.string().default("Daniel"),
+  SYSTEM_TTS_RATE_WPM: z.coerce.number().default(180),
   STORAGE_ROOT: z.string().default("data"),
 });
 

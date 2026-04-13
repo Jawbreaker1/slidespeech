@@ -20,8 +20,15 @@ Implemented now:
 - topic to internal deck JSON
 - web presenter runtime
 - per-slide narration generation
+- segmented narration with per-slide progress tracking
 - text-based conversational interruption flow
-- session state machine and resume planning
+- browser-native speech recognition when available, with backend audio upload as fallback
+- browser playback through a backend TTS provider for narration points and answers
+- real local TTS through the macOS system voice backend
+- structured visual slides with layouts, cards, callouts, flow blocks, and local illustration slots
+- provider-driven slide illustration pipeline with mock-local rendering and hosted web-image lookup
+- session state machine and narration-aware resume planning
+- automatic web-grounded deck generation for time-sensitive topics when hosted research is enabled
 - LM Studio integration behind an `LLMProvider`
 - explicit external web research API and UI panel
 - file-based persistence for decks, sessions, and transcripts
@@ -32,7 +39,7 @@ Not implemented yet:
 - document and PPTX ingestion
 - visual slide analysis
 - provenance-aware runtime use of external research
-- narration-position resume within a slide
+- real backend STT provider beyond browser-native recognition and the mock server adapter
 
 ## Product principles
 
@@ -42,6 +49,19 @@ Not implemented yet:
 - simple, testable modules over clever but fragile abstractions
 - explicit state transitions
 - explicit provenance when external knowledge is used
+
+## Current-topic grounding
+
+Deck generation is topic-only by default, but time-sensitive topics can be
+web-grounded automatically before the LLM builds the deck.
+
+- examples: `latest`, `current`, `today`, `recent`, year-based topics like `2026`
+- hosted web research runs first
+- its summary and source URLs are passed into deck generation as grounding
+- resulting decks should use `source.type = "mixed"` with external `sourceIds`
+
+If hosted web research is not enabled, the API now fails fast for topics that
+look time-sensitive instead of silently pretending the model has fresh facts.
 
 ## Architecture
 
@@ -188,6 +208,7 @@ Example config:
 
 ```bash
 LLM_PROVIDER=lmstudio
+ILLUSTRATION_PROVIDER=mock
 LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
 LMSTUDIO_MODEL=your-loaded-model
 LLM_TIMEOUT_MS=180000
@@ -229,14 +250,11 @@ npm run verify:api
 
 ### Next
 
-- browser mic capture
-- VAD and STT wiring
-- narration-position resume
-- TTS output
+- document and PPTX ingestion
+- real backend STT provider
 
 ### After that
 
-- document and PPTX ingestion
 - provenance-aware runtime use of external research
 - stronger pedagogy engine
 - visual slide analysis

@@ -1,13 +1,19 @@
-import type { Slide } from "@slidespeech/types";
+import type { Slide, SlideIllustrationAsset } from "@slidespeech/types";
+
+import { VisualSlideCanvas } from "./visual-slide-canvas";
 
 interface SlidePreviewCardProps {
   slide: Slide;
   isActive?: boolean;
+  illustrationAsset?: SlideIllustrationAsset | undefined;
+  slideNumber?: number;
 }
 
 export const SlidePreviewCard = ({
   slide,
   isActive = false,
+  illustrationAsset,
+  slideNumber,
 }: SlidePreviewCardProps) => (
   <article
     className={`h-full overflow-hidden rounded-[22px] border p-4 shadow-panel transition md:p-5 ${
@@ -18,7 +24,7 @@ export const SlidePreviewCard = ({
   >
     <div className="mb-3 flex items-center justify-between">
       <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-slate-600">
-        Slide {slide.order + 1}
+        Slide {slideNumber ?? slide.order + 1}
       </span>
       {slide.canSkip ? (
         <span className="text-xs font-semibold text-teal">Can skip</span>
@@ -30,13 +36,12 @@ export const SlidePreviewCard = ({
     <p className="mt-3 font-body text-sm leading-6 text-slate-700">
       {slide.learningGoal}
     </p>
-    <ul className="mt-4 space-y-2 text-sm text-slate-700">
-      {slide.keyPoints.map((point) => (
-        <li key={point} className="flex gap-2">
-          <span className="mt-2 h-1.5 w-1.5 rounded-full bg-coral" />
-          <span className="line-clamp-2">{point}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="mt-4">
+      <VisualSlideCanvas
+        compact
+        illustrationAsset={illustrationAsset}
+        slide={slide}
+      />
+    </div>
   </article>
 );

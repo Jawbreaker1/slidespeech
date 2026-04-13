@@ -8,7 +8,9 @@ import type {
   PlanConversationTurnInput,
   PlanPresentationInput,
   PresentationPlan,
+  PresentationReview,
   ProviderHealthStatus,
+  ReviewPresentationInput,
   SlideNarration,
   SummarizeSectionInput,
   TransformExplanationInput,
@@ -69,6 +71,12 @@ export class ResilientLLMProvider implements LLMProvider {
     input: SummarizeSectionInput,
   ): Promise<PedagogicalResponse> {
     return this.withFallback((provider) => provider.summarizeSection(input));
+  }
+
+  async reviewPresentation(
+    input: ReviewPresentationInput,
+  ): Promise<PresentationReview> {
+    return this.withFallback((provider) => provider.reviewPresentation(input));
   }
 
   async planConversationTurn(

@@ -5,14 +5,28 @@ import type {
   LLMProvider,
   PedagogicalProfile,
   PresentationPlan,
+  PresentationReview,
+  ReviewPresentationInput,
   SlideNarration,
 } from "@slidespeech/types";
 
 export class PresentationPlanner {
   constructor(private readonly llmProvider: LLMProvider) {}
 
-  plan(topic: string, pedagogicalProfile: PedagogicalProfile): Promise<PresentationPlan> {
-    return this.llmProvider.planPresentation({ topic, pedagogicalProfile });
+  plan(
+    topic: string,
+    pedagogicalProfile: PedagogicalProfile,
+    groundingSummary?: string,
+    targetDurationMinutes?: number,
+    targetSlideCount?: number,
+  ): Promise<PresentationPlan> {
+    return this.llmProvider.planPresentation({
+      topic,
+      pedagogicalProfile,
+      ...(groundingSummary ? { groundingSummary } : {}),
+      ...(targetDurationMinutes ? { targetDurationMinutes } : {}),
+      ...(targetSlideCount ? { targetSlideCount } : {}),
+    });
   }
 
   generateDeck(input: GenerateDeckInput): Promise<Deck> {
@@ -43,3 +57,10 @@ export class NarrationEngine {
   }
 }
 
+export class PresentationQualityReviewer {
+  constructor(private readonly llmProvider: LLMProvider) {}
+
+  review(input: ReviewPresentationInput): Promise<PresentationReview> {
+    return this.llmProvider.reviewPresentation(input);
+  }
+}

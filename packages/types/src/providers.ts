@@ -7,13 +7,17 @@ import type {
   InterruptionType,
   PedagogicalProfile,
   PresentationPlan,
+  PresentationReview,
   ProviderHealthStatus,
   ResumePlan,
   Session,
   Slide,
+  SlideIllustrationAsset as DomainSlideIllustrationAsset,
   SlideNarration,
+  SpeechToTextResult as DomainSpeechToTextResult,
   TranscriptTurn,
   UserInterruption,
+  VoiceActivityEvent as DomainVoiceActivityEvent,
   WebFetchResult as DomainWebFetchResult,
   WebSearchResult as DomainWebSearchResult,
 } from "./domain";
@@ -21,12 +25,20 @@ import type {
 export interface PlanPresentationInput {
   topic: string;
   pedagogicalProfile: PedagogicalProfile;
+  groundingSummary?: string;
+  targetDurationMinutes?: number;
+  targetSlideCount?: number;
 }
 
 export interface GenerateDeckInput {
   topic: string;
   plan?: PresentationPlan;
   pedagogicalProfile: PedagogicalProfile;
+  groundingSummary?: string;
+  groundingSourceIds?: string[];
+  groundingSourceType?: "topic" | "document" | "pptx" | "mixed";
+  targetDurationMinutes?: number;
+  targetSlideCount?: number;
 }
 
 export interface GenerateNarrationInput {
@@ -64,6 +76,12 @@ export interface PlanConversationTurnInput {
   transcript: TranscriptTurn[];
 }
 
+export interface ReviewPresentationInput {
+  deck: Deck;
+  narrations: SlideNarration[];
+  pedagogicalProfile: PedagogicalProfile;
+}
+
 export interface PedagogicalResponse {
   text: string;
   followUpPrompt?: string;
@@ -89,6 +107,7 @@ export interface LLMProvider {
   summarizeSection(
     input: SummarizeSectionInput,
   ): Promise<PedagogicalResponse>;
+  reviewPresentation(input: ReviewPresentationInput): Promise<PresentationReview>;
   planConversationTurn(
     input: PlanConversationTurnInput,
   ): Promise<DomainConversationTurnPlan>;
@@ -122,23 +141,31 @@ export interface VisionProvider {
   ): Promise<string[]>;
 }
 
+export interface RenderSlideIllustrationInput {
+  deck: Deck;
+  slide: Slide;
+  slotId?: string;
+}
+
+export interface SlideIllustrationProvider {
+  readonly name: string;
+  healthCheck(): Promise<ProviderHealthStatus>;
+  renderSlideIllustration(
+    input: RenderSlideIllustrationInput,
+  ): Promise<DomainSlideIllustrationAsset>;
+}
+
 export interface AudioChunk {
   chunkId: string;
   mimeType: string;
   dataBase64: string;
 }
 
-export interface SpeechToTextResult {
-  text: string;
-  confidence: number;
-  isFinal: boolean;
-}
-
 export interface SpeechToTextProvider {
   readonly name: string;
   healthCheck(): Promise<ProviderHealthStatus>;
-  transcribe(audioChunk: AudioChunk): Promise<SpeechToTextResult>;
-  transcribeStream?(streamId: string): AsyncIterable<SpeechToTextResult>;
+  transcribe(audioChunk: AudioChunk): Promise<DomainSpeechToTextResult>;
+  transcribeStream?(streamId: string): AsyncIterable<DomainSpeechToTextResult>;
 }
 
 export interface TextToSpeechOptions {
@@ -166,18 +193,11 @@ export interface TextToSpeechProvider {
   ): AsyncIterable<TextToSpeechResult>;
 }
 
-export interface VoiceActivityEvent {
-  hasSpeech: boolean;
-  confidence: number;
-  startedAt: string;
-  endedAt?: string;
-}
-
 export interface VoiceActivityProvider {
   readonly name: string;
   healthCheck(): Promise<ProviderHealthStatus>;
-  detectSpeech(audioChunk: AudioChunk): Promise<VoiceActivityEvent>;
-  detectSegments(streamId: string): AsyncIterable<VoiceActivityEvent>;
+  detectSpeech(audioChunk: AudioChunk): Promise<DomainVoiceActivityEvent>;
+  detectSegments(streamId: string): AsyncIterable<DomainVoiceActivityEvent>;
 }
 
 export interface SummarizeFindingsInput {

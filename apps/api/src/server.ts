@@ -8,7 +8,7 @@ import { researchRouter } from "./routes/research";
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "8mb" }));
 
 app.get("/health", (_request, response) => {
   response.json({

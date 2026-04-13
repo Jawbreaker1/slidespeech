@@ -9,7 +9,9 @@ const baseSession: Session = {
   deckId: "deck_1",
   state: "idle",
   currentSlideIndex: 0,
+  currentNarrationIndex: 0,
   narrationBySlideId: {},
+  narrationProgressBySlideId: {},
   transcriptTurnIds: [],
   pedagogicalProfile: {
     audienceLevel: "beginner",
@@ -34,4 +36,3 @@ test("throws on invalid transition", () => {
     /Invalid session transition/,
   );
 });
-

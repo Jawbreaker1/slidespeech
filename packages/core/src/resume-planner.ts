@@ -14,6 +14,7 @@ export class SimpleResumePlanner implements ResumePlanner {
     turnDecision?: ConversationTurnDecision;
     deck: Deck;
   }): Promise<ResumePlan> {
+    const currentNarrationIndex = input.session.currentNarrationIndex ?? 0;
     const previousSlide = input.deck.slides.find(
       (slide) =>
         input.session.currentSlideId &&
@@ -35,6 +36,7 @@ export class SimpleResumePlanner implements ResumePlanner {
           action: "go_to_previous_slide",
           targetSlideId:
             input.deck.slides[Math.max((previousSlide?.order ?? 1) - 1, 0)]?.id,
+          targetNarrationIndex: 0,
           reasoning: "User asked to move backwards in the presentation.",
           adaptPedagogy: false,
         };
@@ -44,6 +46,7 @@ export class SimpleResumePlanner implements ResumePlanner {
           sessionId: input.session.id,
           action: "restart_slide",
           targetSlideId: input.session.currentSlideId,
+          targetNarrationIndex: 0,
           reasoning:
             input.interruption.type === "repeat"
               ? "Restart the current slide because the learner asked to hear it again."
@@ -56,6 +59,7 @@ export class SimpleResumePlanner implements ResumePlanner {
             sessionId: input.session.id,
             action: "restart_slide",
             targetSlideId: input.session.currentSlideId,
+            targetNarrationIndex: 0,
             reasoning:
               "The interpreted turn suggests the learner needs the current slide reframed before continuing.",
             adaptPedagogy: shouldAdaptPedagogy,
@@ -66,6 +70,7 @@ export class SimpleResumePlanner implements ResumePlanner {
           sessionId: input.session.id,
           action: "resume_same_point",
           targetSlideId: input.session.currentSlideId,
+          targetNarrationIndex: currentNarrationIndex,
           reasoning:
             "Resume from the current point because the turn did not require navigation or a slide restart.",
           adaptPedagogy: shouldAdaptPedagogy,

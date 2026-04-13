@@ -1,5 +1,6 @@
 export * from "./domain";
 export * from "./events";
+export * from "./visuals";
 export type {
   AnalyzeDeckImagesInput,
   AnalyzeSlideImageInput,
@@ -19,10 +20,12 @@ export type {
   PedagogicalResponse,
   PlanConversationTurnInput,
   PlanPresentationInput,
+  ReviewPresentationInput,
   ResumePlanner,
   SessionRepository,
+  SlideIllustrationProvider,
   SpeechToTextProvider,
-  SpeechToTextResult,
+  RenderSlideIllustrationInput,
   StructuredDeckData,
   SummarizeFindingsInput,
   SummarizeSectionInput,
@@ -35,7 +38,6 @@ export type {
   UserPreferencesRepository,
   VisionInsight,
   VisionProvider,
-  VoiceActivityEvent,
   VoiceActivityProvider,
   WebResearchProvider,
 } from "./providers";
