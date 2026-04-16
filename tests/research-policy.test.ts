@@ -2,10 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildResearchPlan,
+  extractPresentationBrief,
+  extractPresentationSubject,
   extractExplicitSourceUrls,
+  mergeResearchPlanWithSuggestion,
   shouldUseWebResearchForTopic,
   stripExplicitSourceUrls,
+  subjectIsGenericEntityReference,
   topicLooksEntitySpecific,
+  topicLooksResearchSpecific,
   topicRequiresGroundedFacts,
   topicLooksTimeSensitive,
 } from "../apps/api/src/services/research-policy";
@@ -95,4 +101,116 @@ test("builds guessed official urls for compact brand prompts", () => {
       "https://www.volvocars.com/",
     ],
   );
+});
+
+test("builds a research plan with direct urls and targeted queries", () => {
+  const plan = buildResearchPlan({
+    topic: "Create a company presentation about System Verification. More info: https://www.systemverification.com/",
+  });
+
+  assert.equal(plan.subject, "System Verification");
+  assert.equal(plan.requiresGroundedFacts, true);
+  assert.ok(plan.directUrls.includes("https://www.systemverification.com/"));
+  assert.ok(plan.searchQueries.some((query) => /official/i.test(query)));
+  assert.ok(plan.coverageGoals.length >= 2);
+});
+
+test("extracts presentation brief and subject separately from an instructional prompt", () => {
+  assert.equal(
+    extractPresentationBrief(
+      "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
+    ),
+    "onboarding presentation about our company",
+  );
+  assert.equal(
+    extractPresentationSubject(
+      "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
+    ),
+    "Our company",
+  );
+  assert.equal(subjectIsGenericEntityReference("Our company"), true);
+});
+
+test("builds a freshness-sensitive research plan for current topics", () => {
+  const plan = buildResearchPlan({
+    topic: "Latest OpenAI announcements in 2026",
+  });
+
+  assert.equal(plan.freshnessSensitive, true);
+  assert.ok(plan.searchQueries.some((query) => /latest/i.test(query)));
+  assert.equal(plan.maxResults, 4);
+});
+
+test("detects research-specific prompts and avoids guessed official urls", () => {
+  const topic =
+    "Create a short presentation about World of Warcraft. Include at least one slide about the Corrupted Blood plague event and explain why researchers were interested in it as a model of disease spread.";
+  const plan = buildResearchPlan({ topic });
+
+  assert.equal(topicLooksResearchSpecific(topic), true);
+  assert.equal(plan.requiresGroundedFacts, true);
+  assert.equal(plan.directUrls.length, 0);
+  assert.match(plan.searchQueries[0] ?? "", /corrupted blood/i);
+  assert.equal(plan.searchQueries.includes("World of Warcraft"), false);
+  assert.ok(
+    plan.searchQueries.some((query) => /corrupted blood/i.test(query)),
+  );
+  assert.ok(
+    plan.coverageGoals.some((goal) => /corrupted blood plague event/i.test(goal)),
+  );
+  assert.ok(
+    plan.coverageGoals.some((goal) => /why researchers were interested/i.test(goal)),
+  );
+  assert.equal(
+    plan.coverageGoals.some((goal) => /requested in the prompt/i.test(goal)),
+    false,
+  );
+});
+
+test("merges llm-assisted research planning conservatively", () => {
+  const basePlan = buildResearchPlan({
+    topic: "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
+  });
+
+  const merged = mergeResearchPlanWithSuggestion({
+    basePlan,
+    topic:
+      "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
+    suggestion: {
+      subject: "System Verification Company Profile and Service Portfolio",
+      searchQueries: [
+        "System Verification official",
+        "System Verification QA operations",
+        "presentation layout examples",
+      ],
+      coverageGoals: [
+        "Document the company’s core services and quality focus.",
+        "Show how quality management and QA operations fit together.",
+        "Avoid talking about slide templates.",
+      ],
+      rationale: [
+        "The explicit company site should remain the primary source.",
+      ],
+    },
+  });
+
+  assert.equal(merged.subject, "System Verification");
+  assert.ok(merged.searchQueries.includes("System Verification official"));
+  assert.ok(merged.searchQueries.includes("System Verification QA operations"));
+  assert.equal(merged.searchQueries.includes("our company"), false);
+  assert.equal(
+    merged.searchQueries.includes("presentation layout examples"),
+    false,
+  );
+  assert.ok(
+    merged.coverageGoals.some((goal) => /core services/i.test(goal)),
+  );
+  assert.equal(
+    merged.coverageGoals.some((goal) => /our company/i.test(goal)),
+    false,
+  );
+  assert.equal(
+    merged.coverageGoals.some((goal) => /slide templates/i.test(goal)),
+    false,
+  );
+  assert.equal(merged.planningMode, "llm-assisted");
 });

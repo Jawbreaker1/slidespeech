@@ -70,6 +70,8 @@ const CURRENT_TOPIC_PATTERNS = [
   /\bnews|update|updates|announcement|release|releases|earnings|launch\b/i,
   /\b202[4-9]\b/,
 ];
+const SPECIALIZED_RESEARCH_QUERY_PATTERN =
+  /\b(outbreak|incident|plague|research(?:er|ers)?|stud(?:y|ied|ies)|epidemi\w*|pandemic|contagion|disease spread|infection spread)\b/i;
 
 const decodeHtml = (value: string): string =>
   value
@@ -145,13 +147,18 @@ export const buildSearchQueries = (query: string): string[] => {
   const normalized = sanitizeResearchQuery(query) || query.trim();
   const lower = normalized.toLowerCase();
   const slug = slugifySubject(normalized);
-  const queries = [
-    normalized,
-    `${normalized} official`,
-    `${normalized} announcement`,
-  ];
+  const specializedQuery = SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query);
+  const queries = [normalized];
 
-  if (slug.length >= 3 && slug.length <= 24 && !slug.includes(" ")) {
+  if (specializedQuery) {
+    queries.push(`${normalized} wikipedia`);
+    queries.push(`${normalized} study`);
+  } else {
+    queries.push(`${normalized} official`);
+    queries.push(`${normalized} announcement`);
+  }
+
+  if (!specializedQuery && slug.length >= 3 && slug.length <= 24 && !slug.includes(" ")) {
     queries.push(`site:${slug}.com ${normalized}`);
     if (/\b(car|cars|vehicle|vehicles|automotive|truck|trucks)\b/i.test(query)) {
       queries.push(`site:${slug}cars.com ${normalized}`);
@@ -228,6 +235,7 @@ export const rankSearchResults = (
   const seen = new Set<string>();
 
   return [...results]
+    .filter((result) => !LOW_TRUST_DOMAIN_PATTERNS.some((pattern) => pattern.test(domainFromUrl(result.url))))
     .filter((result) => {
       const key = `${result.url}::${result.title}`;
 

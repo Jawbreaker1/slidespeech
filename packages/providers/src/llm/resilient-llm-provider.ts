@@ -7,9 +7,11 @@ import type {
   PedagogicalResponse,
   PlanConversationTurnInput,
   PlanPresentationInput,
+  PlanResearchInput,
   PresentationPlan,
   PresentationReview,
   ProviderHealthStatus,
+  ResearchPlanningSuggestion,
   ReviewPresentationInput,
   SlideNarration,
   SummarizeSectionInput,
@@ -29,6 +31,12 @@ export class ResilientLLMProvider implements LLMProvider {
 
   async healthCheck(): Promise<ProviderHealthStatus> {
     return this.primary.healthCheck();
+  }
+
+  async planResearch(
+    input: PlanResearchInput,
+  ): Promise<ResearchPlanningSuggestion> {
+    return this.withFallback((provider) => provider.planResearch(input));
   }
 
   async planPresentation(input: PlanPresentationInput): Promise<PresentationPlan> {

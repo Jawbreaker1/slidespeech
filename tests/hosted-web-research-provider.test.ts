@@ -35,6 +35,20 @@ test("builds direct site guesses for compact brand subjects", () => {
   assert.ok(queries.includes("site:volvocars.com Volvo"));
 });
 
+test("builds specialized search variants without official-site bias", () => {
+  const queries = buildSearchQueries(
+    "\"Corrupted Blood\" plague event researchers disease spread World of Warcraft",
+  );
+
+  assert.ok(
+    queries.includes("\"Corrupted Blood\" plague event researchers disease spread World of Warcraft"),
+  );
+  assert.ok(
+    queries.includes("\"Corrupted Blood\" plague event researchers disease spread World of Warcraft wikipedia"),
+  );
+  assert.equal(queries.some((query) => /official|announcement/i.test(query)), false);
+});
+
 test("ranking favors relevant and trusted domains", () => {
   const query = "Latest OpenAI model releases in 2026";
   const results: WebSearchResult[] = [
@@ -77,4 +91,27 @@ test("ranking penalizes low-trust domains for entity lookups", () => {
   const ranked = rankSearchResults(query, results);
 
   assert.equal(ranked[0]?.url, "https://www.volvocars.com/intl/");
+});
+
+test("ranking drops low-trust domains entirely when better sources exist", () => {
+  const query = "\"Corrupted Blood\" plague event researchers disease spread World of Warcraft";
+  const results: WebSearchResult[] = [
+    {
+      title: "World (@world) • Instagram photos and videos",
+      url: "https://www.instagram.com/world/",
+      snippet: "In the age of AI, join the real human network.",
+    },
+    {
+      title: "Corrupted Blood incident - Wikipedia",
+      url: "https://en.wikipedia.org/wiki/Corrupted_Blood_incident",
+      snippet: "The Corrupted Blood incident was a virtual plague in World of Warcraft.",
+    },
+  ];
+
+  const ranked = rankSearchResults(query, results);
+
+  assert.deepEqual(
+    ranked.map((result) => result.url),
+    ["https://en.wikipedia.org/wiki/Corrupted_Blood_incident"],
+  );
 });

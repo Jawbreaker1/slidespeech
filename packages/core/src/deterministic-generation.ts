@@ -2,6 +2,7 @@ import type {
   Deck,
   GenerateDeckInput,
   GenerateNarrationInput,
+  PresentationIntent,
   PresentationPlan,
   PresentationQualityIssue,
   PresentationReview,
@@ -68,26 +69,112 @@ const pickGroundedPoints = (
   return grounded.length > 0 ? grounded : fallbackPoints;
 };
 
+const uniqueNonEmptyStrings = (values: Array<string | null | undefined>): string[] =>
+  [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+
+const joinHumanList = (values: string[]): string => {
+  if (values.length <= 1) {
+    return values[0] ?? "";
+  }
+
+  if (values.length === 2) {
+    return `${values[0]} and ${values[1]}`;
+  }
+
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
+};
+
+const resolveIntentSubject = (topic: string, intent?: PresentationIntent): string =>
+  intent?.subject?.trim() || topic.trim();
+
+const normalizeTeachingFocus = (value: string): string =>
+  value
+    .replace(/^how\s+they\s+can\s+/i, "using ")
+    .replace(/^how\s+to\s+/i, "")
+    .replace(/^use\s+/i, "Using ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.]+$/g, "");
+
 export const buildDeterministicPresentationPlan = (input: {
   topic: string;
+  presentationBrief?: string | undefined;
+  intent?: PresentationIntent | undefined;
   audienceLevel: "beginner" | "intermediate" | "advanced" | "mixed";
   targetSlideCount?: number | undefined;
 }): PresentationPlan => {
   const recommendedSlideCount = Math.max(4, input.targetSlideCount ?? 4);
+  const subject = resolveIntentSubject(input.topic, input.intent);
+  const framing = input.intent?.framing ?? input.presentationBrief ?? "";
+  const onboardingLike = /\bonboarding\b/i.test(framing);
+  const workshopLike = input.intent?.deliveryFormat === "workshop";
+  const audienceLabel = joinHumanList(input.intent?.audienceCues ?? []);
+  const audienceStorylineBeat =
+    audienceLabel.length > 0
+      ? `How ${normalizeTeachingFocus(subject)} fits the daily work of ${audienceLabel}`
+      : "";
+  const activityStorylineBeat = input.intent?.activityRequirement
+    ? `Hands-on exercise: ${normalizeTeachingFocus(input.intent.activityRequirement)}`
+    : "";
+  const coverageStoryline = (input.intent?.coverageRequirements ?? [])
+    .map((value) => normalizeTeachingFocus(value))
+    .filter((value) => value.length > 0)
+    .slice(0, Math.max(0, recommendedSlideCount - 2));
+  const defaultClosingBeat = workshopLike
+    ? `Applying ${normalizeTeachingFocus(subject)} after the workshop`
+    : `Applying ${normalizeTeachingFocus(subject)} in practice`;
+  const openingBeat = workshopLike
+    ? `Why ${normalizeTeachingFocus(subject)} matters in this workshop`
+    : onboardingLike
+      ? `Why ${normalizeTeachingFocus(subject)} matters for onboarding`
+      : `Why ${normalizeTeachingFocus(subject)} matters`;
+  const mandatoryTailBeats = uniqueNonEmptyStrings([activityStorylineBeat]);
+  const remainingSlots = Math.max(0, Math.max(4, Math.min(6, recommendedSlideCount)) - 1);
+  const reservedTailSlots =
+    mandatoryTailBeats.length > 0 ? Math.min(mandatoryTailBeats.length, remainingSlots) : 0;
+  const middleSlots = Math.max(0, remainingSlots - reservedTailSlots);
+  const middleBeats = uniqueNonEmptyStrings([
+    ...coverageStoryline,
+    audienceStorylineBeat,
+  ]).slice(0, middleSlots);
+  const optionalTailBeats =
+    middleBeats.length + mandatoryTailBeats.length < remainingSlots
+      ? uniqueNonEmptyStrings([defaultClosingBeat])
+      : [];
+  const storyline = uniqueNonEmptyStrings([
+    openingBeat,
+    ...middleBeats,
+    ...mandatoryTailBeats.slice(0, remainingSlots - middleBeats.length),
+    ...optionalTailBeats.slice(
+      0,
+      remainingSlots - middleBeats.length - mandatoryTailBeats.length,
+    ),
+  ]);
 
   return {
-    title: `${input.topic}: coherent teaching path`,
+    title: onboardingLike
+      ? `${subject}: onboarding teaching path`
+      : workshopLike
+        ? `${subject}: workshop teaching path`
+        : `${subject}: coherent teaching path`,
     learningObjectives: [
-      `Understand the main idea behind ${input.topic}.`,
-      `See how ${input.topic} is structured and applied.`,
-      `Leave with one practical way to explain ${input.topic}.`,
+      onboardingLike
+        ? `Understand ${subject} in a way that helps a new colleague get oriented quickly.`
+        : workshopLike
+          ? `Understand how ${normalizeTeachingFocus(subject)} can support day-to-day work.`
+          : `Understand the main idea behind ${subject}.`,
+      audienceLabel.length > 0
+        ? `See how ${normalizeTeachingFocus(subject)} connects to the responsibilities of ${audienceLabel}.`
+        : onboardingLike
+          ? `See how to explain ${subject} as part of a clear onboarding story.`
+          : `See how ${subject} is structured and applied.`,
+      input.intent?.activityRequirement
+        ? `Leave with one concrete way to practice ${normalizeTeachingFocus(subject)} through the workshop exercise.`
+        : onboardingLike
+          ? `Leave with one practical way to introduce ${subject} to a newcomer.`
+          : `Leave with one practical way to explain ${subject}.`,
     ],
-    storyline: [
-      "orientation and value",
-      "main structure",
-      "concrete example",
-      "recap and next step",
-    ].slice(0, Math.max(4, Math.min(6, recommendedSlideCount))),
+    storyline,
     recommendedSlideCount,
     audienceLevel:
       input.audienceLevel === "mixed" ? "beginner" : input.audienceLevel,
@@ -97,6 +184,7 @@ export const buildDeterministicPresentationPlan = (input: {
 export const buildDeterministicDeck = (input: GenerateDeckInput): Deck => {
   const createdAt = nowIso();
   const topic = input.topic.trim();
+  const onboardingLike = /\bonboarding\b/i.test(input.presentationBrief ?? "");
   const groundedHighlights = extractGroundingHighlights(input.groundingSummary);
   const targetSlideCount = resolveTargetSlideCount(input);
   const storyline = input.plan?.storyline ?? [
@@ -113,8 +201,10 @@ export const buildDeterministicDeck = (input: GenerateDeckInput): Deck => {
     {
       id: createId("slide"),
       order: 0,
-      title: `Welcome to ${topic}`,
-      learningGoal: `Understand what ${topic} is, why it matters, and what the audience should notice first.`,
+      title: onboardingLike ? `Welcome to ${topic}` : `Welcome to ${topic}`,
+      learningGoal: onboardingLike
+        ? `Orient new team members to ${topic}, why it matters, and what they should notice first.`
+        : `Understand what ${topic} is, why it matters, and what the audience should notice first.`,
       keyPoints: pickGroundedPoints(groundedHighlights, 0, [
         `${topic} matters because it connects to a real user or business need.`,
         `The presentation will build a clear mental model before adding detail.`,
@@ -128,7 +218,9 @@ export const buildDeterministicDeck = (input: GenerateDeckInput): Deck => {
       advancedExplanation: `${topic} should be introduced as one coherent thread so the audience understands the relationship between purpose, structure, and concrete application.`,
       examples: groundedHighlights.slice(0, 2),
       likelyQuestions: [
-        `Why should someone care about ${topic}?`,
+          onboardingLike
+            ? `Why does ${topic} matter to a new team member?`
+            : `Why should someone care about ${topic}?`,
         `What will the audience understand by the end?`,
       ],
       canSkip: false,

@@ -185,6 +185,33 @@ export const DeckSourceSchema = z.object({
 
 export type DeckSource = z.infer<typeof DeckSourceSchema>;
 
+export const DeckEvaluationCheckSchema = z.object({
+  code: z.string(),
+  status: z.enum(["pass", "warning", "fail"]),
+  message: z.string(),
+  slideId: z.string().optional(),
+});
+
+export type DeckEvaluationCheck = z.infer<typeof DeckEvaluationCheckSchema>;
+
+export const DeckEvaluationSchema = z.object({
+  evaluatedAt: z.string(),
+  overallScore: z.number().min(0).max(1),
+  summary: z.string(),
+  checks: z.array(DeckEvaluationCheckSchema).default([]),
+});
+
+export type DeckEvaluation = z.infer<typeof DeckEvaluationSchema>;
+
+export const DeckGenerationStatusSchema = z.object({
+  narrationReadySlides: z.number().int().nonnegative(),
+  totalSlides: z.number().int().positive(),
+  backgroundEnrichmentPending: z.boolean().default(false),
+  lastCompletedAt: z.string().optional(),
+});
+
+export type DeckGenerationStatus = z.infer<typeof DeckGenerationStatusSchema>;
+
 export const DeckSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -216,6 +243,8 @@ export const DeckSchema = z.object({
         ).default([]),
       })
       .optional(),
+    evaluation: DeckEvaluationSchema.optional(),
+    generation: DeckGenerationStatusSchema.optional(),
   }),
 });
 

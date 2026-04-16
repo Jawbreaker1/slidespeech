@@ -1,5 +1,6 @@
 export * from "./conversation-turn-engine";
 export * from "./defaults";
+export * from "./evaluation";
 export * from "./interrupt-classifier";
 export * from "./planners";
 export * from "./resume-planner";

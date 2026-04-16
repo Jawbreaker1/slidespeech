@@ -22,19 +22,55 @@ import type {
   WebSearchResult as DomainWebSearchResult,
 } from "./domain";
 
+export interface PresentationIntent {
+  subject: string;
+  framing: string;
+  explicitSourceUrls: string[];
+  coverageRequirements: string[];
+  audienceCues: string[];
+  deliveryFormat: "presentation" | "workshop";
+  activityRequirement?: string;
+}
+
 export interface PlanPresentationInput {
   topic: string;
+  presentationBrief?: string;
+  intent?: PresentationIntent;
+  groundingHighlights?: string[];
   pedagogicalProfile: PedagogicalProfile;
   groundingSummary?: string;
   targetDurationMinutes?: number;
   targetSlideCount?: number;
 }
 
+export interface PlanResearchInput {
+  topic: string;
+  presentationBrief?: string;
+  intent?: PresentationIntent;
+  explicitSourceUrls: string[];
+  heuristicSubject: string;
+  heuristicQueries: string[];
+  freshnessSensitive: boolean;
+  requiresGroundedFacts: boolean;
+}
+
+export interface ResearchPlanningSuggestion {
+  subject?: string;
+  searchQueries: string[];
+  coverageGoals: string[];
+  rationale: string[];
+}
+
 export interface GenerateDeckInput {
   topic: string;
+  presentationBrief?: string;
+  intent?: PresentationIntent;
+  revisionGuidance?: string;
   plan?: PresentationPlan;
   pedagogicalProfile: PedagogicalProfile;
   groundingSummary?: string;
+  groundingHighlights?: string[];
+  groundingCoverageGoals?: string[];
   groundingSourceIds?: string[];
   groundingSourceType?: "topic" | "document" | "pptx" | "mixed";
   targetDurationMinutes?: number;
@@ -91,6 +127,7 @@ export interface PedagogicalResponse {
 export interface LLMProvider {
   readonly name: string;
   healthCheck(): Promise<ProviderHealthStatus>;
+  planResearch(input: PlanResearchInput): Promise<ResearchPlanningSuggestion>;
   planPresentation(input: PlanPresentationInput): Promise<PresentationPlan>;
   generateDeck(input: GenerateDeckInput): Promise<Deck>;
   generateNarration(input: GenerateNarrationInput): Promise<SlideNarration>;

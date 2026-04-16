@@ -4,8 +4,12 @@ dist
 coverage
 .env
 .env.local
+.venv-stt
 *.log
+*.tsbuildinfo
 data/decks/*.json
+data/evaluations/*.json
+data/exports/*.pptx
+data/research-cache/*.json
 data/sessions/*.json
 data/transcripts/*.json
-

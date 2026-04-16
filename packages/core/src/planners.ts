@@ -4,6 +4,7 @@ import type {
   GenerateNarrationInput,
   LLMProvider,
   PedagogicalProfile,
+  PresentationIntent,
   PresentationPlan,
   PresentationReview,
   ReviewPresentationInput,
@@ -15,15 +16,21 @@ export class PresentationPlanner {
 
   plan(
     topic: string,
+    presentationBrief: string | undefined,
+    intent: PresentationIntent | undefined,
     pedagogicalProfile: PedagogicalProfile,
     groundingSummary?: string,
+    groundingHighlights?: string[],
     targetDurationMinutes?: number,
     targetSlideCount?: number,
   ): Promise<PresentationPlan> {
     return this.llmProvider.planPresentation({
       topic,
+      ...(presentationBrief ? { presentationBrief } : {}),
+      ...(intent ? { intent } : {}),
       pedagogicalProfile,
       ...(groundingSummary ? { groundingSummary } : {}),
+      ...(groundingHighlights?.length ? { groundingHighlights } : {}),
       ...(targetDurationMinutes ? { targetDurationMinutes } : {}),
       ...(targetSlideCount ? { targetSlideCount } : {}),
     });

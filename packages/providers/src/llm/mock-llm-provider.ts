@@ -6,7 +6,10 @@ import type {
   LLMProvider,
   PedagogicalResponse,
   PlanConversationTurnInput,
+  PlanResearchInput,
+  PlanPresentationInput,
   PresentationReview,
+  ResearchPlanningSuggestion,
   SummarizeSectionInput,
   TransformExplanationInput,
   PresentationPlan,
@@ -492,11 +495,41 @@ export class MockLLMProvider implements LLMProvider {
     return healthy(this.name, "Mock provider is always available.");
   }
 
-  async planPresentation(input: {
-    topic: string;
-    targetDurationMinutes?: number;
-    targetSlideCount?: number;
-  }): Promise<PresentationPlan> {
+  async planResearch(
+    input: PlanResearchInput,
+  ): Promise<ResearchPlanningSuggestion> {
+    const subject = input.heuristicSubject.trim() || input.topic.trim();
+    const searchQueries = [
+      ...input.heuristicQueries,
+      `${subject} official`,
+      `${subject} overview`,
+      ...(input.freshnessSensitive ? [`${subject} latest`] : []),
+    ]
+      .map((query) => query.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .filter((query, index, values) => values.indexOf(query) === index)
+      .slice(0, 5);
+
+    const coverageGoals = [
+      `Explain what ${subject} is and why it matters.`,
+      `Cover the main components, services, or mechanisms behind ${subject}.`,
+      ...(input.freshnessSensitive
+        ? [`Capture the most recent important developments around ${subject}.`]
+        : [`Include one concrete example or real-world consequence of ${subject}.`]),
+    ];
+
+    return {
+      subject,
+      searchQueries,
+      coverageGoals,
+      rationale: [
+        "Prioritize the clearest official or primary sources first.",
+        "Use broader overview queries only after the core source is covered.",
+      ],
+    };
+  }
+
+  async planPresentation(input: PlanPresentationInput): Promise<PresentationPlan> {
     return makePlan(input.topic, {
       ...(input.targetDurationMinutes !== undefined
         ? { targetDurationMinutes: input.targetDurationMinutes }

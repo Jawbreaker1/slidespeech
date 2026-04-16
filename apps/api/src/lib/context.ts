@@ -29,6 +29,11 @@ const llmProvider = createLLMProvider({
   ttsProvider: env.TTS_PROVIDER,
   vadProvider: env.VAD_PROVIDER,
   webResearchProvider: env.WEB_RESEARCH_PROVIDER,
+  fasterWhisperPythonBin: env.FASTER_WHISPER_PYTHON_BIN,
+  fasterWhisperModel: env.FASTER_WHISPER_MODEL,
+  fasterWhisperComputeType: env.FASTER_WHISPER_COMPUTE_TYPE,
+  fasterWhisperBeamSize: env.FASTER_WHISPER_BEAM_SIZE,
+  fasterWhisperLanguage: env.FASTER_WHISPER_LANGUAGE,
   systemTtsVoice: env.SYSTEM_TTS_VOICE,
   systemTtsRateWpm: env.SYSTEM_TTS_RATE_WPM,
   lmstudioBaseUrl: env.LMSTUDIO_BASE_URL,
@@ -49,6 +54,11 @@ const illustrationProvider = createIllustrationProvider({
 });
 const sttProvider = createSpeechToTextProvider({
   sttProvider: env.STT_PROVIDER,
+  fasterWhisperPythonBin: env.FASTER_WHISPER_PYTHON_BIN,
+  fasterWhisperModel: env.FASTER_WHISPER_MODEL,
+  fasterWhisperComputeType: env.FASTER_WHISPER_COMPUTE_TYPE,
+  fasterWhisperBeamSize: env.FASTER_WHISPER_BEAM_SIZE,
+  fasterWhisperLanguage: env.FASTER_WHISPER_LANGUAGE,
 });
 const ttsProvider = createTextToSpeechProvider({
   ttsProvider: env.TTS_PROVIDER,

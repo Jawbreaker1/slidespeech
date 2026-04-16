@@ -563,6 +563,23 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     startTransition(async () => {
       try {
         setError(null);
+
+        if (
+          typeof navigator === "undefined" ||
+          !navigator.mediaDevices ||
+          typeof navigator.mediaDevices.getUserMedia !== "function"
+        ) {
+          throw new Error(
+            "Microphone recording is not available in this browser/context. Try Chrome or Edge, or check that microphone access is allowed.",
+          );
+        }
+
+        if (typeof MediaRecorder === "undefined") {
+          throw new Error(
+            "This browser does not support in-browser audio recording for backend STT.",
+          );
+        }
+
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
@@ -1274,30 +1291,23 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     className="rounded-full border border-white/20 px-4 py-2 text-sm transition hover:border-white/40 disabled:opacity-50"
                     disabled={isSubmittingVoice}
                     onClick={() => {
-                      if (browserSpeechSupported) {
-                        void handleBrowserVoiceInput();
-                        return;
-                      }
-
                       handleBackendVoiceRecording();
                     }}
                     type="button"
                   >
-                    {browserSpeechSupported
-                      ? isListeningBrowserVoice || isSubmittingVoice
-                        ? "Listening..."
-                        : "Voice input"
-                      : isRecordingVoice
-                        ? "Stop recording"
-                        : "Audio fallback"}
+                    {isRecordingVoice
+                      ? "Stop recording"
+                      : isSubmittingVoice
+                        ? "Processing..."
+                        : "Record question"}
                   </button>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-paper/60">
                   {browserSpeechSupported
                     ? liveVoiceMode
-                      ? "Browser speech recognition is armed in presenter mode. If you start speaking, playback is interrupted and your question is submitted."
-                      : "Browser speech recognition is available. Use live voice for interruption-style testing, or use one-shot voice input."
-                    : "Browser speech recognition is not available here. Backend audio fallback remains available, but server-side STT is still mock."}
+                      ? "Browser speech recognition is armed for live interruption testing. One-shot questions use backend STT."
+                      : "Record question uses backend STT. Live voice remains available for interruption-style browser testing."
+                    : "Browser speech recognition is not available here. Record question uses backend server-side STT."}
                 </p>
                 <div className="mt-3 rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm text-paper/75">
                   <p>
@@ -1305,6 +1315,8 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     <span className="font-semibold text-paper">
                       {isSubmittingVoice
                         ? "processing"
+                        : isRecordingVoice
+                          ? "recording"
                         : isListeningBrowserVoice
                           ? "listening"
                           : liveVoiceMode

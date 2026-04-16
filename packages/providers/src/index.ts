@@ -8,6 +8,7 @@ export * from "./llm/mock-llm-provider";
 export * from "./llm/openai-compatible";
 export * from "./llm/resilient-llm-provider";
 export * from "./storage/file/repositories";
+export * from "./stt/faster-whisper-stt-provider";
 export * from "./stt/mock-stt-provider";
 export * from "./tts/mock-tts-provider";
 export * from "./tts/system-tts-provider";

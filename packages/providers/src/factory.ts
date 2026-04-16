@@ -12,6 +12,10 @@ import { MockIllustrationProvider } from "./illustration/mock-illustration-provi
 import { LMStudioLLMProvider } from "./llm/lmstudio-llm-provider";
 import { MockLLMProvider } from "./llm/mock-llm-provider";
 import { ResilientLLMProvider } from "./llm/resilient-llm-provider";
+import {
+  FASTER_WHISPER_STT_DEFAULTS,
+  FasterWhisperSTTProvider,
+} from "./stt/faster-whisper-stt-provider";
 import { MockSTTProvider } from "./stt/mock-stt-provider";
 import { MockTTSProvider } from "./tts/mock-tts-provider";
 import {
@@ -29,6 +33,11 @@ export interface ProviderFactoryConfig {
   ttsProvider: "mock" | "piper" | "system" | "hosted";
   vadProvider: "mock" | "silero";
   webResearchProvider: "mock" | "hosted";
+  fasterWhisperPythonBin: string;
+  fasterWhisperModel: string;
+  fasterWhisperComputeType: string;
+  fasterWhisperBeamSize: number;
+  fasterWhisperLanguage: string;
   systemTtsVoice: string;
   systemTtsRateWpm: number;
   lmstudioBaseUrl: string;
@@ -101,10 +110,34 @@ export const createIllustrationProvider = (
 };
 
 export const createSpeechToTextProvider = (
-  config: Pick<ProviderFactoryConfig, "sttProvider">,
+  config: Pick<
+    ProviderFactoryConfig,
+    | "sttProvider"
+    | "fasterWhisperPythonBin"
+    | "fasterWhisperModel"
+    | "fasterWhisperComputeType"
+    | "fasterWhisperBeamSize"
+    | "fasterWhisperLanguage"
+  >,
 ): SpeechToTextProvider => {
   switch (config.sttProvider) {
     case "faster-whisper":
+      return new FasterWhisperSTTProvider({
+        pythonBin:
+          config.fasterWhisperPythonBin ||
+          FASTER_WHISPER_STT_DEFAULTS.pythonBin,
+        model:
+          config.fasterWhisperModel || FASTER_WHISPER_STT_DEFAULTS.model,
+        computeType:
+          config.fasterWhisperComputeType ||
+          FASTER_WHISPER_STT_DEFAULTS.computeType,
+        beamSize:
+          config.fasterWhisperBeamSize ||
+          FASTER_WHISPER_STT_DEFAULTS.beamSize,
+        language:
+          config.fasterWhisperLanguage ||
+          FASTER_WHISPER_STT_DEFAULTS.language,
+      });
     case "hosted":
     case "mock":
     default:

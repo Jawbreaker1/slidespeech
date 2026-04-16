@@ -6,10 +6,13 @@ import {
   PresentationSessionService,
 } from "@slidespeech/core";
 import { MockLLMProvider } from "@slidespeech/providers";
+import { DeckSchema } from "@slidespeech/types";
 import type {
   ConversationTurnPlan,
   Deck,
   DeckRepository,
+  GenerateDeckInput,
+  GenerateNarrationInput,
   Session,
   SessionRepository,
   TranscriptRepository,
@@ -97,6 +100,218 @@ class EmptyResponseLLMProvider extends MockLLMProvider {
 
   async reviewPresentation() {
     throw new Error("lmstudio returned an empty response.");
+  }
+}
+
+class RetryingDeckLLMProvider extends MockLLMProvider {
+  deckCalls = 0;
+  revisionGuidances: string[] = [];
+
+  async generateDeck(input: GenerateDeckInput): Promise<Deck> {
+    this.deckCalls += 1;
+    this.revisionGuidances.push(input.revisionGuidance ?? "");
+
+    if (this.deckCalls === 1) {
+      return DeckSchema.parse({
+        id: "deck_retry_1",
+        title: "Why This Matters",
+        topic: input.topic,
+        summary: "Weak meta draft",
+        pedagogicalProfile: {
+          audienceLevel: "beginner",
+          tone: "supportive and concrete",
+          pace: "balanced",
+          preferredExampleStyle: "real_world",
+          wantsFrequentChecks: true,
+          detailLevel: "standard",
+        },
+        source: {
+          type: input.groundingSourceType ?? "topic",
+          topic: input.topic,
+          sourceIds: input.groundingSourceIds ?? [],
+        },
+        slides: [
+          {
+            id: "slide_retry_1",
+            order: 0,
+            title: "Why This Matters",
+            learningGoal: "Explain how to structure this onboarding presentation.",
+            keyPoints: [
+              "Walk through the two main pillars.",
+              "Emphasize the core messaging.",
+              "Direct new hires to the internal portal.",
+            ],
+            beginnerExplanation:
+              "Use this slide to explain how the presentation should work.",
+            advancedExplanation:
+              "This slide is about the presentation rather than the company.",
+          },
+          {
+            id: "slide_retry_2",
+            order: 1,
+            title: "How to continue the deck",
+            learningGoal: "Map out what each slide should contain.",
+            keyPoints: [
+              "Map out the delivery story.",
+              "Validate that the audience follows.",
+              "Avoid clutter in each slide.",
+            ],
+            beginnerExplanation:
+              "This slide is still presentation advice rather than subject content.",
+            advancedExplanation:
+              "It should fail the first-pass deck quality gate and trigger a retry.",
+          },
+        ],
+        createdAt: "2026-04-14T10:00:00.000Z",
+        updatedAt: "2026-04-14T10:00:00.000Z",
+        metadata: {
+          estimatedDurationMinutes: 3,
+          tags: [],
+          language: "en",
+        },
+      });
+    }
+
+    return DeckSchema.parse({
+      id: "deck_retry_2",
+      title: "Welcome to System Verification",
+      topic: input.topic,
+      summary: "Improved audience-facing company deck",
+      pedagogicalProfile: {
+        audienceLevel: "beginner",
+        tone: "supportive and concrete",
+        pace: "balanced",
+        preferredExampleStyle: "real_world",
+        wantsFrequentChecks: true,
+        detailLevel: "standard",
+      },
+      source: {
+        type: input.groundingSourceType ?? "topic",
+        topic: input.topic,
+        sourceIds: input.groundingSourceIds ?? [],
+      },
+      slides: [
+        {
+          id: "slide_good_1",
+          order: 0,
+          title: "Welcome to System Verification",
+          learningGoal:
+            "Understand what System Verification does and why that matters to customers.",
+          keyPoints: [
+            "System Verification helps customers reduce quality risks before systems reach production.",
+            "The company combines verification expertise, QA operations, and delivery support across industries.",
+            "This onboarding talk explains the work in terms of customer value and practical delivery.",
+          ],
+          beginnerExplanation:
+            "System Verification exists to help teams ship safer and more reliable systems.",
+          advancedExplanation:
+            "The company connects verification practice with customer outcomes across complex delivery environments.",
+        },
+        {
+          id: "slide_good_2",
+          order: 1,
+          title: "How Delivery and QA Operations Work",
+          learningGoal:
+            "Understand how delivery structure and QA operations support the company mission.",
+          keyPoints: [
+            "QA operations provide a repeatable way to keep delivery quality consistent.",
+            "Delivery models let the company support customers through experts, services, or teams.",
+            "The practical result is safer systems and more predictable customer outcomes.",
+          ],
+          beginnerExplanation:
+            "The company uses structured QA and delivery practices so project quality does not depend on luck.",
+          advancedExplanation:
+            "Delivery structure and QA operations create a scalable operating model for customer-facing verification work.",
+        },
+      ],
+      createdAt: "2026-04-14T10:00:00.000Z",
+      updatedAt: "2026-04-14T10:00:00.000Z",
+      metadata: {
+        estimatedDurationMinutes: 3,
+        tags: [],
+        language: "en",
+      },
+    });
+  }
+}
+
+class BrokenIntroNarrationLLMProvider extends MockLLMProvider {
+  async generateNarration(input: GenerateNarrationInput) {
+    if (input.slide.order === 0) {
+      return {
+        slideId: input.slide.id,
+        narration: "On this slide, the first key point is that testing matters.",
+        segments: ["On this slide, the first key point is that testing matters."],
+        summaryLine: "Weak intro narration",
+        promptsForPauses: [],
+        suggestedTransition: "Continue.",
+      };
+    }
+
+    return super.generateNarration(input);
+  }
+}
+
+class AlwaysMetaDeckLLMProvider extends MockLLMProvider {
+  override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
+    return DeckSchema.parse({
+      id: "deck_always_meta",
+      title: "Why This Matters",
+      topic: input.topic,
+      summary: "Weak meta draft",
+      pedagogicalProfile: {
+        audienceLevel: "beginner",
+        tone: "supportive and concrete",
+        pace: "balanced",
+        preferredExampleStyle: "real_world",
+        wantsFrequentChecks: true,
+        detailLevel: "standard",
+      },
+      source: {
+        type: input.groundingSourceType ?? "topic",
+        topic: input.topic,
+        sourceIds: input.groundingSourceIds ?? [],
+      },
+      slides: [
+        {
+          id: "slide_meta_1",
+          order: 0,
+          title: "Why This Matters",
+          learningGoal: "Explain how to structure this presentation.",
+          keyPoints: [
+            "Walk through the main story arc.",
+            "Emphasize the most important slide message.",
+            "Direct the audience to the next section of the deck.",
+          ],
+          beginnerExplanation:
+            "This slide explains how the presentation should be delivered.",
+          advancedExplanation:
+            "The content is about presentation technique rather than the subject itself.",
+        },
+        {
+          id: "slide_meta_2",
+          order: 1,
+          title: "How to continue the deck",
+          learningGoal: "Map out what each slide should contain.",
+          keyPoints: [
+            "Map out the delivery story.",
+            "Validate that the audience follows.",
+            "Avoid clutter in each slide.",
+          ],
+          beginnerExplanation:
+            "This remains presentation advice rather than subject content.",
+          advancedExplanation:
+            "A repair-heavy deck like this should be rejected instead of accepted.",
+        },
+      ],
+      createdAt: "2026-04-14T10:00:00.000Z",
+      updatedAt: "2026-04-14T10:00:00.000Z",
+      metadata: {
+        estimatedDurationMinutes: 3,
+        tags: [],
+        language: "en",
+      },
+    });
   }
 }
 
@@ -304,17 +519,62 @@ test("session creation plans first and gives the intro narration multiple beats"
 
   assert.equal(llmProvider.planCalls, 1);
   assert.ok(deck);
-  assert.equal(created.narrations.length, deck.slides.length);
+  assert.equal(created.narrations.length, 1);
   assert.ok(created.narrations[0]);
   assert.ok((created.narrations[0]?.segments.length ?? 0) >= 4);
-  assert.match(
-    created.narrations[0]?.narration ?? "",
-    /next slide|presentation|structure/i,
-  );
+  assert.ok(deck.metadata.generation);
+  assert.equal(deck.metadata.generation?.narrationReadySlides, 1);
+  assert.equal(deck.metadata.generation?.backgroundEnrichmentPending, true);
   assert.ok(deck.metadata.validation);
+
+  await service.waitForBackgroundEnrichment(created.session.id);
+
+  const finalizedDeck = await deckRepository.getById(created.session.deckId);
+  const finalizedSession = await sessionRepository.getById(created.session.id);
+
+  assert.ok(finalizedDeck);
+  assert.equal(finalizedDeck.metadata.generation?.backgroundEnrichmentPending, false);
+  assert.equal(finalizedDeck.metadata.generation?.narrationReadySlides, finalizedDeck.slides.length);
+  assert.ok(finalizedDeck.metadata.evaluation);
+  assert.ok(finalizedSession);
+  assert.equal(
+    Object.keys(finalizedSession.narrationBySlideId).length,
+    finalizedDeck.slides.length,
+  );
 });
 
-test("session creation falls back deterministically when llm generation returns empty", async () => {
+test("intro narration repair keeps the next-slide transition when the deck has more slides", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new BrokenIntroNarrationLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.ok(deck);
+  const secondSlide = deck?.slides[1];
+  assert.ok(secondSlide);
+  assert.ok(created.narrations[0]);
+  assert.doesNotMatch(
+    created.narrations[0]?.narration ?? "",
+    /clear close/i,
+  );
+  assert.match(
+    created.narrations[0]?.narration ?? "",
+    new RegExp(secondSlide?.title ?? "", "i"),
+  );
+});
+
+test("session creation fails when llm generation produces no usable deck", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -326,25 +586,88 @@ test("session creation falls back deterministically when llm generation returns 
     transcriptRepository,
   );
 
+  await assert.rejects(
+    service.createSession({
+      topic: "Jivr onboarding",
+      groundingSummary:
+        "Jivr is a tool created by Per Hjalhdal. It is used to support onboarding and structured team knowledge sharing.",
+      groundingSourceIds: ["https://jivr.com"],
+      groundingSourceType: "mixed",
+      targetSlideCount: 4,
+    }),
+    /No usable LLM-generated deck was produced|lmstudio returned an empty response/i,
+  );
+
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
+});
+
+test("session creation retries weak deck drafts before relying on repair", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new RetryingDeckLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
   const created = await service.createSession({
-    topic: "Jivr onboarding",
+    topic: "System Verification",
+    presentationBrief: "Create an onboarding presentation about our company.",
     groundingSummary:
-      "Jivr is a tool created by Per Hjalhdal. It is used to support onboarding and structured team knowledge sharing.",
-    groundingSourceIds: ["https://jivr.com"],
+      "System Verification provides quality management, QA operations, and delivery support for complex engineering teams.",
+    groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
-    targetSlideCount: 4,
+    targetSlideCount: 2,
   });
+
   const deck = await deckRepository.getById(created.session.deckId);
 
-  assert.ok(deck);
-  assert.equal(deck.source.type, "mixed");
-  assert.deepEqual(deck.source.sourceIds, ["https://jivr.com"]);
-  assert.match(deck.metadata.tags.join(" "), /deterministic-fallback/);
-  assert.equal(created.narrations.length, deck.slides.length);
-  assert.ok(created.narrations.every((narration) => narration.segments.length >= 3));
-  assert.ok(deck.metadata.validation);
+  assert.equal(llmProvider.deckCalls, 3);
   assert.match(
-    deck.metadata.validation?.summary ?? "",
-    /Deterministic review used/i,
+    llmProvider.revisionGuidances[1] ?? "",
+    /audience-facing|opening slide|instructional bullet points/i,
   );
+  assert.ok(deck);
+  assert.equal(deck?.title, "Welcome to System Verification");
+  assert.doesNotMatch(
+    deck?.slides.map((slide) => slide.keyPoints.join(" ")).join(" ") ?? "",
+    /walk through|direct new hires|avoid clutter|internal portal/i,
+  );
+  assert.ok(
+    !(deck?.metadata.validation?.issues ?? []).some(
+      (issue) => issue.code === "deck_wide_meta_presentation_repaired",
+    ),
+  );
+});
+
+test("session creation rejects repair-heavy meta decks even when the LLM returns structured JSON", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const service = new PresentationSessionService(
+    new AlwaysMetaDeckLLMProvider(),
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  await assert.rejects(
+    service.createSession({
+      topic: "System Verification",
+      presentationBrief: "Create an onboarding presentation about our company.",
+      groundingSummary:
+        "System Verification provides quality management, QA operations, and delivery support for complex engineering teams.",
+      groundingSourceIds: ["https://www.systemverification.com/"],
+      groundingSourceType: "mixed",
+      targetSlideCount: 2,
+    }),
+    /No acceptable LLM-generated deck was produced/i,
+  );
+
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
 });
