@@ -3003,6 +3003,90 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
     this.timeoutMs = config.timeoutMs ?? 45000;
   }
 
+  private isLmStudioProvider(): boolean {
+    return this.name === "lmstudio";
+  }
+
+  private raiseInitialTokenBudget(maxTokens: number): number {
+    if (!this.isLmStudioProvider()) {
+      return maxTokens;
+    }
+
+    if (maxTokens <= 300) {
+      return 900;
+    }
+
+    if (maxTokens <= 600) {
+      return 1400;
+    }
+
+    if (maxTokens <= 1200) {
+      return 2200;
+    }
+
+    if (maxTokens <= 1800) {
+      return 3000;
+    }
+
+    if (maxTokens <= 2400) {
+      return 3600;
+    }
+
+    if (maxTokens <= 3200) {
+      return 4400;
+    }
+
+    if (maxTokens <= 4200) {
+      return 5600;
+    }
+
+    if (maxTokens <= 5200) {
+      return 6800;
+    }
+
+    return Math.round(maxTokens * 1.15);
+  }
+
+  private normalizeTokenAttempts(options?: {
+    maxTokens?: number | undefined;
+    tokenAttempts?: number[] | undefined;
+  }): number[] {
+    const rawAttempts =
+      options?.tokenAttempts && options.tokenAttempts.length > 0
+        ? options.tokenAttempts
+        : [
+            options?.maxTokens ?? 1600,
+            Math.max(
+              3200,
+              Math.min(6400, Math.round((options?.maxTokens ?? 1600) * 1.5)),
+            ),
+            Math.max(
+              4800,
+              Math.min(9600, Math.round((options?.maxTokens ?? 1600) * 2.2)),
+            ),
+          ];
+
+    const adjustedAttempts = this.isLmStudioProvider()
+      ? rawAttempts.map((attempt) => this.raiseInitialTokenBudget(attempt))
+      : rawAttempts;
+
+    return [...new Set(adjustedAttempts)].sort((left, right) => left - right);
+  }
+
+  private resolveRequestTimeout(
+    requestedTimeoutMs: number | undefined,
+    maxTokens: number | undefined,
+  ): number {
+    const baseTimeout = requestedTimeoutMs ?? this.timeoutMs;
+    if (!this.isLmStudioProvider() || !maxTokens) {
+      return baseTimeout;
+    }
+
+    const raisedBudget = this.raiseInitialTokenBudget(maxTokens);
+    const additionalMs = Math.max(0, raisedBudget - 1800) * 6;
+    return Math.min(90000, Math.max(baseTimeout, baseTimeout + additionalMs));
+  }
+
   async healthCheck() {
     try {
       const response = await fetch(`${this.baseUrl}/models`, {
@@ -3758,20 +3842,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       tokenAttempts?: number[] | undefined;
     },
   ): Promise<string> {
-    const attempts =
-      options?.tokenAttempts && options.tokenAttempts.length > 0
-        ? options.tokenAttempts
-        : [
-            options?.maxTokens ?? 1600,
-            Math.max(
-              3200,
-              Math.min(6400, Math.round((options?.maxTokens ?? 1600) * 1.5)),
-            ),
-            Math.max(
-              4800,
-              Math.min(9600, Math.round((options?.maxTokens ?? 1600) * 2.2)),
-            ),
-          ];
+    const attempts = this.normalizeTokenAttempts(options);
 
     let lastEmptyReasoning = false;
 
@@ -3779,7 +3850,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       const maxTokens = attempts[attemptIndex]!;
       const json = await this.requestChatCompletion(messages, {
         maxTokens,
-        timeoutMs: options?.timeoutMs,
+        timeoutMs: this.resolveRequestTimeout(options?.timeoutMs, maxTokens),
       });
 
       const choice = json.choices?.[0];

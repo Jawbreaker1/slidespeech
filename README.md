@@ -13,6 +13,81 @@ The core idea is not "generate slides and stop there". The product is an orchest
 
 The architecture is intentionally modular so LLM, vision, STT, TTS, VAD, storage, and research backends can be swapped without rewriting the core product logic.
 
+## Generation pipeline
+
+SlideSpeech is not meant to be "one prompt in, one static deck out".
+The product goal is a grounded teaching pipeline with two modes:
+
+- a generation pipeline that turns a topic or source bundle into a teachable presentation
+- a runtime pipeline that presents, answers questions, adapts, and resumes in context
+
+### Current generation pipeline
+
+Today, generation is quality-first and still more conservative than fast.
+In plain terms, the system currently does this:
+
+1. Interpret the user prompt into a structured teaching intent.
+2. Decide whether live web research is needed, and if so fetch and summarize sources.
+3. Build a grounded presentation plan.
+4. Generate a deck draft, often through multiple guarded attempts.
+5. Enrich slides one by one into the internal slide schema.
+6. Validate and repair the deck when quality checks fail.
+7. Generate the first narration so presenter mode can start.
+8. Continue background enrichment for later narrations and final review.
+
+```mermaid
+flowchart TD
+    A["Prompt or source-aware request"] --> B["Intent extraction"]
+    B --> C["Research planning"]
+    C --> D["Explicit source fetch and search"]
+    D --> E["Grounding bundle"]
+    E --> F["Presentation plan"]
+    F --> G["Deck generation"]
+    G --> H["Slide-by-slide enrichment"]
+    H --> I["Validation and repair"]
+    I --> J["Save deck and generate intro narration"]
+    J --> K["Background narration and review"]
+```
+
+This is why SlideSpeech can already produce grounded, narration-aware decks, but also why generation can still take too long: several LLM-heavy stages are still serialized and guarded.
+
+### Target pipeline
+
+The target architecture is faster, cleaner, and more progressive.
+The goal is to make the first usable deck appear quickly while keeping quality high through structured enrichment afterward.
+
+In plain terms, the target system should do this:
+
+1. Turn the prompt into a clean intent contract: subject, audience, format, constraints, and required activities.
+2. Build a strong evidence bundle from trusted sources only when grounding is actually needed.
+3. Generate a coherent deck from that contract with fewer retries and less repair.
+4. Return a usable first result early.
+5. Enrich narration, illustrations, QA, and presenter assets progressively in the background.
+6. Keep question answering, STT, and TTS on a separate fast runtime path instead of blocking generation.
+
+```mermaid
+flowchart TD
+    A["Prompt or source bundle"] --> B["Intent contract"]
+    B --> C["Research planner"]
+    C --> D["Trusted evidence bundle"]
+    D --> E["Deck scaffold and content generation"]
+    E --> F["Usable first deck returned early"]
+    F --> G["Progressive enrichment"]
+    G --> H["Narration"]
+    G --> I["Illustrations"]
+    G --> J["QA and review"]
+    F --> K["Fast interactive runtime"]
+    K --> L["Speech-to-text"]
+    K --> M["Question answering"]
+    K --> N["Text-to-speech"]
+```
+
+### What this means in practice
+
+- The current system is already architected around provider boundaries and grounded generation.
+- The target system keeps that architecture, but moves toward fewer retries, less repair, earlier first render, and much faster interaction.
+- This is the path to a demo-worthy product: good presentations in a reasonable time, then fast question answering on top.
+
 ## Current status
 
 Implemented now:
