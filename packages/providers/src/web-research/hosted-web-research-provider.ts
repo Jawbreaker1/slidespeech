@@ -60,6 +60,8 @@ const LOW_TRUST_DOMAIN_PATTERNS = [
   /(^|\.)pinterest\./i,
   /(^|\.)reddit\.com$/i,
   /(^|\.)redd\.it$/i,
+  /(^|\.)fandom\.com$/i,
+  /(^|\.)wikia\.com$/i,
   /(^|\.)facebook\.com$/i,
   /(^|\.)instagram\.com$/i,
   /(^|\.)x\.com$/i,

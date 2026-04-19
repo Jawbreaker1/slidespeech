@@ -15,6 +15,7 @@ import type {
   ReviewPresentationInput,
   Slide,
   SlideNarration,
+  SlideVisualTone,
   SummarizeSectionInput,
   TransformExplanationInput,
 } from "@slidespeech/types";
@@ -46,6 +47,14 @@ interface ChatCompletionResponse {
     message?: {
       content?: string;
       reasoning_content?: string;
+      tool_calls?: Array<{
+        id?: string;
+        type?: string;
+        function?: {
+          name?: string;
+          arguments?: string;
+        };
+      }>;
     };
   }>;
 }
@@ -149,8 +158,57 @@ const deriveVisualCards = (
           ? "accent"
           : index === keyPoints.length - 1
             ? "success"
-            : "neutral",
+          : "neutral",
     };
+  });
+
+const normalizeComparableText = (value: string): string =>
+  value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const filterAudienceVisualCallouts = (
+  callouts: Array<{ id: string; label: string; text: string; tone: SlideVisualTone }>,
+  options: {
+    keyPoints: string[];
+    cards: Array<{ body: string }>;
+    diagramNodes: Array<{ label: string }>;
+    likelyQuestions: string[];
+    learningGoal: string;
+    beginnerExplanation?: string | undefined;
+  },
+) =>
+  callouts.filter((callout) => {
+    const normalized = normalizeComparableText(callout.text);
+    if (!normalized) {
+      return false;
+    }
+
+    const likelyQuestionSet = new Set(
+      options.likelyQuestions
+        .map((value) => normalizeComparableText(value))
+        .filter(Boolean),
+    );
+    if (likelyQuestionSet.has(normalized)) {
+      return false;
+    }
+
+    const alreadyVisible = new Set(
+      [
+        ...options.keyPoints,
+        ...options.cards.map((card) => card.body),
+        ...options.diagramNodes.map((node) => node.label),
+        options.learningGoal,
+        options.beginnerExplanation ?? "",
+      ]
+        .map((value) => normalizeComparableText(value))
+        .filter(Boolean),
+    );
+
+    return !alreadyVisible.has(normalized);
   });
 
 const deriveVisuals = (
@@ -183,11 +241,6 @@ const deriveVisuals = (
       label: "Example",
       text,
       tone: "info" as const,
-    })),
-    ...options.likelyQuestions.slice(0, 1).map((text) => ({
-      label: "Likely question",
-      text,
-      tone: "warning" as const,
     })),
   ];
   const providedCards = toRecordArray(provided.cards).map((card, index) => ({
@@ -280,6 +333,28 @@ const deriveVisuals = (
           : "editorial",
     tone: fallbackLayout === "summary-board" ? "success" : "accent",
   } as const;
+  const cards =
+    providedCards.length > 0 ? providedCards : deriveVisualCards(slideCandidate, options.keyPoints);
+  const diagramNodes =
+    providedNodes.length > 0
+      ? providedNodes
+      : options.keyPoints.slice(0, 3).map((point, index) => ({
+          id: `${String(slideCandidate.id ?? "slide")}-node-${index + 1}`,
+          label: point.split(":")[0]?.trim() || point,
+          tone:
+            index === 0
+              ? "info"
+              : index === 1
+                ? "accent"
+                : "success",
+        }));
+  const rawCallouts =
+    providedCallouts.length > 0
+      ? providedCallouts
+      : calloutSeed.map((callout, index) => ({
+          id: `${String(slideCandidate.id ?? "slide")}-callout-${index + 1}`,
+          ...callout,
+        }));
 
   return {
     layoutTemplate: normalizeLayoutTemplate(provided.layoutTemplate, fallbackLayout),
@@ -293,28 +368,19 @@ const deriveVisuals = (
       provided.heroStatement.trim().length > 0
         ? provided.heroStatement
         : options.learningGoal,
-    cards:
-      providedCards.length > 0 ? providedCards : deriveVisualCards(slideCandidate, options.keyPoints),
-    callouts:
-      providedCallouts.length > 0
-        ? providedCallouts
-        : calloutSeed.map((callout, index) => ({
-            id: `${String(slideCandidate.id ?? "slide")}-callout-${index + 1}`,
-            ...callout,
-          })),
-    diagramNodes:
-      providedNodes.length > 0
-        ? providedNodes
-        : options.keyPoints.slice(0, 3).map((point, index) => ({
-            id: `${String(slideCandidate.id ?? "slide")}-node-${index + 1}`,
-            label: point.split(":")[0]?.trim() || point,
-            tone:
-              index === 0
-                ? "info"
-                : index === 1
-                  ? "accent"
-                  : "success",
-          })),
+    cards,
+    callouts: filterAudienceVisualCallouts(rawCallouts, {
+      keyPoints: options.keyPoints,
+      cards,
+      diagramNodes,
+      likelyQuestions: options.likelyQuestions,
+      learningGoal: options.learningGoal,
+      beginnerExplanation:
+        typeof slideCandidate.beginnerExplanation === "string"
+          ? slideCandidate.beginnerExplanation
+          : undefined,
+    }),
+    diagramNodes,
     diagramEdges: toRecordArray(provided.diagramEdges).map((edge) => ({
       from: typeof edge.from === "string" ? edge.from : "",
       to: typeof edge.to === "string" ? edge.to : "",
@@ -587,10 +653,10 @@ const uniqueNonEmptyStrings = (values: string[]): string[] => {
   return result;
 };
 
-const looksAbstractForIntro = (value: string): boolean =>
-  /\b(critical role|foundations|why this matters|why .* matters|importance of)\b/i.test(
-    value,
-  );
+const looksAbstractForIntro = (value: string): boolean => {
+  const tokens = [...new Set(tokenizeDeckShapeText(value))];
+  return tokens.length > 0 && tokens.length <= 3;
+};
 
 const DECK_SHAPE_META_PATTERNS = [
   /\bthis slide\b/i,
@@ -601,7 +667,6 @@ const DECK_SHAPE_META_PATTERNS = [
   /\bsession\b/i,
   /\bthis session\b/i,
   /\bblueprint\b/i,
-  /\bour mission\b/i,
 ];
 
 const DECK_SHAPE_INSTRUCTIONAL_PATTERNS = [
@@ -663,15 +728,15 @@ const PROMOTIONAL_SOURCE_PATTERNS = [
   /\bbundle\b/i,
 ];
 
-const CONTRACT_AMBIGUOUS_PRONOUN_PATTERN = /\b(it|this|these|they|them)\b/i;
+const WORD_LIKE_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}\p{M}-]*/gu;
+
+const tokenizeSemanticText = (value: string): string[] =>
+  (value.toLocaleLowerCase().match(WORD_LIKE_TOKEN_PATTERN) ?? [])
+    .map((token) => token.normalize("NFKC").replace(/^-+|-+$/g, ""))
+    .filter((token) => token.length >= 2 || /\p{N}/u.test(token));
 
 const tokenizeDeckShapeText = (value: string): string[] =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3);
+  tokenizeSemanticText(value);
 
 const hasMeaningfulAnchorOverlap = (value: string, anchor: string): boolean => {
   const left = [...new Set(tokenizeDeckShapeText(value))];
@@ -691,22 +756,25 @@ const looksFragmentarySlidePoint = (value: string): boolean => {
     return true;
   }
 
-  if (/^[a-z]/.test(trimmed)) {
-    return true;
-  }
-
   const tokens = tokenizeDeckShapeText(trimmed);
   if (tokens.length >= 7 && /[.!?]$/.test(trimmed)) {
     return false;
   }
 
-  if (tokens.length < 4) {
+  if (tokens.length < 3) {
     return true;
   }
 
-  return !/\b(is|are|was|were|has|have|had|can|could|will|would|should|did|does|do|may|might|must)\b/i.test(
-    trimmed,
-  );
+  if (/[.!?]$/.test(trimmed)) {
+    return false;
+  }
+
+  const clauseLikeParts = trimmed
+    .split(/[,:;–—]/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return tokens.length < 5 && clauseLikeParts.length <= 1;
 };
 
 type SlideDraftAssessment = {
@@ -714,29 +782,68 @@ type SlideDraftAssessment = {
   reasons: string[];
 };
 
-const extractPlainTextSlideSection = (text: string, label: string): string => {
-  const pattern = new RegExp(
-    `^${label}:\\s*([\\s\\S]*?)(?=^TITLE:|^GOAL:|^POINTS:|^BEGINNER:|^ADVANCED:|^EXAMPLE:|^QUESTION:|$)`,
-    "im",
-  );
-  return (
-    text
-      .match(pattern)?.[1]
-      ?.replace(/\r\n/g, "\n")
-      ?.replace(/\u00a0/g, " ")
-      ?.trim() ?? ""
-  );
-};
+const PLAIN_TEXT_SLIDE_SECTION_ALIASES = {
+  title: ["TITLE", "SLIDE TITLE"],
+  goal: ["GOAL", "LEARNING GOAL", "OBJECTIVE"],
+  points: ["POINTS", "KEY POINTS"],
+  beginner: ["BEGINNER", "BEGINNER EXPLANATION"],
+  advanced: ["ADVANCED", "ADVANCED EXPLANATION"],
+  example: ["EXAMPLE", "EXAMPLES"],
+  question: ["QUESTION", "LIKELY QUESTION"],
+} as const;
 
-const extractPlainTextSlideSectionAny = (text: string, labels: string[]): string => {
-  for (const label of labels) {
-    const value = extractPlainTextSlideSection(text, label);
-    if (value) {
-      return value;
+type PlainTextSlideSectionKey = keyof typeof PLAIN_TEXT_SLIDE_SECTION_ALIASES;
+
+const PLAIN_TEXT_SLIDE_HEADER_TO_SECTION = new Map<string, PlainTextSlideSectionKey>(
+  Object.entries(PLAIN_TEXT_SLIDE_SECTION_ALIASES).flatMap(([section, aliases]) =>
+    aliases.map((alias) => [alias, section as PlainTextSlideSectionKey]),
+  ),
+);
+
+const parsePlainTextSlideSections = (
+  text: string,
+): Record<PlainTextSlideSectionKey, string> => {
+  const sections: Record<PlainTextSlideSectionKey, string[]> = {
+    title: [],
+    goal: [],
+    points: [],
+    beginner: [],
+    advanced: [],
+    example: [],
+    question: [],
+  };
+  let currentSection: PlainTextSlideSectionKey | null = null;
+
+  for (const rawLine of text.replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").split("\n")) {
+    const line = rawLine.trimEnd();
+    const headerMatch = line.match(/^\s*([\p{L}][\p{L} ]{1,40})\s*:\s*(.*)$/u);
+    if (headerMatch) {
+      const normalizedHeader = headerMatch[1]!.replace(/\s+/g, " ").trim().toUpperCase();
+      const section = PLAIN_TEXT_SLIDE_HEADER_TO_SECTION.get(normalizedHeader) ?? null;
+      if (section) {
+        currentSection = section;
+        const inlineValue = headerMatch[2]?.trim();
+        if (inlineValue) {
+          sections[section].push(inlineValue);
+        }
+        continue;
+      }
+    }
+
+    if (currentSection) {
+      sections[currentSection].push(line);
     }
   }
 
-  return "";
+  return {
+    title: sections.title.join("\n").trim(),
+    goal: sections.goal.join("\n").trim(),
+    points: sections.points.join("\n").trim(),
+    beginner: sections.beginner.join("\n").trim(),
+    advanced: sections.advanced.join("\n").trim(),
+    example: sections.example.join("\n").trim(),
+    question: sections.question.join("\n").trim(),
+  };
 };
 
 const buildSlideFromPlainText = (
@@ -781,25 +888,14 @@ const buildSlideFromPlainText = (
         ),
     );
 
-  const title = normalizeInlineText(
-    extractPlainTextSlideSectionAny(text, ["TITLE", "SLIDE TITLE"]),
-  );
-  const learningGoal = normalizeInlineText(
-    extractPlainTextSlideSectionAny(text, ["GOAL", "LEARNING GOAL", "OBJECTIVE"]),
-  );
-  const pointsBlock = extractPlainTextSlideSectionAny(text, ["POINTS", "KEY POINTS"]);
-  const beginnerExplanation = normalizeInlineText(
-    extractPlainTextSlideSectionAny(text, ["BEGINNER", "BEGINNER EXPLANATION"]),
-  );
-  const advancedExplanation = normalizeInlineText(
-    extractPlainTextSlideSectionAny(text, ["ADVANCED", "ADVANCED EXPLANATION"]),
-  );
-  const example = normalizeInlineText(
-    extractPlainTextSlideSectionAny(text, ["EXAMPLE", "EXAMPLES"]),
-  );
-  const question = normalizeInlineText(
-    extractPlainTextSlideSectionAny(text, ["QUESTION", "LIKELY QUESTION"]),
-  );
+  const sections = parsePlainTextSlideSections(text);
+  const title = normalizeInlineText(sections.title);
+  const learningGoal = normalizeInlineText(sections.goal);
+  const pointsBlock = sections.points;
+  const beginnerExplanation = normalizeInlineText(sections.beginner);
+  const advancedExplanation = normalizeInlineText(sections.advanced);
+  const example = normalizeInlineText(sections.example);
+  const question = normalizeInlineText(sections.question);
   const effectiveTitle = title || slide.title;
   const effectiveLearningGoal = learningGoal || slide.learningGoal;
   const pointCandidates = uniqueNonEmptyStrings([
@@ -927,6 +1023,14 @@ const extractCoverageRequirements = (value: string): string[] => {
 type SlideContract = {
   index: number;
   label: string;
+  kind:
+    | "orientation"
+    | "coverage"
+    | "development"
+    | "synthesis"
+    | "procedural-ingredients"
+    | "procedural-steps"
+    | "procedural-quality";
   focus: string;
   objective?: string;
 };
@@ -1037,10 +1141,33 @@ const buildSlideEnrichmentPromptLines = (input: {
     .slice(0, 5)
     .map((candidate) => candidate.value);
 
+  const claimStyleGuidance = (() => {
+    switch (input.contract.kind) {
+      case "orientation":
+        return `State concrete subject-facing claims about ${subject}. Name what it is, what changes because of it, or what makes it recognizable. Do not describe the presentation or the presenter.`;
+      case "procedural-ingredients":
+        return `Explain what the main inputs contribute to the final result in ${subject.toLowerCase()}. Phrase each point as a descriptive claim about balance, texture, flavor, or another visible effect. Do not give recipe-like or step-by-step instructions, and do not address the audience directly.`;
+      case "procedural-steps":
+        return `Explain what each main step changes in ${subject.toLowerCase()} and why that change matters. Treat the steps as explanatory topics, not commands for the audience to follow. Avoid second-person phrasing and avoid telling someone what to do.`;
+      case "procedural-quality":
+        return `Explain how balance, texture, or final adjustments change the quality of ${subject.toLowerCase()}. Keep the points observational and evaluative, not imperative. Every key point should describe a cue, effect, or relationship, not an action for the cook or audience.`;
+      case "synthesis":
+        return `State what should be remembered about ${subject}. Connect the strongest ideas, consequences, or examples without turning the slide into facilitation or wrap-up meta language.`;
+      default:
+        return `Write complete declarative claims about ${subject}. Prefer mechanisms, roles, consequences, or concrete subareas over advice about what someone should do.`;
+    }
+  })();
+
   return [
     `Subject: ${subject}`,
+    input.generationInput.intent?.organization
+      ? `Organization context: ${input.generationInput.intent.organization}`
+      : null,
     input.generationInput.intent?.audienceCues?.length
       ? `Audience: ${input.generationInput.intent.audienceCues.join("; ")}`
+      : null,
+    input.generationInput.intent?.presentationGoal
+      ? `Presentation goal: ${input.generationInput.intent.presentationGoal}`
       : null,
     input.generationInput.intent?.deliveryFormat
       ? `Format: ${input.generationInput.intent.deliveryFormat}`
@@ -1050,8 +1177,10 @@ const buildSlideEnrichmentPromptLines = (input: {
       : null,
     `Slide order: ${input.slide.order + 1} of ${input.deck.slides.length}`,
     `Slide role: ${input.contract.label}`,
+    `Slide kind: ${input.contract.kind}`,
     `Slide focus: ${input.contract.focus}`,
     input.contract.objective ? `Slide objective: ${input.contract.objective}` : null,
+    `Claim style guidance: ${claimStyleGuidance}`,
     `Draft title: ${input.slide.title}`,
     `Draft learning goal: ${input.slide.learningGoal}`,
     previousSlide ? `Previous slide title: ${previousSlide.title}` : "Previous slide title: none",
@@ -1134,7 +1263,6 @@ const sanitizeContractText = (value: string, topic: string): string => {
     .replace(/\bthe practical takeaway is\b/gi, " ")
     .replace(/\bthe broader story of\b/gi, " ")
     .replace(/\bhow it connects to\b/gi, " ")
-    .replace(/\bour mission\b/gi, " ")
     .replace(/\bshould be explained with a clear connection back to\b.*$/gi, " ")
     .replace(/\bmore information is available at\b.*$/i, " ")
     .replace(/\buse google\b.*$/i, " ")
@@ -1174,6 +1302,9 @@ const toAudienceFacingSentence = (value: string): string => {
 
   return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
 };
+
+const lowerCaseFirstCharacter = (value: string): string =>
+  value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
 
 const compactGroundingHighlight = (value: string, topic: string): string => {
   const normalized = sanitizeContractText(value, topic)
@@ -1226,7 +1357,6 @@ const pickContractText = (
     const concrete = sanitized.find(
       (candidate) =>
         !DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(candidate)) &&
-        !CONTRACT_AMBIGUOUS_PRONOUN_PATTERN.test(candidate) &&
         !CONTRACT_LEAD_IN_PATTERNS.some((pattern) => pattern.test(candidate)),
     );
     if (concrete) {
@@ -1249,9 +1379,8 @@ const pickContractText = (
 const shortenTitlePhrase = (value: string, maxLength = 72): string => {
   const stripDanglingTitleTail = (input: string): string =>
     input
+      .replace(/^[^\p{L}\p{N}]+/gu, "")
       .replace(/[.:!?]+$/g, "")
-      .replace(/\s+(?:due to|because|as|with|for|from|connected to|related to)\s+(?:a|an|the)?$/i, "")
-      .replace(/\s+(?:a|an|the|as)$/i, "")
       .trim();
 
   const trimmed = stripDanglingTitleTail(value);
@@ -1278,6 +1407,95 @@ const isOrientationCoverageAnchor = (topic: string, value: string): boolean => {
   );
 };
 
+const isGenericOpeningFocus = (subject: string, value: string): boolean => {
+  const normalized = sanitizeContractText(value, subject);
+  if (!normalized) {
+    return true;
+  }
+
+  return (
+    isOrientationCoverageAnchor(subject, normalized) ||
+    DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    /^why\b.+\bmatters?\b/i.test(normalized)
+  );
+};
+
+const pickOpeningFocus = (
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "plan"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+  >,
+  openingHighlight?: string,
+): string => {
+  const subject = resolveIntentSubject(input);
+  const explicitCoverageRequirements = uniqueNonEmptyStrings(
+    (input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? ""))
+      .map((requirement) => sanitizeContractText(requirement, subject)),
+  ).filter((value) => !isGenericOpeningFocus(subject, value));
+  const coverageGoals = uniqueNonEmptyStrings(
+    (input.groundingCoverageGoals ?? []).map((goal) =>
+      sanitizeContractText(goal, subject),
+    ),
+  ).filter((value) => !isGenericOpeningFocus(subject, value));
+  const learningObjectives = uniqueNonEmptyStrings(input.plan?.learningObjectives ?? []).filter(
+    (value) => !isGenericOpeningFocus(subject, value),
+  );
+  const presentationGoal = input.intent?.presentationGoal
+    ? sanitizeContractText(input.intent.presentationGoal, subject)
+    : "";
+  const highlight = openingHighlight ? compactGroundingHighlight(openingHighlight, subject) : "";
+  const candidate = pickContractText(
+    input,
+    [
+      presentationGoal,
+      explicitCoverageRequirements[0],
+      coverageGoals[0],
+      learningObjectives[0],
+      highlight,
+      subject,
+      `What ${subject} is and why it matters`,
+    ],
+    { preferConcrete: true },
+  );
+
+  return candidate || subject;
+};
+
+const pickOpeningObjective = (
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "plan"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+  >,
+  openingHighlight?: string,
+): string | undefined => {
+  const subject = resolveIntentSubject(input);
+  const candidate = pickContractText(
+    input,
+    [
+      input.intent?.presentationGoal,
+      input.intent?.activityRequirement,
+      input.plan?.learningObjectives?.[0],
+      openingHighlight,
+      ...(input.intent?.coverageRequirements ?? []),
+      ...(input.groundingCoverageGoals ?? []),
+    ],
+    { preferConcrete: true },
+  );
+
+  const normalized = candidate ? sanitizeContractText(candidate, subject) : "";
+  return normalized || undefined;
+};
+
 const buildSlideContracts = (
   input: Pick<
     GenerateDeckInput,
@@ -1291,12 +1509,18 @@ const buildSlideContracts = (
   slideCount: number,
 ): SlideContract[] => {
   const subject = resolveIntentSubject(input);
+  const contentMode = input.intent?.contentMode ?? "descriptive";
   const explicitCoverageRequirements = uniqueNonEmptyStrings(
     (input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? ""))
       .map((requirement) => sanitizeContractText(requirement, subject)),
   );
   const coverageRequirements = uniqueNonEmptyStrings(
-    explicitCoverageRequirements,
+    [
+      ...(input.intent?.presentationGoal
+        ? [sanitizeContractText(input.intent.presentationGoal, subject)]
+        : []),
+      ...explicitCoverageRequirements,
+    ],
   );
   const coverageGoals = uniqueNonEmptyStrings(
     (input.groundingCoverageGoals ?? []).map((goal) =>
@@ -1341,22 +1565,58 @@ const buildSlideContracts = (
   for (let index = 0; index < slideCount; index += 1) {
     if (index === 0) {
       const openingHighlight = takeNextHighlight();
-      const focus = pickContractText(
-        input,
-        [
-          `What ${subject} is and why it matters`,
-          learningObjectives[0],
-          openingHighlight,
-        ],
-      );
+      const focus = pickOpeningFocus(input, openingHighlight);
+      const openingObjective = pickOpeningObjective(input, openingHighlight);
       contracts.push({
         index,
         label: "orientation",
+        kind: "orientation",
         focus,
-        ...((openingHighlight || learningObjectives[0])
+        ...(openingObjective && openingObjective !== focus
+          ? { objective: openingObjective }
+          : {}),
+      });
+      continue;
+    }
+
+    if (contentMode === "procedural") {
+      const proceduralKinds: SlideContract["kind"][] = [
+        "procedural-ingredients",
+        "procedural-steps",
+        "procedural-quality",
+      ];
+      const proceduralKind =
+        proceduralKinds[Math.min(index - 1, proceduralKinds.length - 1)] ?? "development";
+      const proceduralFocus = pickContractText(
+        input,
+        [
+          coverageAnchors[index - 1],
+          learningObjectives[index],
+          storyline[index],
+          takeNextHighlight(),
+        ],
+        { preferConcrete: true },
+      );
+      const proceduralObjective = pickContractText(
+        input,
+        [learningObjectives[index], storyline[index], coverageAnchors[index - 1]],
+        { preferConcrete: true },
+      );
+      contracts.push({
+        index,
+        label:
+          proceduralKind === "procedural-ingredients"
+            ? "ingredients"
+            : proceduralKind === "procedural-steps"
+              ? "steps"
+              : "quality",
+        kind: proceduralKind,
+        focus: proceduralFocus,
+        ...((proceduralObjective || coverageAnchors[index - 1]) &&
+        proceduralObjective !== proceduralFocus
           ? {
               objective: sanitizeContractText(
-                openingHighlight ?? learningObjectives[0]!,
+                proceduralObjective ?? coverageAnchors[index - 1]!,
                 subject,
               ),
             }
@@ -1389,6 +1649,7 @@ const buildSlideContracts = (
       contracts.push({
         index,
         label: "required coverage",
+        kind: "coverage",
         focus,
         ...(objective && objective !== focus
           ? { objective: sanitizeContractText(objective, subject) }
@@ -1412,6 +1673,7 @@ const buildSlideContracts = (
       contracts.push({
         index,
         label: "synthesis",
+        kind: "synthesis",
         focus,
         ...((groundingHighlight || learningObjectives.at(-1))
           ? {
@@ -1447,6 +1709,7 @@ const buildSlideContracts = (
     contracts.push({
       index,
       label: storyline[index] ?? `development ${index + 1}`,
+      kind: "development",
       focus,
       ...((groundingHighlight || objective) && objective !== focus
         ? {
@@ -1491,8 +1754,27 @@ const buildContractTitle = (
   contract: SlideContract,
 ): string => {
   const subject = resolveIntentSubject(input);
+  if (contract.kind === "procedural-ingredients") {
+    return "Essential ingredients";
+  }
+  if (contract.kind === "procedural-steps") {
+    return "Key preparation steps";
+  }
+  if (contract.kind === "procedural-quality") {
+    return "Taste, texture, and adjustment";
+  }
   if (contract.index === 0) {
-    return `${subject} at a glance`;
+    const focus = sanitizeContractText(contract.focus, subject);
+    if (
+      focus &&
+      !isGenericOpeningFocus(subject, focus) &&
+      focus.length <= 72 &&
+      !/[.?!]/.test(focus)
+    ) {
+      return shortenTitlePhrase(focus, 72);
+    }
+
+    return shortenTitlePhrase(subject, 72);
   }
 
   const preferredSource = (() => {
@@ -1500,22 +1782,6 @@ const buildContractTitle = (
     const objective = contract.objective
       ? sanitizeContractText(contract.objective, subject)
       : "";
-
-    if (
-      objective &&
-      CONTRACT_AMBIGUOUS_PRONOUN_PATTERN.test(objective) &&
-      !CONTRACT_AMBIGUOUS_PRONOUN_PATTERN.test(focus)
-    ) {
-      return focus;
-    }
-
-    if (
-      objective &&
-      CONTRACT_AMBIGUOUS_PRONOUN_PATTERN.test(focus) &&
-      !CONTRACT_AMBIGUOUS_PRONOUN_PATTERN.test(objective)
-    ) {
-      return objective;
-    }
 
     if (
       objective &&
@@ -1554,20 +1820,135 @@ const buildContractAnchoredKeyPoints = (
   concretePointPool: string[],
 ): string[] => {
   const subject = resolveIntentSubject(input);
+  const focus = sanitizeContractText(contract.focus, subject);
+  const objective = contract.objective
+    ? sanitizeContractText(contract.objective, subject)
+    : "";
+  const lowerFocus = lowerCaseFirstCharacter(focus);
+  const anchorStatements = (() => {
+    switch (contract.kind) {
+      case "orientation":
+        return [
+          objective
+            ? `${objective} is one of the clearest ways to see why ${subject} matters.`
+            : "",
+          focus && !isGenericOpeningFocus(subject, focus)
+            ? `${focus} helps define what people should recognize about ${subject}.`
+            : "",
+        ];
+      case "coverage":
+      case "development":
+        return [
+          focus ? `${focus} is one concrete part of ${subject}.` : "",
+          objective && objective !== focus
+            ? `${objective} becomes clearer when ${lowerFocus || "this area"} is examined closely.`
+            : "",
+        ];
+      case "procedural-ingredients":
+        return [
+          focus
+            ? `${focus} shape the balance, texture, or overall character of ${subject.toLowerCase()}.`
+            : "",
+          objective && objective !== focus
+            ? `${objective} depends on how those inputs work together.`
+            : "",
+        ];
+      case "procedural-steps":
+        return [
+          focus
+            ? `${focus} changes texture, consistency, or how evenly the result comes together.`
+            : "",
+          objective && objective !== focus
+            ? `${objective} depends on what each step changes in the mixture.`
+            : "",
+        ];
+      case "procedural-quality":
+        return [
+          focus
+            ? `${focus} show whether ${subject.toLowerCase()} feels balanced or uneven.`
+            : "",
+          objective && objective !== focus
+            ? `${objective} comes from small changes that can be checked and adjusted.`
+            : "",
+        ];
+      case "synthesis":
+        return [
+          focus ? `${focus} captures one of the strongest takeaways from ${subject}.` : "",
+          objective && objective !== focus
+            ? `${objective} is easier to remember when the main ideas are tied together clearly.`
+            : "",
+        ];
+      default:
+        return [];
+    }
+  })();
+  const fallbackStatements = (() => {
+    switch (contract.kind) {
+      case "orientation":
+        return [
+          `${subject} is easier to understand when its purpose, structure, and one concrete example are visible together.`,
+          `A concrete consequence, responsibility, or example shows why ${subject} matters.`,
+          `${subject} becomes clearer when people can name what it is and what it changes.`,
+        ];
+      case "procedural-ingredients":
+        return [
+          `The starting inputs determine the balance, texture, and final character of ${subject.toLowerCase()}.`,
+          `Different inputs change different parts of the final result.`,
+          `A strong result depends on inputs that support the same overall goal.`,
+        ];
+      case "procedural-steps":
+        return [
+          `The order of the main steps changes texture, consistency, or reliability in ${subject.toLowerCase()}.`,
+          `Each step alters the final result in a specific way.`,
+          `Preparation is easier to control when each step has a clear purpose.`,
+        ];
+      case "procedural-quality":
+        return [
+          `Final quality depends on balance, texture, and small adjustments.`,
+          `Small adjustments can change whether ${subject.toLowerCase()} feels balanced or uneven.`,
+          `A finished result is easier to recognize when you know what good balance looks like.`,
+        ];
+      case "synthesis":
+        return [
+          `The most important lessons about ${subject} are easier to retain when they are tied together clearly.`,
+          `The key ideas from ${subject} reinforce one another instead of standing alone.`,
+          `A strong summary of ${subject} connects value, structure, and example.`,
+        ];
+      default:
+        return [
+          focus
+            ? `${focus} is one concrete part of ${subject}.`
+            : `One concrete area makes ${subject} easier to understand.`,
+          focus
+            ? `${focus} changes what people notice, decide, or do around ${subject}.`
+            : `${subject} becomes clearer when one concrete mechanism or consequence is examined closely.`,
+          objective && objective !== focus
+            ? `${objective} is one practical reason this part of ${subject} matters.`
+            : `${subject} becomes clearer when its mechanisms, roles, or consequences are made explicit.`,
+        ];
+    }
+  })();
 
-  return uniqueNonEmptyStrings([
-    ...concretePointPool.filter(
-      (point) =>
-        !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)) &&
-        !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(point)),
-    ),
-    contract.objective ? toAudienceFacingSentence(contract.objective) : null,
-    toAudienceFacingSentence(`${contract.focus} helps explain how ${subject} works in practice`),
-    contract.objective
-      ? toAudienceFacingSentence(`${contract.objective} influences real outcomes connected to ${subject}`)
-      : null,
-    toAudienceFacingSentence(`${subject} becomes clearer when you look at ${contract.focus.toLowerCase()}`),
-  ].filter((value): value is string => Boolean(value))).slice(0, 3);
+  return uniqueNonEmptyStrings(
+    [
+      ...concretePointPool
+        .filter(
+          (point) =>
+            !looksFragmentarySlidePoint(point) &&
+            !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)) &&
+            !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(point)),
+        )
+        .map((point) => toAudienceFacingSentence(point)),
+      ...anchorStatements
+        .filter((statement) => statement.length > 0)
+        .map((statement) => toAudienceFacingSentence(statement)),
+      objective && !looksFragmentarySlidePoint(objective)
+        ? toAudienceFacingSentence(objective)
+        : null,
+      focus && !looksFragmentarySlidePoint(focus) ? toAudienceFacingSentence(focus) : null,
+      ...fallbackStatements.map((statement) => toAudienceFacingSentence(statement)),
+    ].filter((value): value is string => Boolean(value)),
+  ).slice(0, 3);
 };
 
 const buildContractLearningGoal = (
@@ -1575,28 +1956,50 @@ const buildContractLearningGoal = (
   contract: SlideContract,
 ): string => {
   const subject = resolveIntentSubject(input);
+  if (input.intent?.contentMode === "procedural" && contract.index === 0) {
+    return `See which ingredients, steps, and final adjustments define ${subject.toLowerCase()}.`;
+  }
+  if (contract.kind === "procedural-ingredients") {
+    return `See which inputs shape the flavor, balance, and texture of ${subject.toLowerCase()}.`;
+  }
+  if (contract.kind === "procedural-steps") {
+    return `See what the main preparation steps change in ${subject.toLowerCase()}.`;
+  }
+  if (contract.kind === "procedural-quality") {
+    return `See which cues show whether ${subject.toLowerCase()} is balanced and finished.`;
+  }
   const focus = pickContractText(
     input,
     [contract.objective, contract.focus],
     { preferConcrete: true },
   );
   if (contract.index === 0) {
-    return `Understand what ${subject} is, why it matters, and one concrete thing it is known for.`;
+    if (focus && !isGenericOpeningFocus(subject, focus)) {
+      return hasMeaningfulAnchorOverlap(focus, subject)
+        ? `See ${lowerCaseFirstCharacter(focus)} and why it matters.`
+        : `See how ${lowerCaseFirstCharacter(focus)} matters within ${subject}.`;
+    }
+
+    return `See what ${subject} is, why it matters, and one concrete way to recognize it.`;
   }
   if (!focus) {
-    return `Understand ${subject} more concretely.`;
+    return `See one concrete part of ${subject}.`;
+  }
+
+  if (/\b(exercise|assignment|task|activity|workshop)\b/i.test(focus)) {
+    return `Practice ${focus.charAt(0).toLowerCase() + focus.slice(1)}.`;
   }
 
   if (
     focus.toLowerCase().includes(subject.toLowerCase()) ||
     /^(?:how|why|what|when|where|who)\b/i.test(focus)
   ) {
-    return `Understand ${focus.charAt(0).toLowerCase() + focus.slice(1)}.`;
+    return `See ${lowerCaseFirstCharacter(focus)}.`;
   }
 
   return hasMeaningfulAnchorOverlap(focus, subject)
-    ? `Understand how ${focus.charAt(0).toLowerCase() + focus.slice(1)} matters in practice.`
-    : `Understand how ${focus.charAt(0).toLowerCase() + focus.slice(1)} connects to ${subject}.`;
+    ? `See how ${lowerCaseFirstCharacter(focus)} shapes ${subject}.`
+    : `See how ${lowerCaseFirstCharacter(focus)} fits within ${subject}.`;
 };
 
 const buildOrientationCoveragePoint = (
@@ -1621,6 +2024,19 @@ const buildOrientationCoveragePoint = (
   );
 };
 
+const buildProceduralOrientationKeyPoints = (subject: string): string[] =>
+  uniqueNonEmptyStrings([
+    toAudienceFacingSentence(
+      `The starting ingredients and inputs shape ${subject.toLowerCase()} before any main steps begin`,
+    ),
+    toAudienceFacingSentence(
+      `The sequence of preparation steps changes texture, balance, and consistency`,
+    ),
+    toAudienceFacingSentence(
+      `Final tasting and adjustment determine when ${subject.toLowerCase()} is ready`,
+    ),
+  ]).slice(0, 3);
+
 const buildOrientationSlideFromContext = (
   input: GenerateDeckInput,
   deck: Deck,
@@ -1628,7 +2044,23 @@ const buildOrientationSlideFromContext = (
   contract: SlideContract,
 ): Record<string, unknown> => {
   const subject = resolveIntentSubject(input);
-  const title = `${subject}: why it matters in practice`;
+  const title = buildContractTitle(input, contract);
+  if (input.intent?.contentMode === "procedural") {
+    const keyPoints = buildProceduralOrientationKeyPoints(subject);
+    return {
+      ...(slide as unknown as Record<string, unknown>),
+      title,
+      learningGoal: buildContractLearningGoal(input, contract),
+      keyPoints,
+      speakerNotes: [],
+      examples: [],
+      likelyQuestions: [`What usually makes ${subject.toLowerCase()} go wrong?`],
+      beginnerExplanation: keyPoints.slice(0, 2).join(" "),
+      advancedExplanation: keyPoints[2] ?? "",
+      id: slide.id,
+      order: slide.order,
+    };
+  }
   const coverageAnchors = uniqueNonEmptyStrings([
     ...(input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? "")),
     ...(input.groundingCoverageGoals ?? []),
@@ -1651,7 +2083,7 @@ const buildOrientationSlideFromContext = (
         : null,
       deck.summary,
       toAudienceFacingSentence(
-        `${subject} becomes easier to understand when you connect it to one concrete consequence, example, or responsibility`,
+        `${subject} becomes easier to recognize when one concrete consequence, example, or responsibility is visible`,
       ),
     ].filter((value): value is string => Boolean(value)),
   ).slice(0, 3);
@@ -1659,13 +2091,13 @@ const buildOrientationSlideFromContext = (
   const advancedExplanation =
     keyPoints[2] ??
     toAudienceFacingSentence(
-      `${subject} matters because it affects real decisions, behavior, or outcomes in practice`,
+      `${subject} matters because it changes real decisions, behavior, or outcomes`,
     );
 
   return {
     ...(slide as unknown as Record<string, unknown>),
     title,
-    learningGoal: `Understand what ${subject} is, why it matters, and one concrete way it shows up in practice.`,
+    learningGoal: buildContractLearningGoal(input, contract),
     keyPoints,
     speakerNotes: [],
     examples: [],
@@ -1740,13 +2172,13 @@ const buildSubjectOverviewSlideFromContext = (
   const keyPoints = uniqueNonEmptyStrings([
     ...buildContractAnchoredKeyPoints(input, contract, pointPool),
     toAudienceFacingSentence(`${subject} has distinct systems, examples, or behaviors that make it recognizable.`),
-    toAudienceFacingSentence(`Looking at one concrete mechanism or event makes ${subject} easier to understand.`),
+    toAudienceFacingSentence(`One concrete mechanism or event reveals how ${subject} behaves in practice.`),
   ]).slice(0, 3);
   const beginnerExplanation = keyPoints.slice(0, 2).join(" ");
   const advancedExplanation =
     keyPoints[2] ??
     toAudienceFacingSentence(
-      `${subject} matters because its structure leads to real outcomes, examples, or decisions in practice`,
+      `${subject} matters because its structure leads to real outcomes, examples, or decisions`,
     );
 
   return {
@@ -1827,7 +2259,7 @@ const buildGroundedSlideRecoveryFromContext = (
     ],
     beginnerExplanation: toAudienceFacingSentence(`${anchoredPoints[0]} ${anchoredPoints[1]}`),
     advancedExplanation: toAudienceFacingSentence(
-      `${anchoredPoints[2]} This detail helps connect the slide back to ${subject}.`,
+      `${anchoredPoints[2]} This detail shows why the slide matters within ${subject}.`,
     ),
     id: slide.id,
     order: slide.order,
@@ -1861,6 +2293,8 @@ const assessGeneratedSlideDraft = (
   const title = typeof slide.title === "string" ? slide.title.trim() : "";
   const learningGoal =
     typeof slide.learningGoal === "string" ? slide.learningGoal.trim() : "";
+  const expectedTitle = buildContractTitle(input, contract);
+  const expectedLearningGoal = buildContractLearningGoal(input, contract);
   const keyPoints = toStringArray(slide.keyPoints);
   const explanations = [
     typeof slide.beginnerExplanation === "string"
@@ -1873,6 +2307,15 @@ const assessGeneratedSlideDraft = (
   const allText = [title, learningGoal, ...keyPoints, ...explanations].join(" ");
   const localAnchors = buildSlideDraftLocalAnchors(input, contract, slide);
   const activeInstructionalPatterns = getActiveInstructionalPatterns(input);
+  const instructionalKeyPoints = keyPoints.filter((point) =>
+    activeInstructionalPatterns.some((pattern) => pattern.test(point)),
+  );
+  const fragmentaryKeyPoints = keyPoints.filter((point) =>
+    looksFragmentarySlidePoint(point),
+  );
+  const weaklyAnchoredKeyPoints = keyPoints.filter(
+    (point) => !matchesAnySlideAnchor(point, localAnchors),
+  );
   const reasons: string[] = [];
 
   if (PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(allText))) {
@@ -1891,7 +2334,6 @@ const assessGeneratedSlideDraft = (
   }
 
   if (
-    /^Understand the role of\b/i.test(learningGoal) ||
     !learningGoal ||
     DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(learningGoal)) ||
     activeInstructionalPatterns.some((pattern) => pattern.test(learningGoal))
@@ -1906,7 +2348,8 @@ const assessGeneratedSlideDraft = (
     DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(title)) ||
     activeInstructionalPatterns.some((pattern) => pattern.test(title)) ||
     PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(title)) ||
-    !matchesAnySlideAnchor(title, localAnchors.filter((anchor) => anchor !== title))
+    (!matchesAnySlideAnchor(title, localAnchors.filter((anchor) => anchor !== title)) &&
+      title.toLowerCase() !== expectedTitle.toLowerCase())
   ) {
     reasons.push(
       "Rewrite the title so it clearly names the concrete subject area of this slide.",
@@ -1914,18 +2357,46 @@ const assessGeneratedSlideDraft = (
   }
 
   if (
+    learningGoal &&
+    learningGoal.toLowerCase() === expectedLearningGoal.toLowerCase()
+  ) {
+    const awkwardLearningGoalReasonIndex = reasons.findIndex((reason) =>
+      reason.includes("Rewrite the learning goal"),
+    );
+    if (awkwardLearningGoalReasonIndex >= 0) {
+      reasons.splice(awkwardLearningGoalReasonIndex, 1);
+    }
+  }
+
+  if (
     keyPoints.length < 3 ||
     keyPoints.some(
       (point) =>
-        looksFragmentarySlidePoint(point) ||
         PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(point)) ||
-        DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)) ||
-        activeInstructionalPatterns.some((pattern) => pattern.test(point)),
+        DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)),
     ) ||
     keyPoints.filter((point) => matchesAnySlideAnchor(point, localAnchors)).length < 1
   ) {
     reasons.push(
       "Rewrite the key points as three complete, concrete claims tightly tied to this slide's subject.",
+    );
+  }
+
+  if (instructionalKeyPoints.length > 0) {
+    reasons.push(
+      "One or more key points still read like commands. Rewrite them as observations, mechanisms, or cues rather than actions for the audience to take.",
+    );
+  }
+
+  if (fragmentaryKeyPoints.length > 0) {
+    reasons.push(
+      "At least one key point is still fragmentary. Rewrite every key point as a full explanatory sentence.",
+    );
+  }
+
+  if (weaklyAnchoredKeyPoints.length >= 2) {
+    reasons.push(
+      "The key points are not specific enough to this slide. Tie them more directly to the slide title, focus, and learning goal.",
     );
   }
 
@@ -1955,6 +2426,7 @@ const buildOutlineDeckSummary = (
   const bestAnchor = pickContractText(
     input,
     [
+      input.intent?.presentationGoal,
       explicitCoverageRequirements[0],
       input.groundingCoverageGoals?.[0],
       input.groundingHighlights?.[0],
@@ -1967,7 +2439,7 @@ const buildOutlineDeckSummary = (
   );
 
   return toAudienceFacingSentence(
-    `${subject} becomes easier to understand when you focus on ${bestAnchor.toLowerCase()}`,
+    `${subject} is presented through ${bestAnchor.toLowerCase()} so the audience can see the clearest ideas, examples, or consequences.`,
   );
 };
 
@@ -1982,10 +2454,7 @@ const buildOutlineScaffoldDeck = (input: GenerateDeckInput): Deck => {
     title: input.plan?.title ?? `${subject}: key ideas`,
     summary: buildOutlineDeckSummary(input),
     slides: contracts.map((contract) => ({
-      title:
-        contract.index === 0
-          ? `${subject}: why it matters in practice`
-          : buildContractTitle(input, contract),
+      title: buildContractTitle(input, contract),
       learningGoal: buildContractLearningGoal(input, contract),
       keyPoints: buildContractAnchoredKeyPoints(
         input,
@@ -2052,8 +2521,6 @@ const applyPlanDrivenDeckShape = (
       index === 0 &&
       (looksAbstractForIntro(title) ||
         !title ||
-        /^(why this matters|welcome)$/i.test(title) ||
-        /\bour mission\b/i.test(title) ||
         keyPoints.some(
           (point) =>
             DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)) ||
@@ -2064,7 +2531,6 @@ const applyPlanDrivenDeckShape = (
     const titleNeedsRepair =
       introNeedsRepair ||
       title.length > 84 ||
-      /^(?:understanding|exploring|learning|appreciating)\s+/i.test(title) ||
       DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(title)) ||
       DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(title)) ||
       DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(title)) ||
@@ -2074,10 +2540,6 @@ const applyPlanDrivenDeckShape = (
       typeof slide.learningGoal === "string" ? slide.learningGoal.trim() : "";
     const learningGoalNeedsRepair =
       !learningGoalText ||
-      /^Understand the role of\b/i.test(learningGoalText) ||
-      /^Understand\s+(?:understanding|appreciating|exploring|learning)\b/i.test(
-        learningGoalText,
-      ) ||
       DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(learningGoalText)) ||
       DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(learningGoalText)) ||
       DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(learningGoalText)) ||
@@ -2138,7 +2600,7 @@ const applyPlanDrivenDeckShape = (
         : beginnerExplanationText,
       advancedExplanation: advancedExplanationNeedsRepair
         ? toAudienceFacingSentence(
-            `${contract.focus} matters because it shows how ${input.topic} works in practice`,
+            `${contract.focus} matters because it changes how ${input.topic} behaves, is understood, or is judged in practice`,
           )
         : advancedExplanationText,
       visuals: {
@@ -2377,39 +2839,52 @@ const normalizeDeck = (
 };
 
 const buildFallbackNarration = (slide: GenerateNarrationInput["slide"], deck: Deck) => {
-  const introSegments =
-    slide.order === 0
-      ? [
-          `Today we are looking at ${deck.topic}, and this opening moment is about why the topic matters right away.`,
-          slide.beginnerExplanation,
-          `The first ideas to carry with us are: ${(slide.keyPoints.slice(0, 3) || []).join(", ")}.`,
-          deck.slides[1]
-            ? `From here, we can move naturally into ${deck.slides[1].title.toLowerCase()}.`
-            : "From here, we can build on this foundation.",
-        ]
-      : [
-          slide.beginnerExplanation,
-          `The main ideas here are: ${(slide.keyPoints.slice(0, 3) || []).join(", ")}.`,
-          slide.order < deck.slides.length - 1
-            ? `This connects directly to ${deck.slides[slide.order + 1]?.title ?? "the next slide"}.`
-            : "This leads us into the final recap.",
-        ];
+  const prefersBeginnerFriendlyLanguage =
+    deck.pedagogicalProfile.audienceLevel === "beginner";
+  const minSegmentCount = slide.order === 0 ? 4 : 3;
+  const normalizeNarrationSentence = (value: string): string => {
+    const normalized = value.replace(/\s+/g, " ").trim().replace(/^[\-\u2022*\d.)\s]+/, "");
+    if (!normalized) {
+      return "";
+    }
 
-  const cleanedSegments = introSegments
+    return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+  };
+
+  const contentSegments = [
+    normalizeNarrationSentence(slide.beginnerExplanation),
+    ...slide.speakerNotes.map((note) => normalizeNarrationSentence(note)),
+    ...slide.examples.slice(0, 1).map((example) => normalizeNarrationSentence(example)),
+    normalizeNarrationSentence(
+      prefersBeginnerFriendlyLanguage
+        ? slide.learningGoal
+        : slide.advancedExplanation,
+    ),
+    ...slide.keyPoints.map((point) => normalizeNarrationSentence(point)),
+  ];
+
+  const cleanedSegments = [...new Set(contentSegments)]
     .map((segment) => segment.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
-  const narration = cleanedSegments.join(" ");
+  const segments = cleanedSegments.slice(0, minSegmentCount);
+  const narration = segments.join(" ");
+
+  if (
+    segments.length < minSegmentCount ||
+    narration.length < (slide.order === 0 ? 180 : 120)
+  ) {
+    throw new Error(
+      "Deterministic fallback narration did not yield enough slide-grounded content.",
+    );
+  }
 
   return {
     slideId: slide.id,
     narration,
-    segments: cleanedSegments,
+    segments,
     summaryLine: slide.learningGoal,
-    promptsForPauses: [
-      "Pause me if you want that framed more simply.",
-      "Ask for an example if you want something concrete.",
-    ],
+    promptsForPauses: [],
     suggestedTransition:
       slide.order === deck.slides.length - 1
         ? "End with a concise recap and a quick understanding check."
@@ -2417,60 +2892,13 @@ const buildFallbackNarration = (slide: GenerateNarrationInput["slide"], deck: De
   };
 };
 
-const NARRATION_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "how",
-  "in",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "that",
-  "the",
-  "this",
-  "to",
-  "we",
-  "with",
-  "you",
-  "your",
-]);
-
 const tokenizeNarrationText = (value: string): string[] =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !NARRATION_STOP_WORDS.has(token));
-
-const narrationMetaPatterns = [
-  /\bthis slide\b/i,
-  /\bthis presentation\b/i,
-  /\bfor every slide\b/i,
-  /\bfollow key point\b/i,
-  /\buse screenshots?\b/i,
-  /\bavoid clutter(?:ing)?\b/i,
-  /\btext-heavy slide\b/i,
-];
+  tokenizeSemanticText(value);
 
 const plainTextNarrationLooksGrounded = (
   narration: string,
   slide: GenerateNarrationInput["slide"],
 ): boolean => {
-  if (narrationMetaPatterns.some((pattern) => pattern.test(narration))) {
-    return false;
-  }
-
   const narrationTokens = tokenizeNarrationText(narration);
   const slideTokens = new Set(
     tokenizeNarrationText(
@@ -2522,10 +2950,7 @@ const buildNarrationFromPlainText = (
     narration: normalizedSegments.join(" "),
     segments: normalizedSegments,
     summaryLine: slide.learningGoal,
-    promptsForPauses: [
-      "Pause me if you want that explained more simply.",
-      "Ask for an example if you want something more concrete.",
-    ],
+    promptsForPauses: [],
     suggestedTransition:
       slide.order === deck.slides.length - 1
         ? "End with a concise recap and one understanding check."
@@ -2554,7 +2979,7 @@ const normalizeNarrationForSlide = (
   const needsFallbackExpansion =
     Boolean(deck) &&
     (narration.trim().length < (slide.order === 0 ? 180 : 120) ||
-      segments.length < (slide.order === 0 ? 3 : 2));
+      segments.length < (slide.order === 0 ? 4 : 3));
 
   if (needsFallbackExpansion && deck) {
     return buildFallbackNarration(slide, deck);
@@ -2569,11 +2994,13 @@ const normalizeNarrationForSlide = (
     summaryLine:
       typeof candidate.summaryLine === "string"
         ? candidate.summaryLine
-        : "Generated narration summary",
+        : slide.learningGoal,
     suggestedTransition:
       typeof candidate.suggestedTransition === "string"
-      ? candidate.suggestedTransition
-      : "Continue to the next slide.",
+        ? candidate.suggestedTransition
+        : deck
+          ? (deck.slides[slide.order + 1]?.title ?? "")
+          : "",
   };
 };
 
@@ -2730,37 +3157,91 @@ const normalizePresentationReview = (
   };
 };
 
-const reviewStopWords = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "in",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "the",
-  "this",
-  "to",
-  "we",
-  "with",
-]);
+const normalizeReviewIssues = (
+  value: unknown,
+): PresentationReview["issues"] =>
+  toRecordArray(value).map((issue) => ({
+    code:
+      typeof issue.code === "string" && issue.code.trim().length > 0
+        ? issue.code
+        : "review_issue",
+    severity:
+      issue.severity === "info" ||
+      issue.severity === "warning" ||
+      issue.severity === "error"
+        ? issue.severity
+        : "warning",
+    dimension:
+      issue.dimension === "deck" ||
+      issue.dimension === "visual" ||
+      issue.dimension === "narration" ||
+      issue.dimension === "coherence" ||
+      issue.dimension === "grounding"
+        ? issue.dimension
+        : "coherence",
+    message:
+      typeof issue.message === "string"
+        ? issue.message
+        : "Presentation review flagged a quality issue.",
+    ...(typeof issue.slideId === "string" ? { slideId: issue.slideId } : {}),
+  }));
+
+const normalizeDeckReviewResult = (value: unknown) => {
+  if (!value || typeof value !== "object") {
+    return {
+      approved: true,
+      overallScore: 0.7,
+      summary: "Presentation review returned no structured issues.",
+      issues: [] as PresentationReview["issues"],
+    };
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return {
+    approved:
+      typeof candidate.approved === "boolean" ? candidate.approved : true,
+    overallScore:
+      typeof candidate.overallScore === "number"
+        ? Math.max(0, Math.min(candidate.overallScore, 1))
+        : 0.7,
+    summary:
+      typeof candidate.summary === "string"
+        ? candidate.summary
+        : "Presentation review completed.",
+    issues: normalizeReviewIssues(candidate.issues),
+  };
+};
+
+const normalizeNarrationRepairResult = (
+  value: unknown,
+  input: ReviewPresentationInput,
+): SlideNarration[] => {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return toRecordArray(candidate.repairedNarrations)
+    .map((narrationCandidate) => {
+      const slideId =
+        typeof narrationCandidate.slideId === "string"
+          ? narrationCandidate.slideId
+          : "";
+      const slide = input.deck.slides.find((item) => item.id === slideId);
+
+      if (!slide) {
+        return null;
+      }
+
+      return SlideNarrationSchema.parse(
+        normalizeNarrationForSlide(narrationCandidate, slide, input.deck),
+      );
+    })
+    .filter((repair): repair is SlideNarration => Boolean(repair));
+};
 
 const tokenizeForReview = (value: string): string[] =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !reviewStopWords.has(token));
+  tokenizeSemanticText(value);
 
 const slideTokensForReview = (slide: Slide): string[] =>
   [
@@ -2812,6 +3293,33 @@ const compactVisualSummary = (slide: Slide): string =>
   ]
     .filter((value): value is string => Boolean(value))
     .join("; ");
+
+const buildCompactDeckReviewSummary = (slide: Slide): string =>
+  [
+    `Slide ${slide.order + 1}: ${slide.title}`,
+    `Goal: ${slide.learningGoal}`,
+    `Points: ${slide.keyPoints.join("; ")}`,
+    compactVisualSummary(slide)
+      ? `Visual: ${compactVisualSummary(slide)}`
+      : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+
+const buildCompactNarrationRepairSummary = (
+  slide: Slide,
+  narration: SlideNarration | undefined,
+): string =>
+  [
+    `Slide ${slide.order + 1}: ${slide.title}`,
+    `Goal: ${slide.learningGoal}`,
+    `Beginner explanation: ${slide.beginnerExplanation}`,
+    `Visible cards: ${slide.visuals.cards.map((card) => `${card.title}: ${card.body}`).join(" | ") || "None"}`,
+    `Visible callouts: ${slide.visuals.callouts.map((callout) => `${callout.label}: ${callout.text}`).join(" | ") || "None"}`,
+    `Visible diagram nodes: ${slide.visuals.diagramNodes.map((node) => node.label).join("; ") || "None"}`,
+    `Narration summary: ${narration?.summaryLine ?? "None"}`,
+    `Narration segments: ${narration?.segments.join(" | ") ?? "None"}`,
+  ].join("\n");
 
 export interface OpenAICompatibleConfig {
   providerName: string;
@@ -2973,8 +3481,14 @@ const buildIntentPromptLines = (input: {
   return [
     `Core subject: ${coreSubject}`,
     framing ? `Framing context: ${framing}` : "No additional framing context was provided.",
+    input.intent?.organization
+      ? `Organization context: ${input.intent.organization}`
+      : null,
     input.intent?.audienceCues?.length
       ? `Audience cues: ${input.intent.audienceCues.join("; ")}`
+      : null,
+    input.intent?.presentationGoal
+      ? `Presentation goal: ${input.intent.presentationGoal}`
       : null,
     input.intent?.deliveryFormat
       ? `Delivery format: ${input.intent.deliveryFormat}`
@@ -2986,6 +3500,14 @@ const buildIntentPromptLines = (input: {
       ? `Explicit coverage requirements: ${input.intent.coverageRequirements.join("; ")}`
       : null,
   ].filter((line): line is string => Boolean(line));
+};
+
+export const __testables = {
+  buildSlideFromPlainText,
+  buildContractAnchoredKeyPoints,
+  buildContractLearningGoal,
+  buildOutlineDeckSummary,
+  buildProceduralOrientationKeyPoints,
 };
 
 export class OpenAICompatibleLLMProvider implements LLMProvider {
@@ -3050,6 +3572,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
   private normalizeTokenAttempts(options?: {
     maxTokens?: number | undefined;
     tokenAttempts?: number[] | undefined;
+    disableLmStudioBudgetLift?: boolean | undefined;
   }): number[] {
     const rawAttempts =
       options?.tokenAttempts && options.tokenAttempts.length > 0
@@ -3066,7 +3589,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
             ),
           ];
 
-    const adjustedAttempts = this.isLmStudioProvider()
+    const adjustedAttempts = this.isLmStudioProvider() && !options?.disableLmStudioBudgetLift
       ? rawAttempts.map((attempt) => this.raiseInitialTokenBudget(attempt))
       : rawAttempts;
 
@@ -3076,9 +3599,10 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
   private resolveRequestTimeout(
     requestedTimeoutMs: number | undefined,
     maxTokens: number | undefined,
+    disableLmStudioBudgetLift: boolean | undefined,
   ): number {
     const baseTimeout = requestedTimeoutMs ?? this.timeoutMs;
-    if (!this.isLmStudioProvider() || !maxTokens) {
+    if (!this.isLmStudioProvider() || !maxTokens || disableLmStudioBudgetLift) {
       return baseTimeout;
     }
 
@@ -3165,6 +3689,91 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
     targetDurationMinutes?: number;
     targetSlideCount?: number;
   }): Promise<PresentationPlan> {
+    const system =
+      "You design concise teaching plans. Call the provided tool and do not answer in plain text.";
+    const user = [
+      ...buildIntentPromptLines(input),
+      input.groundingHighlights?.length
+        ? `Grounding highlights: ${input.groundingHighlights.join("; ")}`
+        : "No grounding highlights were provided.",
+      `Audience level: ${input.pedagogicalProfile.audienceLevel}`,
+      input.groundingSummary
+        ? `External grounding summary: ${compactGroundingSummary(input.groundingSummary)}`
+        : "No external grounding summary was provided.",
+      input.targetDurationMinutes
+        ? `Target duration: about ${input.targetDurationMinutes} minutes.`
+        : "No explicit target duration was provided.",
+      input.targetSlideCount
+        ? `Target slide count: about ${input.targetSlideCount} slides.`
+        : "No explicit target slide count was provided.",
+      "The plan should form one coherent teaching arc, not a list of disconnected subtopics.",
+      "Use the core subject as the thing the audience is learning about. The presentation brief and intent fields only describe the intended angle, audience, or delivery context.",
+      "Do not repeat instruction fragments like 'create a presentation' or 'more information is available at' in the plan title or storyline.",
+      "For beginner audiences, prefer a storyline like: motivation, mental model, structure, concrete example, recap.",
+      "Keep the plan close to the requested duration and slide count when they are provided.",
+      "Return fields: title, learningObjectives, storyline, recommendedSlideCount, audienceLevel.",
+    ].join("\n");
+
+    try {
+      return await this.chatToolCall({
+        functionName: "return_presentation_plan",
+        functionDescription:
+          "Return the structured teaching plan for the requested presentation.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "title",
+            "learningObjectives",
+            "storyline",
+            "recommendedSlideCount",
+            "audienceLevel",
+          ],
+          properties: {
+            title: {
+              type: "string",
+            },
+            learningObjectives: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 1,
+            },
+            storyline: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 1,
+            },
+            recommendedSlideCount: {
+              type: "integer",
+              minimum: 1,
+            },
+            audienceLevel: {
+              type: "string",
+              enum: ["beginner", "intermediate", "advanced", "mixed"],
+            },
+          },
+        },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        maxTokens: 900,
+        timeoutMs: 6000,
+        tokenAttempts: [900, 1400],
+        parse: (value) =>
+          PresentationPlanSchema.parse(
+            normalizePresentationPlan(value, {
+              targetSlideCount: input.targetSlideCount,
+              topic: input.topic,
+            }),
+          ),
+      });
+    } catch (error) {
+      console.warn(
+        `[slidespeech] ${this.name} tool-call presentation plan path failed: ${(error as Error).message}`,
+      );
+    }
+
     return this.chatJson({
       schemaName: "PresentationPlan",
       system:
@@ -3281,6 +3890,103 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
     );
   }
 
+  private async generateStructuredSlideFromOutline(
+    input: GenerateDeckInput,
+    deck: Deck,
+    slide: Slide,
+    contract: SlideContract,
+    priorAssessment: SlideDraftAssessment | null,
+  ): Promise<Record<string, unknown>> {
+    const slideBriefLines = buildSlideEnrichmentPromptLines({
+      deck,
+      slide,
+      contract,
+      generationInput: input,
+      priorAssessment,
+    });
+
+    return await this.chatToolCall({
+      functionName: "return_presentation_slide",
+      functionDescription:
+        "Return one structured presentation slide that teaches the subject itself in audience-facing language.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "title",
+          "learningGoal",
+          "keyPoints",
+          "beginnerExplanation",
+          "advancedExplanation",
+          "examples",
+          "likelyQuestions",
+          "speakerNotes",
+        ],
+        properties: {
+          title: { type: "string" },
+          learningGoal: { type: "string" },
+          keyPoints: {
+            type: "array",
+            minItems: 3,
+            maxItems: 3,
+            items: { type: "string" },
+          },
+          speakerNotes: {
+            type: "array",
+            items: { type: "string" },
+          },
+          examples: {
+            type: "array",
+            items: { type: "string" },
+          },
+          likelyQuestions: {
+            type: "array",
+            items: { type: "string" },
+          },
+          beginnerExplanation: { type: "string" },
+          advancedExplanation: { type: "string" },
+        },
+      },
+      messages: [
+        {
+          role: "system",
+          content:
+            "Write one structured presentation slide. Call the provided tool and do not answer in plain text. Teach the subject itself in audience-facing language. Do not mention the deck, session, slide design, or presenter instructions.",
+        },
+        {
+          role: "user",
+          content: [
+            ...slideBriefLines,
+            "Return fields: title, learningGoal, keyPoints, speakerNotes, examples, likelyQuestions, beginnerExplanation, advancedExplanation.",
+            "Use exactly 3 key points and make each one a complete audience-facing sentence.",
+            "Keep the slide concrete and topic-specific. Prefer mechanisms, roles, examples, consequences, or factual subareas.",
+            "Never use presenter instructions or facilitator language such as 'begin by', 'discuss', 'explain', 'emphasize', 'to wrap up', 'this session', or 'next steps'.",
+            "Do not tell the presenter what to do. Do not describe how the slide should be delivered.",
+            "If the framing lens implies onboarding, keep the language beginner-friendly without addressing the audience as new hires or participants.",
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n"),
+        },
+      ],
+      maxTokens: slide.order === 0 ? 3200 : 2800,
+      timeoutMs: 24000,
+      tokenAttempts:
+        slide.order === 0 ? [3200, 4800, 6400] : [2800, 4200, 5600],
+      parse: (value) => {
+        if (!value || typeof value !== "object") {
+          throw new Error("Structured slide enrichment returned no object.");
+        }
+
+        return {
+          ...(slide as unknown as Record<string, unknown>),
+          ...(value as Record<string, unknown>),
+          id: slide.id,
+          order: slide.order,
+        };
+      },
+    });
+  }
+
   private async generateSlideFromOutline(
     input: GenerateDeckInput,
     deck: Deck,
@@ -3296,6 +4002,34 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
 
     if (shouldUseDeterministicSubjectOverviewSlide(input, slide, contract)) {
       return buildSubjectOverviewSlideFromContext(input, deck, slide, contract);
+    }
+
+    for (let attemptIndex = 0; attemptIndex < 2; attemptIndex += 1) {
+      try {
+        const enrichedSlide = await this.generateStructuredSlideFromOutline(
+          input,
+          deck,
+          slide,
+          contract,
+          priorAssessment,
+        );
+
+        const assessment = assessGeneratedSlideDraft(input, contract, enrichedSlide);
+        if (!assessment.retryable) {
+          return enrichedSlide;
+        }
+
+        priorAssessment = assessment;
+        lastError = new Error(assessment.reasons.join(" "));
+        console.warn(
+          `[slidespeech] ${this.name} structured slide enrichment attempt ${attemptIndex + 1} for "${slide.title}" still needs cleanup: ${assessment.reasons.join(" | ")} | parsed title=${JSON.stringify(typeof enrichedSlide.title === "string" ? enrichedSlide.title : "")} | parsed goal=${JSON.stringify(typeof enrichedSlide.learningGoal === "string" ? enrichedSlide.learningGoal : "")} | parsed keyPoints=${JSON.stringify(toStringArray(enrichedSlide.keyPoints))}`,
+        );
+      } catch (error) {
+        lastError = error as Error;
+        console.warn(
+          `[slidespeech] ${this.name} structured slide enrichment attempt ${attemptIndex + 1} failed for "${slide.title}": ${lastError.message}`,
+        );
+      }
     }
 
     for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
@@ -3358,72 +4092,14 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
 
         priorAssessment = assessment;
         lastError = new Error(assessment.reasons.join(" "));
-        console.warn(
-          `[slidespeech] ${this.name} slide enrichment attempt ${attemptIndex + 1} for "${slide.title}" still needs cleanup: ${assessment.reasons.join(" | ")} | parsed title=${JSON.stringify(typeof enrichedSlide.title === "string" ? enrichedSlide.title : "")} | parsed goal=${JSON.stringify(typeof enrichedSlide.learningGoal === "string" ? enrichedSlide.learningGoal : "")} | parsed keyPoints=${JSON.stringify(toStringArray(enrichedSlide.keyPoints))}`,
-        );
-      } catch (error) {
-        lastError = error as Error;
-        console.warn(
-          `[slidespeech] ${this.name} slide enrichment attempt ${attemptIndex + 1} failed for "${slide.title}": ${lastError.message}`,
-        );
-      }
-    }
-
-    for (let attemptIndex = 0; attemptIndex < 1; attemptIndex += 1) {
-      const slideBriefLines = buildSlideEnrichmentPromptLines({
-        deck,
-        slide,
-        contract,
-        generationInput: input,
-        priorAssessment,
-      });
-
-      try {
-        const enrichedSlide = await this.chatJson({
-          schemaName: "Slide",
-          system:
-            "Write one presentation slide as valid JSON only. Teach the subject itself in audience-facing language. Do not mention the deck, session, slide design, or presenter instructions.",
-          user: [
-            ...slideBriefLines,
-            "Return JSON with: title, learningGoal, keyPoints, speakerNotes, examples, likelyQuestions, beginnerExplanation, advancedExplanation.",
-            "Use exactly 3 key points and make each one a complete audience-facing sentence.",
-            "Keep the slide concrete and topic-specific. Prefer mechanisms, roles, examples, consequences, or factual subareas.",
-            "Never use presenter instructions or facilitator language such as 'begin by', 'discuss', 'explain', 'emphasize', 'to wrap up', 'this session', or 'next steps'.",
-            "Do not tell the presenter what to do. Do not describe how the slide should be delivered.",
-            "If the framing lens implies onboarding, keep the language beginner-friendly without addressing the audience as new hires or participants.",
-          ]
-            .filter((line): line is string => Boolean(line))
-            .join("\n"),
-          maxTokens: slide.order === 0 ? 2600 : 2200,
-          parse: (value) => {
-            if (!value || typeof value !== "object") {
-              throw new Error("Slide enrichment returned no structured object.");
-            }
-
-            return {
-              ...(slide as unknown as Record<string, unknown>),
-              ...(value as Record<string, unknown>),
-              id: slide.id,
-              order: slide.order,
-            };
-          },
-        });
-
-        const assessment = assessGeneratedSlideDraft(input, contract, enrichedSlide);
-        if (!assessment.retryable) {
-          return enrichedSlide;
-        }
-
-        priorAssessment = assessment;
-        lastError = new Error(assessment.reasons.join(" "));
         const enrichedSlideRecord = enrichedSlide as Record<string, unknown>;
         console.warn(
-          `[slidespeech] ${this.name} structured slide enrichment attempt ${attemptIndex + 1} for "${slide.title}" still needs cleanup: ${assessment.reasons.join(" | ")} | parsed title=${JSON.stringify(typeof enrichedSlideRecord.title === "string" ? enrichedSlideRecord.title : "")} | parsed goal=${JSON.stringify(typeof enrichedSlideRecord.learningGoal === "string" ? enrichedSlideRecord.learningGoal : "")} | parsed keyPoints=${JSON.stringify(toStringArray(enrichedSlideRecord.keyPoints))}`,
+          `[slidespeech] ${this.name} plain-text slide enrichment attempt ${attemptIndex + 1} for "${slide.title}" still needs cleanup: ${assessment.reasons.join(" | ")} | parsed title=${JSON.stringify(typeof enrichedSlideRecord.title === "string" ? enrichedSlideRecord.title : "")} | parsed goal=${JSON.stringify(typeof enrichedSlideRecord.learningGoal === "string" ? enrichedSlideRecord.learningGoal : "")} | parsed keyPoints=${JSON.stringify(toStringArray(enrichedSlideRecord.keyPoints))}`,
         );
       } catch (error) {
         lastError = error as Error;
         console.warn(
-          `[slidespeech] ${this.name} structured slide enrichment attempt ${attemptIndex + 1} failed for "${slide.title}": ${lastError.message}`,
+          `[slidespeech] ${this.name} plain-text slide enrichment attempt ${attemptIndex + 1} failed for "${slide.title}": ${lastError.message}`,
         );
       }
     }
@@ -3459,12 +4135,13 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           {
             role: "system",
             content:
-              "Write spoken narration for a presentation slide. Use English. Do not use JSON or markdown. Speak directly to an audience, stay tightly grounded in the visible slide, and avoid presentation-making advice.",
+              "Write spoken narration for a presentation slide. Do not use JSON or markdown. Speak directly to an audience, stay tightly grounded in the visible slide, avoid presentation-making advice, do not talk about the slide itself or its title, and stay in the deck language.",
           },
           {
             role: "user",
             content: [
               `Topic: ${input.deck.topic}`,
+              `Deck language: ${input.deck.metadata.language}`,
               `Slide order: ${input.slide.order + 1} of ${input.deck.slides.length}`,
               `Slide title: ${input.slide.title}`,
               `Learning goal: ${input.slide.learningGoal}`,
@@ -3476,8 +4153,8 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
               previousSlide ? `Previous slide: ${previousSlide.title}` : "Previous slide: none",
               nextSlide ? `Next slide: ${nextSlide.title}` : "Next slide: none",
               input.slide.order === 0
-                ? "Write exactly 4 short spoken paragraphs for the opening. Sound like a presenter speaking to a real audience."
-                : "Write exactly 3 short spoken paragraphs for this slide. Each paragraph must clearly relate to the visible slide content.",
+                ? `Write exactly 4 short spoken paragraphs for the opening in ${input.deck.metadata.language}. Separate them with blank lines. Sound like a presenter speaking to a real audience and present the idea directly.`
+                : `Write exactly 3 short spoken paragraphs for this slide in ${input.deck.metadata.language}. Separate them with blank lines. Each paragraph must clearly relate to the visible slide content and present the idea directly.`,
             ].join("\n"),
           },
         ],
@@ -3503,103 +4180,136 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       return narration;
     };
 
-    const attempts = [
-      {
-        label: "structured",
-        system:
-          "You create narration text for teaching slides. Return valid JSON only and no markdown.",
-        user: [
-          `Deck topic: ${input.deck.topic}`,
-          `Slide order: ${input.slide.order + 1} of ${input.deck.slides.length}`,
-          `Slide title: ${input.slide.title}`,
-          `Learning goal: ${input.slide.learningGoal}`,
-          `Key points: ${input.slide.keyPoints.join("; ")}`,
-          `Visible cards: ${input.slide.visuals.cards.map((card) => `${card.title}: ${card.body}`).join(" | ") || "None"}`,
-          `Speaker notes: ${input.slide.speakerNotes.join("; ") || "None"}`,
-          `Examples: ${input.slide.examples.join("; ") || "None"}`,
-          previousSlide ? `Previous slide: ${previousSlide.title}` : "Previous slide: none",
-          nextSlide ? `Next slide: ${nextSlide.title}` : "Next slide: none",
-          "Return fields: slideId, narration, segments, summaryLine, promptsForPauses, suggestedTransition.",
-          "Keep every sentence tightly grounded in the visible slide content.",
-          input.slide.order === 0
-            ? "Speak like a real opening to an audience. Avoid meta phrases like 'this presentation will'."
-            : "Stay on this slide. Do not drift into side topics.",
-        ].join("\n"),
-        maxTokens: input.slide.order === 0 ? 2600 : 1800,
-      },
-      {
-        label: "compact",
-        system:
-          "Return valid JSON only. Keep the narration short, grounded, and audience-facing.",
-        user: [
-          `Topic: ${input.deck.topic}`,
-          `Slide title: ${input.slide.title}`,
-          `Learning goal: ${input.slide.learningGoal}`,
-          `Key points: ${input.slide.keyPoints.join("; ")}`,
-          "Return JSON with: slideId, narration, segments, summaryLine, promptsForPauses, suggestedTransition.",
-          input.slide.order === 0
-            ? "Use 4 short segments for the opening."
-            : "Use 3 short segments.",
-        ].join("\n"),
-        maxTokens: input.slide.order === 0 ? 1800 : 1400,
-      },
-    ] as const;
-
     let lastError: Error | null = null;
+    const narrationStrategies: Array<{
+      label: string;
+      run: () => Promise<SlideNarration>;
+    }> =
+      input.slide.order === 0
+        ? [
+            {
+              label: "plain-text primary",
+              run: () => tryPlainTextNarration(3000, 40000, [3000, 4200, 5600]),
+            },
+            {
+              label: "plain-text retry",
+              run: () => tryPlainTextNarration(3600, 50000, [3600, 5200, 6800]),
+            },
+          ]
+        : [
+            {
+              label: "plain-text primary",
+              run: () => tryPlainTextNarration(2200, 30000, [2200, 3200, 4400]),
+            },
+          ];
 
-    if (input.slide.order > 0) {
+    for (const strategy of narrationStrategies) {
       try {
-        return await tryPlainTextNarration(1400, 20000, [1400, 2200]);
+        return await strategy.run();
       } catch (plainTextError) {
         lastError = plainTextError as Error;
         console.warn(
-          `[slidespeech] ${this.name} narration plain-text primary path failed for "${input.slide.title}": ${lastError.message}`,
-        );
-      }
-    }
-
-    for (const attempt of attempts) {
-      try {
-        return await this.chatJson({
-          schemaName: "SlideNarration",
-          system: attempt.system,
-          user: attempt.user,
-          maxTokens: attempt.maxTokens,
-          parse: (value) =>
-            SlideNarrationSchema.parse(
-              normalizeNarrationForSlide(value, input.slide, input.deck),
-            ),
-        });
-      } catch (error) {
-        lastError = error as Error;
-        console.warn(
-          `[slidespeech] ${this.name} narration attempt "${attempt.label}" failed for "${input.slide.title}": ${lastError.message}`,
+          `[slidespeech] ${this.name} narration ${strategy.label} path failed for "${input.slide.title}": ${lastError.message}`,
         );
       }
     }
 
     try {
-      return await tryPlainTextNarration(
-        input.slide.order === 0 ? 2400 : 1800,
-        30000,
-        input.slide.order === 0 ? [2400, 3600] : [1800, 2800],
+      const compactNarrationText = await this.chatText(
+        [
+          {
+            role: "system",
+            content:
+              "Write concise spoken narration for one teaching slide. Do not use JSON. Stay tightly grounded in the visible slide, avoid presentation-making advice, do not talk about the slide itself or its title, and stay in the deck language.",
+          },
+          {
+            role: "user",
+            content: [
+              `Topic: ${input.deck.topic}`,
+              `Deck language: ${input.deck.metadata.language}`,
+              `Slide title: ${input.slide.title}`,
+              `Learning goal: ${input.slide.learningGoal}`,
+              `Key points: ${input.slide.keyPoints.join("; ")}`,
+              `Visible cards: ${input.slide.visuals.cards.map((card) => `${card.title}: ${card.body}`).join(" | ") || "None"}`,
+              `Visible callouts: ${input.slide.visuals.callouts.map((callout) => `${callout.label}: ${callout.text}`).join(" | ") || "None"}`,
+              previousSlide ? `Previous slide: ${previousSlide.title}` : "Previous slide: none",
+              nextSlide ? `Next slide: ${nextSlide.title}` : "Next slide: none",
+              input.slide.order === 0
+                ? `Write exactly 4 short spoken lines in ${input.deck.metadata.language}, one per line, for the opening.`
+                : `Write exactly 3 short spoken lines in ${input.deck.metadata.language}, one per line, for this slide.`,
+            ].join("\n"),
+          },
+        ],
+        {
+          maxTokens: input.slide.order === 0 ? 1800 : 1400,
+          timeoutMs: 25000,
+          tokenAttempts: input.slide.order === 0 ? [1800, 2600] : [1400, 2200],
+        },
       );
-    } catch (plainTextError) {
-      lastError = plainTextError as Error;
+
+      const compactNarration = buildNarrationFromPlainText(
+        compactNarrationText,
+        input.slide,
+        input.deck,
+      );
+
+      if (!compactNarration) {
+        throw new Error(
+          "Compact plain-text narration did not pass local grounding and quality checks.",
+        );
+      }
+
+      return compactNarration;
+    } catch (compactPlainTextError) {
+      lastError = compactPlainTextError as Error;
       console.warn(
-        `[slidespeech] ${this.name} narration plain-text fallback failed for "${input.slide.title}": ${lastError.message}`,
+        `[slidespeech] ${this.name} narration compact plain-text path failed for "${input.slide.title}": ${lastError.message}`,
       );
+    }
+
+    try {
+      return SlideNarrationSchema.parse(
+        normalizeNarrationForSlide({}, input.slide, input.deck),
+      );
+    } catch (fallbackError) {
+      lastError = fallbackError as Error;
+      console.warn(
+        `[slidespeech] ${this.name} narration deterministic fallback failed for "${input.slide.title}": ${lastError.message}`,
+      );
+    }
+
+    try {
+      return buildFallbackNarration(input.slide, input.deck);
+    } catch (finalFallbackError) {
+      lastError = finalFallbackError as Error;
     }
 
     throw lastError ?? new Error(`${this.name} narration generation failed.`);
   }
 
   async answerQuestion(input: AnswerQuestionInput): Promise<PedagogicalResponse> {
+    const visibleCards = input.slide.visuals.cards
+      .slice(0, 2)
+      .map((card) => `${card.title}: ${card.body}`)
+      .join(" | ");
+    const visibleCallouts = input.slide.visuals.callouts
+      .slice(0, 2)
+      .map((callout) => `${callout.label}: ${callout.text}`)
+      .join(" | ");
+    const slideExample = input.slide.examples[0]?.trim() || "None";
+    const answerInstruction =
+      input.answerMode === "example"
+        ? "Give one concrete example. Do not just restate the slide."
+        : input.answerMode === "grounded_factual"
+          ? "Answer only if the available grounded context supports it. If not, say that briefly."
+          : input.answerMode === "summarize_current_slide"
+            ? "State the main point of the current slide in direct language."
+            : "Answer the user's question directly. Prefer concrete wording over abstract framing.";
     const text = await this.chatText([
       {
         role: "system",
         content:
-          "You are a patient AI teacher. Answer in English. Be concrete and pedagogical.",
+          "You are a fast AI presentation assistant. Answer in English using at most 4 short sentences. Prefer the current slide, but use broader deck context or source grounding when they clearly answer the question better. If the available context still does not support the answer, say that briefly instead of bluffing.",
       },
       {
         role: "user",
@@ -3608,18 +4318,26 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           `Slide title: ${input.slide.title}`,
           `Slide learning goal: ${input.slide.learningGoal}`,
           `Visible key points: ${input.slide.keyPoints.join("; ")}`,
-          `Visible cards: ${input.slide.visuals.cards.map((card) => `${card.title}: ${card.body}`).join(" | ") || "None"}`,
-          `Visible callouts: ${input.slide.visuals.callouts.map((callout) => `${callout.label}: ${callout.text}`).join(" | ") || "None"}`,
+          `Visible cards: ${visibleCards || "None"}`,
+          `Visible callouts: ${visibleCallouts || "None"}`,
+          `Example on this slide: ${slideExample}`,
           `Question: ${input.question}`,
           `Beginner explanation: ${input.slide.beginnerExplanation}`,
-          `Examples: ${input.slide.examples.join("; ")}`,
-          "Answer using the current slide as the main frame of reference. Stay tied to what this slide is actually about.",
+          input.broaderDeckContext
+            ? `Broader deck context: ${input.broaderDeckContext}`
+            : null,
+          input.sourceGroundingContext
+            ? `Source grounding context: ${input.sourceGroundingContext}`
+            : null,
+          answerInstruction,
+          "Do not mention the presentation, deck, or slide unless the user asks about them.",
         ].join("\n"),
       },
     ], {
-      maxTokens: 2200,
+      maxTokens: 1200,
       timeoutMs: 18000,
-      tokenAttempts: [2200, 3600],
+      tokenAttempts: [1200, 1600],
+      disableLmStudioBudgetLift: true,
     });
 
     return { text };
@@ -3736,8 +4454,177 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         narrationBySlideId.get(slide.id),
       ),
     );
-    const slidesForDetailedReview =
-      detailedSlides.length > 0 ? detailedSlides : input.deck.slides.slice(0, 2);
+    const slidesForDetailedReview = (
+      detailedSlides.length > 0 ? detailedSlides : input.deck.slides.slice(0, 2)
+    ).slice(0, 2);
+
+    const deckReviewSystem = [
+      "You are a strict presentation QA reviewer for an interactive AI teacher.",
+      "Evaluate whether the deck is coherent, whether the visuals fit the topic, and whether the slides form a strong teaching sequence.",
+      "Judge the deck itself in this step. Do not rewrite narration here.",
+      "Call the provided tool and do not answer in plain text.",
+    ].join(" ");
+
+    const deckReviewUser = [
+      `Deck title: ${input.deck.title}`,
+      `Deck topic: ${input.deck.topic}`,
+      `Deck summary: ${input.deck.summary}`,
+      `Audience: ${input.pedagogicalProfile.audienceLevel}`,
+      `Deck outline:\n${input.deck.slides
+        .map((slide) => buildCompactDeckReviewSummary(slide))
+        .join("\n\n")}`,
+      "Return fields: approved, overallScore, summary, issues.",
+      "Issue fields: code, severity, dimension, message, optional slideId.",
+      "Valid dimensions: deck, visual, coherence, grounding.",
+    ].join("\n");
+
+    try {
+      const deckReview = await this.chatToolCall({
+        functionName: "return_presentation_deck_review",
+        functionDescription:
+          "Return the structured QA review for the deck itself, excluding narration rewrites.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["approved", "overallScore", "summary", "issues"],
+          properties: {
+            approved: {
+              type: "boolean",
+            },
+            overallScore: {
+              type: "number",
+              minimum: 0,
+              maximum: 1,
+            },
+            summary: {
+              type: "string",
+            },
+            issues: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["code", "severity", "dimension", "message"],
+                properties: {
+                  code: { type: "string" },
+                  severity: {
+                    type: "string",
+                    enum: ["info", "warning", "error"],
+                  },
+                  dimension: {
+                    type: "string",
+                    enum: ["deck", "visual", "coherence", "grounding"],
+                  },
+                  message: { type: "string" },
+                  slideId: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        messages: [
+          { role: "system", content: deckReviewSystem },
+          { role: "user", content: deckReviewUser },
+        ],
+        maxTokens: 2600,
+        timeoutMs: 18000,
+        tokenAttempts: [2600, 3600, 5200],
+        parse: (value) => normalizeDeckReviewResult(value),
+      });
+
+      let repairedNarrations: SlideNarration[] = [];
+
+      if (slidesForDetailedReview.length > 0) {
+        const narrationRepairSystem = [
+          "You repair slide narration for an interactive AI teacher.",
+          "Only rewrite narration for the provided target slides.",
+          "Keep each repair tightly tied to the slide's visible content without reading the slide verbatim.",
+          "Do not talk about the slide itself, its title, or the presentation process.",
+          "Call the provided tool and do not answer in plain text.",
+        ].join(" ");
+
+        const narrationRepairUser = [
+          `Deck topic: ${input.deck.topic}`,
+          `Deck language: ${input.deck.metadata.language}`,
+          `Narration repair targets:\n${slidesForDetailedReview
+            .map((slide) =>
+              buildCompactNarrationRepairSummary(
+                slide,
+                narrationBySlideId.get(slide.id),
+              ),
+            )
+            .join("\n\n")}`,
+          `Any repaired narration must stay tightly tied to that slide's visible content, stay in the deck language (${input.deck.metadata.language}), and keep 4 to 6 segments for slide 1 and 3 to 5 segments for other slides.`,
+          "Return fields: repairedNarrations.",
+          "Only include repairedNarrations for slides whose narration should be replaced.",
+        ].join("\n");
+
+        try {
+          repairedNarrations = await this.chatToolCall({
+            functionName: "return_narration_repairs",
+            functionDescription:
+              "Return only the narration repairs needed for the provided target slides.",
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              required: ["repairedNarrations"],
+              properties: {
+                repairedNarrations: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: [
+                      "slideId",
+                      "narration",
+                      "segments",
+                      "summaryLine",
+                      "promptsForPauses",
+                      "suggestedTransition",
+                    ],
+                    properties: {
+                      slideId: { type: "string" },
+                      narration: { type: "string" },
+                      segments: {
+                        type: "array",
+                        items: { type: "string" },
+                      },
+                      summaryLine: { type: "string" },
+                      promptsForPauses: {
+                        type: "array",
+                        items: { type: "string" },
+                      },
+                      suggestedTransition: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            messages: [
+              { role: "system", content: narrationRepairSystem },
+              { role: "user", content: narrationRepairUser },
+            ],
+            maxTokens: 2400,
+            timeoutMs: 18000,
+            tokenAttempts: [2400, 3600, 5200],
+            parse: (value) => normalizeNarrationRepairResult(value, input),
+          });
+        } catch (error) {
+          console.warn(
+            `[slidespeech] ${this.name} narration repair path failed: ${(error as Error).message}`,
+          );
+        }
+      }
+
+      return PresentationReviewSchema.parse({
+        ...deckReview,
+        repairedNarrations,
+      });
+    } catch (error) {
+      console.warn(
+        `[slidespeech] ${this.name} tool-call review path failed: ${(error as Error).message}`,
+      );
+    }
 
     return this.chatJson({
       schemaName: "PresentationReview",
@@ -3748,38 +4635,17 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         "Do not rewrite the whole deck. Return valid JSON only and no markdown.",
       ].join(" "),
       user: [
-        `Deck title: ${input.deck.title}`,
-        `Deck topic: ${input.deck.topic}`,
-        `Deck summary: ${input.deck.summary}`,
-        `Audience: ${input.pedagogicalProfile.audienceLevel}`,
-        `Deck outline:\n${input.deck.slides
-          .map((slide) => [
-            `Slide ${slide.order + 1}: ${slide.title}`,
-            `Learning goal: ${slide.learningGoal}`,
-            `Key points: ${slide.keyPoints.join("; ")}`,
-            `Visual summary: ${compactVisualSummary(slide) || "None"}`,
-          ].join("\n"))
-          .join("\n\n")}`,
+        deckReviewUser,
         `Detailed review targets:\n${slidesForDetailedReview
-          .map((slide) => {
-            const narration = narrationBySlideId.get(slide.id);
-            return [
-              `Slide ${slide.order + 1}: ${slide.title}`,
-              `Learning goal: ${slide.learningGoal}`,
-              `Beginner explanation: ${slide.beginnerExplanation}`,
-              `Visible cards: ${slide.visuals.cards.map((card) => `${card.title}: ${card.body}`).join(" | ") || "None"}`,
-              `Visible callouts: ${slide.visuals.callouts.map((callout) => `${callout.label}: ${callout.text}`).join(" | ") || "None"}`,
-              `Visible diagram nodes: ${slide.visuals.diagramNodes.map((node) => node.label).join("; ") || "None"}`,
-              `Narration summary: ${narration?.summaryLine ?? "None"}`,
-              `Narration segments: ${narration?.segments.join(" | ") ?? "None"}`,
-            ].join("\n");
-          })
+          .map((slide) =>
+            buildCompactNarrationRepairSummary(
+              slide,
+              narrationBySlideId.get(slide.id),
+            ),
+          )
           .join("\n\n")}`,
         "Return fields: approved, overallScore, summary, issues, repairedNarrations.",
-        "Issue fields: code, severity, dimension, message, optional slideId.",
         "Valid dimensions: deck, visual, narration, coherence, grounding.",
-        "Only include repairedNarrations for slides whose narration should be replaced.",
-        "Any repaired narration must stay tightly tied to that slide's visible content, use English, and keep 4 to 6 segments for slide 1 and 3 to 5 segments for other slides.",
       ].join("\n"),
       parse: (value) =>
         PresentationReviewSchema.parse(normalizePresentationReview(value, input)),
@@ -3793,6 +4659,134 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       .slice(-6)
       .map((turn) => `${turn.role}: ${turn.text}`)
       .join("\n");
+
+    const system = [
+      "You are a conversation planner for an AI teacher runtime.",
+      "Treat the learner's turn as freeform conversation first, not as a command parser.",
+      "Infer both pedagogical needs and runtime side effects.",
+      "Call the provided tool and do not answer in plain text.",
+    ].join(" ");
+    const user = [
+      `Topic: ${input.deck.topic}`,
+      `Current slide title: ${input.slide.title}`,
+      `Current slide learning goal: ${input.slide.learningGoal}`,
+      `Current session state: ${input.session.state}`,
+      `Pedagogical profile: audience=${input.session.pedagogicalProfile.audienceLevel}, detail=${input.session.pedagogicalProfile.detailLevel}, pace=${input.session.pedagogicalProfile.pace}`,
+      `Recent transcript:\n${transcriptWindow || "No prior transcript."}`,
+      `User turn: ${input.text}`,
+      "Return a structured conversation plan through the tool.",
+      "Use interruptionType=question by default for freeform learner input.",
+      "Use responseMode=summarize_current_slide when the learner asks for the main point, key takeaway, or a short summary of the current slide.",
+      "Use responseMode=grounded_factual when the learner asks for specific factual information that likely depends on grounded source material or external facts rather than just the current slide wording.",
+      "Use responseMode=general_contextual for ordinary conceptual questions that should be answered from the current slide plus the broader deck context.",
+      "Use responseMode=question only when you are unsure whether general_contextual or grounded_factual is the better route.",
+    ].join("\n");
+
+    try {
+      return await this.chatToolCall({
+        functionName: "return_turn_plan",
+        functionDescription:
+          "Return the structured learner-turn classification for the teaching runtime.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "interruptionType",
+            "inferredNeeds",
+            "responseMode",
+            "runtimeEffects",
+            "confidence",
+            "rationale",
+          ],
+          properties: {
+            interruptionType: {
+              type: "string",
+              enum: [
+                "stop",
+                "question",
+                "simplify",
+                "deepen",
+                "example",
+                "back",
+                "repeat",
+                "continue",
+                "unknown",
+              ],
+            },
+            inferredNeeds: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: [
+                  "question",
+                  "confusion",
+                  "example",
+                  "deepen",
+                  "repeat",
+                  "navigation",
+                  "pause",
+                  "resume",
+                ],
+              },
+            },
+            responseMode: {
+              type: "string",
+              enum: [
+                "ack_pause",
+                "ack_resume",
+                "ack_back",
+                "question",
+                "summarize_current_slide",
+                "general_contextual",
+                "grounded_factual",
+                "simplify",
+                "deepen",
+                "example",
+                "repeat",
+              ],
+            },
+            runtimeEffects: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                pause: { type: "boolean" },
+                resume: { type: "boolean" },
+                goToPreviousSlide: { type: "boolean" },
+                restartCurrentSlide: { type: "boolean" },
+                adaptDetailLevel: {
+                  type: "string",
+                  enum: ["light", "standard", "deep"],
+                },
+                adaptPace: {
+                  type: "string",
+                  enum: ["slow", "balanced", "fast"],
+                },
+              },
+            },
+            confidence: {
+              type: "number",
+              minimum: 0,
+              maximum: 1,
+            },
+            rationale: {
+              type: "string",
+            },
+          },
+        },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        maxTokens: 600,
+        timeoutMs: 5000,
+        parse: (value) =>
+          ConversationTurnPlanSchema.parse(normalizeConversationPlan(value)),
+      });
+    } catch (error) {
+      console.warn(
+        `[slidespeech] ${this.name} tool-call planner path failed: ${(error as Error).message}`,
+      );
+    }
 
     return this.chatJson<ConversationTurnPlan>({
       schemaName: "ConversationTurnPlan",
@@ -3812,12 +4806,18 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         `User turn: ${input.text}`,
         "Return fields: interruptionType, inferredNeeds, responseMode, runtimeEffects, confidence, rationale.",
         "Valid interruptionType values: stop, question, simplify, deepen, example, back, repeat, continue, unknown.",
-        "Valid responseMode values: ack_pause, ack_resume, ack_back, question, simplify, deepen, example, repeat.",
+        "Valid responseMode values: ack_pause, ack_resume, ack_back, question, summarize_current_slide, general_contextual, grounded_factual, simplify, deepen, example, repeat.",
         "Valid inferredNeeds values: question, confusion, example, deepen, repeat, navigation, pause, resume.",
         "Use interruptionType=question by default for freeform learner input.",
+        "Use responseMode=summarize_current_slide when the learner asks for the main point, key takeaway, or a short summary of the current slide.",
+        "Use responseMode=grounded_factual when the learner asks for specific factual information that likely depends on grounded source material or external facts rather than just the current slide wording.",
+        "Use responseMode=general_contextual for ordinary conceptual questions that should be answered from the current slide plus the broader deck context.",
+        "Use responseMode=question only when you are unsure whether general_contextual or grounded_factual is the better route.",
       ].join("\n"),
       maxTokens: 220,
-      timeoutMs: 20000,
+      timeoutMs: 4000,
+      tokenAttempts: [220],
+      disableLmStudioBudgetLift: true,
       parse: (value) =>
         ConversationTurnPlanSchema.parse(normalizeConversationPlan(value)),
     });
@@ -3840,6 +4840,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       maxTokens?: number | undefined;
       timeoutMs?: number | undefined;
       tokenAttempts?: number[] | undefined;
+      disableLmStudioBudgetLift?: boolean | undefined;
     },
   ): Promise<string> {
     const attempts = this.normalizeTokenAttempts(options);
@@ -3850,7 +4851,11 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       const maxTokens = attempts[attemptIndex]!;
       const json = await this.requestChatCompletion(messages, {
         maxTokens,
-        timeoutMs: this.resolveRequestTimeout(options?.timeoutMs, maxTokens),
+        timeoutMs: this.resolveRequestTimeout(
+          options?.timeoutMs,
+          maxTokens,
+          options?.disableLmStudioBudgetLift,
+        ),
       });
 
       const choice = json.choices?.[0];
@@ -3890,6 +4895,8 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
     parse: (value: unknown) => T;
     maxTokens?: number | undefined;
     timeoutMs?: number | undefined;
+    tokenAttempts?: number[] | undefined;
+    disableLmStudioBudgetLift?: boolean | undefined;
   }): Promise<T> {
     const text = await this.chatText([
       { role: "system", content: input.system },
@@ -3897,6 +4904,10 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
     ], {
       ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
       ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.tokenAttempts ? { tokenAttempts: input.tokenAttempts } : {}),
+      ...(input.disableLmStudioBudgetLift
+        ? { disableLmStudioBudgetLift: input.disableLmStudioBudgetLift }
+        : {}),
     });
 
     const jsonText = extractJsonFromText(text);
@@ -3904,11 +4915,93 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
     return input.parse(parsed);
   }
 
+  protected async chatToolCall<T>(input: {
+    functionName: string;
+    functionDescription: string;
+    parameters: Record<string, unknown>;
+    messages: ChatMessage[];
+    parse: (value: unknown) => T;
+    maxTokens?: number | undefined;
+    timeoutMs?: number | undefined;
+    tokenAttempts?: number[] | undefined;
+    disableLmStudioBudgetLift?: boolean | undefined;
+  }): Promise<T> {
+    const attempts =
+      input.tokenAttempts && input.tokenAttempts.length > 0
+        ? [...new Set(input.tokenAttempts.filter((value) => Number.isFinite(value) && value > 0))]
+        : [input.maxTokens ?? 800];
+
+    for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+      const maxTokens = attempts[attemptIndex]!;
+      const json = await this.requestChatCompletion(input.messages, {
+        maxTokens,
+        timeoutMs: this.resolveRequestTimeout(
+          input.timeoutMs,
+          maxTokens,
+          input.disableLmStudioBudgetLift,
+        ),
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: input.functionName,
+              description: input.functionDescription,
+              parameters: input.parameters,
+            },
+          },
+        ],
+        toolChoice: "required",
+        extraBody: this.isLmStudioProvider()
+          ? {
+              chat_template_kwargs: {
+                enable_thinking: false,
+              },
+            }
+          : undefined,
+      });
+
+      const choice = json.choices?.[0];
+      const toolArguments =
+        choice?.message?.tool_calls?.[0]?.function?.arguments?.trim();
+
+      if (toolArguments) {
+        return input.parse(JSON.parse(toolArguments));
+      }
+
+      const shouldRetry =
+        attemptIndex < attempts.length - 1 &&
+        (choice?.finish_reason === "length" ||
+          Boolean(choice?.message?.reasoning_content?.trim()) ||
+          Boolean(choice?.message?.content?.trim()));
+
+      if (shouldRetry) {
+        console.warn(
+          `[slidespeech] ${this.name} returned no tool arguments for ${input.functionName} at max_tokens=${maxTokens}; retrying with a larger token budget.`,
+        );
+        continue;
+      }
+
+      const finishReason = choice?.finish_reason
+        ? ` finish_reason=${choice.finish_reason}.`
+        : "";
+      throw new Error(
+        `${this.name} returned no tool arguments for ${input.functionName}.${finishReason}`,
+      );
+    }
+
+    throw new Error(
+      `${this.name} returned no tool arguments for ${input.functionName} after exhausting token attempts.`,
+    );
+  }
+
   private async requestChatCompletion(
     messages: ChatMessage[],
     options?: {
       maxTokens?: number | undefined;
       timeoutMs?: number | undefined;
+      tools?: unknown;
+      toolChoice?: string | undefined;
+      extraBody?: Record<string, unknown> | undefined;
     },
   ): Promise<ChatCompletionResponse> {
     let response: Response;
@@ -3922,6 +5015,9 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           temperature: 0.2,
           messages,
           ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
+          ...(options?.tools ? { tools: options.tools } : {}),
+          ...(options?.toolChoice ? { tool_choice: options.toolChoice } : {}),
+          ...(options?.extraBody ?? {}),
         }),
         signal: AbortSignal.timeout(options?.timeoutMs ?? this.timeoutMs),
       });
@@ -3986,7 +5082,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       "Do not address the audience as participants, new hires, or attendees. Explain the subject itself.",
       "Do not leak instruction fragments like 'create a presentation', 'more information is available at', or 'use google' into slide titles, learning goals, or key points.",
       "This is not a talk about slide design or how to present. Never give advice about slides, screenshots, clutter, decks, key points, or presentation technique unless the core subject itself is presentation design.",
-      "Avoid facilitator phrases like 'this session', 'welcome everyone', 'to wrap up', 'next steps', or 'our mission' unless the subject itself is about running a session.",
+      "Avoid facilitator framing that talks about running the session instead of teaching the subject, unless the subject itself is session facilitation.",
       "Keep every slide on the same main topic and make the sequence feel like one coherent talk.",
       "Each slide must teach something about the subject itself, not about how the presentation should be delivered.",
       "Prefer concrete facts, mechanisms, responsibilities, examples, or outcomes over generic slogans.",

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { PRESENTATION_THEME_IDS } from "./presentation-themes";
+
 export const SessionStateSchema = z.enum([
   "idle",
   "preparing_presentation",
@@ -212,6 +214,10 @@ export const DeckGenerationStatusSchema = z.object({
 
 export type DeckGenerationStatus = z.infer<typeof DeckGenerationStatusSchema>;
 
+export const PresentationThemeSchema = z.enum(PRESENTATION_THEME_IDS);
+
+export type PresentationTheme = z.infer<typeof PresentationThemeSchema>;
+
 export const DeckSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -226,6 +232,7 @@ export const DeckSchema = z.object({
     estimatedDurationMinutes: z.number().positive(),
     tags: z.array(z.string()).default([]),
     language: z.string().default("sv"),
+    theme: PresentationThemeSchema.optional(),
     validation: z
       .object({
         passed: z.boolean(),
@@ -323,6 +330,9 @@ export const ConversationResponseModeSchema = z.enum([
   "ack_resume",
   "ack_back",
   "question",
+  "summarize_current_slide",
+  "general_contextual",
+  "grounded_factual",
   "simplify",
   "deepen",
   "example",
@@ -435,6 +445,35 @@ export type GeneratePresentationResponse = z.infer<
   typeof GeneratePresentationResponseSchema
 >;
 
+export const PresentationGenerationJobStateSchema = z.enum([
+  "queued",
+  "generating",
+  "completed",
+  "failed",
+]);
+
+export type PresentationGenerationJobState = z.infer<
+  typeof PresentationGenerationJobStateSchema
+>;
+
+export const PresentationGenerationJobStatusResponseSchema = z.object({
+  jobId: z.string(),
+  status: PresentationGenerationJobStateSchema,
+  queuePosition: z.number().int().positive().optional(),
+  jobsAhead: z.number().int().nonnegative().default(0),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  startedAt: z.string().optional(),
+  completedAt: z.string().optional(),
+  sessionId: z.string().optional(),
+  deckId: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export type PresentationGenerationJobStatusResponse = z.infer<
+  typeof PresentationGenerationJobStatusResponseSchema
+>;
+
 export const SessionInteractionRequestSchema = z.object({
   text: z.string().min(1),
 });
@@ -503,6 +542,48 @@ export const SessionSnapshotResponseSchema = z.object({
 
 export type SessionSnapshotResponse = z.infer<
   typeof SessionSnapshotResponseSchema
+>;
+
+export const SavedPresentationSummarySchema = z.object({
+  sessionId: z.string(),
+  deckId: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  topic: z.string(),
+  slideCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  sourceType: z.enum(["topic", "document", "pptx", "mixed"]),
+  generation: DeckGenerationStatusSchema.optional(),
+  validation: DeckSchema.shape.metadata.shape.validation.optional(),
+  evaluation: DeckEvaluationSchema.optional(),
+  ready: z.boolean(),
+});
+
+export type SavedPresentationSummary = z.infer<
+  typeof SavedPresentationSummarySchema
+>;
+
+export const ListSavedPresentationsResponseSchema = z.object({
+  items: z.array(SavedPresentationSummarySchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  readyOnly: z.boolean(),
+  hasMore: z.boolean(),
+});
+
+export type ListSavedPresentationsResponse = z.infer<
+  typeof ListSavedPresentationsResponseSchema
+>;
+
+export const DeletePresentationResponseSchema = z.object({
+  deletedSessionId: z.string(),
+  deletedDeckId: z.string().optional(),
+});
+
+export type DeletePresentationResponse = z.infer<
+  typeof DeletePresentationResponseSchema
 >;
 
 export const SlideIllustrationAssetSchema = z.object({

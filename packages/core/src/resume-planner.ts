@@ -15,11 +15,21 @@ export class SimpleResumePlanner implements ResumePlanner {
     deck: Deck;
   }): Promise<ResumePlan> {
     const currentNarrationIndex = input.session.currentNarrationIndex ?? 0;
-    const previousSlide = input.deck.slides.find(
+    const currentSlideIndex = input.deck.slides.findIndex(
       (slide) =>
         input.session.currentSlideId &&
         slide.id === input.session.currentSlideId,
     );
+    const currentSlide = input.deck.slides.find(
+      (slide) =>
+        input.session.currentSlideId &&
+        slide.id === input.session.currentSlideId,
+    );
+    const previousSlide = currentSlide;
+    const currentNarration =
+      input.session.currentSlideId
+        ? input.session.narrationBySlideId[input.session.currentSlideId]
+        : undefined;
     const shouldRestartCurrentSlide =
       input.turnDecision?.runtimeEffects.restartCurrentSlide === true ||
       input.interruption.type === "simplify" ||
@@ -66,13 +76,46 @@ export class SimpleResumePlanner implements ResumePlanner {
           };
         }
 
+        const shouldAdvanceAfterAnswer =
+          input.interruption.type === "question" ||
+          input.interruption.type === "example" ||
+          input.interruption.type === "deepen";
+        const segmentCount =
+          currentNarration?.segments.length && currentNarration.segments.length > 0
+            ? currentNarration.segments.length
+            : 1;
+        const nextSlide =
+          currentSlideIndex >= 0
+            ? input.deck.slides[currentSlideIndex + 1]
+            : undefined;
+
+        if (
+          shouldAdvanceAfterAnswer &&
+          currentNarrationIndex >= segmentCount - 1 &&
+          nextSlide
+        ) {
+          return {
+            sessionId: input.session.id,
+            action: "resume_same_point",
+            targetSlideId: nextSlide.id,
+            targetNarrationIndex: 0,
+            reasoning:
+              "Continue on the next slide because the answer interrupted the final narration point on the current slide.",
+            adaptPedagogy: shouldAdaptPedagogy,
+          };
+        }
+
         return {
           sessionId: input.session.id,
           action: "resume_same_point",
           targetSlideId: input.session.currentSlideId,
-          targetNarrationIndex: currentNarrationIndex,
+          targetNarrationIndex: shouldAdvanceAfterAnswer
+            ? currentNarrationIndex + 1
+            : currentNarrationIndex,
           reasoning:
-            "Resume from the current point because the turn did not require navigation or a slide restart.",
+            shouldAdvanceAfterAnswer
+              ? "Continue from the next narration point after answering the interruption."
+              : "Resume from the current point because the turn did not require navigation or a slide restart.",
           adaptPedagogy: shouldAdaptPedagogy,
         };
     }

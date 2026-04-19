@@ -514,23 +514,59 @@ export const buildDeterministicNarration = (
   input: GenerateNarrationInput,
 ): SlideNarration => {
   const nextSlide = input.deck.slides[input.slide.order + 1];
+  const prefersBeginnerFriendlyLanguage =
+    input.deck.pedagogicalProfile.audienceLevel === "beginner";
+  const normalizeNarrationSentence = (value: string): string => {
+    const normalized = value.replace(/\s+/g, " ").trim().replace(/^[\-\u2022*\d.)\s]+/, "");
+    if (!normalized) {
+      return "";
+    }
+
+    return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+  };
+
+  const prefixNarrationSentence = (prefix: string, value: string): string => {
+    const normalized = normalizeNarrationSentence(value).replace(/[.!?]+$/g, "");
+    if (!normalized) {
+      return "";
+    }
+
+    const lowered = normalized.charAt(0).toLowerCase() + normalized.slice(1);
+    return `${prefix}${lowered}.`;
+  };
+
   const segments =
     input.slide.order === 0
       ? [
           `${input.deck.topic} matters because it connects to a concrete need, not just an abstract idea.`,
-          input.slide.beginnerExplanation,
-          `The first points to hold onto are: ${input.slide.keyPoints.slice(0, 3).join(", ")}.`,
-          nextSlide
-            ? `With that foundation in place, we can move into ${nextSlide.title.toLowerCase()}.`
-            : "With that foundation in place, we can continue into the rest of the presentation.",
+          normalizeNarrationSentence(input.slide.beginnerExplanation),
+          prefixNarrationSentence(
+            "One thing to hold onto immediately is that ",
+            input.slide.keyPoints[0] ??
+              input.slide.examples[0] ??
+              input.slide.beginnerExplanation,
+          ),
+          prefixNarrationSentence(
+            "Another point to carry forward is that ",
+            input.slide.keyPoints[1] ??
+              input.slide.examples[0] ??
+              input.slide.keyPoints[2] ??
+              (prefersBeginnerFriendlyLanguage
+                ? input.slide.beginnerExplanation
+                : input.slide.advancedExplanation),
+          ),
         ]
       : [
-          `${input.slide.title} helps make the topic more specific and easier to follow.`,
-          input.slide.beginnerExplanation,
-          `What the audience should notice on this slide is: ${input.slide.keyPoints.slice(0, 3).join(", ")}.`,
-          nextSlide
-            ? `This sets up the transition into ${nextSlide.title.toLowerCase()}.`
-            : "This gives us a clean closing point for the presentation.",
+          `${input.slide.title} makes this part of the topic more concrete and easier to follow.`,
+          normalizeNarrationSentence(input.slide.beginnerExplanation),
+          prefixNarrationSentence(
+            "One practical takeaway here is that ",
+            input.slide.keyPoints[0] ??
+              input.slide.examples[0] ??
+              (prefersBeginnerFriendlyLanguage
+                ? input.slide.beginnerExplanation
+                : input.slide.advancedExplanation),
+          ),
         ];
 
   const narration = segments.join(" ");

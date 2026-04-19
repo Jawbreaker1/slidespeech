@@ -1,6 +1,13 @@
 import { SpeechSynthesisResponseSchema } from "@slidespeech/types";
+import type { TextToSpeechResult } from "@slidespeech/types";
 
 import { appContext } from "../lib/context";
+
+const SPEECH_AUDIO_CACHE_LIMIT = 64;
+const speechAudioCache = new Map<
+  string,
+  Promise<TextToSpeechResult> | TextToSpeechResult
+>();
 
 const getNarrationSegment = (input: {
   narrationText: string;
@@ -34,6 +41,57 @@ const speakingRateForPace = (
   }
 };
 
+const buildSpeechAudioCacheKey = (input: {
+  text: string;
+  style: "narration" | "answer" | "summary";
+  pace: "slow" | "balanced" | "fast";
+}): string =>
+  JSON.stringify([input.style, input.pace, input.text.trim()]);
+
+const trimSpeechAudioCache = () => {
+  while (speechAudioCache.size > SPEECH_AUDIO_CACHE_LIMIT) {
+    const oldestKey = speechAudioCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      return;
+    }
+
+    speechAudioCache.delete(oldestKey);
+  }
+};
+
+const synthesizeCachedSpeech = async (input: {
+  text: string;
+  style: "narration" | "answer" | "summary";
+  pace: "slow" | "balanced" | "fast";
+}): Promise<TextToSpeechResult> => {
+  const cacheKey = buildSpeechAudioCacheKey(input);
+  const cached = speechAudioCache.get(cacheKey);
+
+  if (cached) {
+    return await Promise.resolve(cached);
+  }
+
+  const request = appContext.ttsProvider
+    .synthesize(input.text, {
+      style: input.style,
+      speakingRate: speakingRateForPace(input.pace),
+    })
+    .then((audio) => {
+      speechAudioCache.set(cacheKey, audio);
+      trimSpeechAudioCache();
+      return audio;
+    })
+    .catch((error) => {
+      if (speechAudioCache.get(cacheKey) === request) {
+        speechAudioCache.delete(cacheKey);
+      }
+      throw error;
+    });
+
+  speechAudioCache.set(cacheKey, request);
+  return await request;
+};
+
 export const synthesizeSessionSpeech = async (input: {
   sessionId: string;
   text?: string | undefined;
@@ -46,9 +104,10 @@ export const synthesizeSessionSpeech = async (input: {
 
   if (input.text?.trim()) {
     const text = input.text.trim();
-    const audio = await appContext.ttsProvider.synthesize(text, {
+    const audio = await synthesizeCachedSpeech({
+      text,
       style,
-      speakingRate: speakingRateForPace(snapshot.session.pedagogicalProfile.pace),
+      pace: snapshot.session.pedagogicalProfile.pace,
     });
 
     return SpeechSynthesisResponseSchema.parse({
@@ -84,9 +143,10 @@ export const synthesizeSessionSpeech = async (input: {
     narrationIndex:
       input.narrationIndex ?? snapshot.session.currentNarrationIndex ?? 0,
   });
-  const audio = await appContext.ttsProvider.synthesize(text, {
+  const audio = await synthesizeCachedSpeech({
+    text,
     style,
-    speakingRate: speakingRateForPace(snapshot.session.pedagogicalProfile.pace),
+    pace: snapshot.session.pedagogicalProfile.pace,
   });
 
   return SpeechSynthesisResponseSchema.parse({

@@ -186,6 +186,73 @@ test("deck evaluation flags generic template language left by repair-like phrasi
   );
 });
 
+test("deck evaluation accepts a concise intro when the opening still has strong slide intent", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_intro_concise",
+    title: "Making the perfect salsa dip",
+    topic: "Making the perfect salsa dip",
+    summary: "A short procedural deck.",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Making the perfect salsa dip",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "salsa_intro",
+        order: 0,
+        title: "Making the perfect salsa dip",
+        learningGoal:
+          "Understand the ingredients, steps, and final adjustments involved in making the perfect salsa dip.",
+        keyPoints: [
+          "The starting ingredients shape the balance before any mixing begins.",
+          "Preparation steps determine texture and consistency.",
+          "Final tasting and adjustment decide when the dip is ready to serve.",
+        ],
+        beginnerExplanation: "A short intro can still work when the opening has a clear purpose.",
+        advancedExplanation:
+          "The opening names the subject directly and frames the rest of the explanation.",
+        examples: [],
+        likelyQuestions: ["What usually makes salsa go wrong?"],
+        visualNotes: [],
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-16T20:00:00.000Z",
+    updatedAt: "2026-04-16T20:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    evaluation.checks.some(
+      (check) =>
+        check.code === "intro_slide_substance" && check.status === "pass",
+    ),
+  );
+});
+
 test("deck evaluation flags promotional source noise and awkward contract language", () => {
   const deck = DeckSchema.parse({
     id: "deck_eval_3",
@@ -283,7 +350,7 @@ test("deck evaluation flags imperative example-anchor language", () => {
         keyPoints: [
           "The outbreak spread quickly through player movement and in-game travel.",
           "Researchers noticed that player reactions looked similar to real epidemic behavior.",
-          "Use the outbreak as a concrete example anchor.",
+          "Use the outbreak as a concrete example anchor for explaining virtual disease spread.",
         ],
         beginnerExplanation:
           "The event became famous because it behaved like a surprising virtual epidemic.",
@@ -377,6 +444,138 @@ test("deck evaluation flags truncated dangling slide language", () => {
   assert.ok(
     evaluation.checks.some(
       (check) => check.code === "language_quality" && check.status !== "pass",
+    ),
+  );
+});
+
+test("deck evaluation accepts complete declarative key points even when they use varied verbs", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_6",
+    title: "Making the Perfect Salsa Dip",
+    topic: "Making the perfect salsa dip",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Making the perfect salsa dip",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "salsa_eval_1",
+        order: 0,
+        title: "Essential ingredients",
+        learningGoal: "See which ingredients shape the flavor, balance, and texture of making the perfect salsa dip.",
+        keyPoints: [
+          "Ripe tomatoes provide the foundational moisture and bright acidity that establish the structural balance of the dip.",
+          "Adjusting the ratio of acidic citrus juice to sweet tomato pulp allows precise control over the salsa's balance and freshness.",
+          "Freshly chopped cilantro introduces a vibrant herbal note that rounds out the flavor profile and adds color.",
+        ],
+        beginnerExplanation:
+          "The quality and ratio of the raw ingredients determine whether the salsa tastes balanced and feels cohesive.",
+        advancedExplanation:
+          "Ingredient choice shapes both chemistry and texture before any chopping or mixing decisions are made.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T20:00:00.000Z",
+    updatedAt: "2026-04-18T20:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    !evaluation.checks.some(
+      (check) => check.code === "language_quality" && check.status !== "pass",
+    ),
+  );
+});
+
+test("deck evaluation ignores visual prompt scaffolding when judging intro substance", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_7",
+    title: "Making the Perfect Salsa Dip",
+    topic: "Making the perfect salsa dip",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Making the perfect salsa dip",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "salsa_eval_intro",
+        order: 0,
+        title: "Making the perfect salsa dip",
+        learningGoal: "See which ingredients, steps, and final adjustments define making the perfect salsa dip.",
+        keyPoints: [
+          "The starting ingredients shape the balance of the dip before any cutting or mixing begins.",
+          "The order of preparation changes texture, consistency, and how the flavors come together.",
+          "Final tasting and adjustment determine whether the salsa feels finished and balanced.",
+        ],
+        beginnerExplanation:
+          "The first useful view of salsa comes from seeing how ingredients, preparation, and final adjustment each change the final result.",
+        advancedExplanation:
+          "A strong introduction keeps the topic concrete by naming the variables that shape flavor, texture, and readiness.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          imagePrompt: "Editorial presentation visual about Making the perfect salsa dip.",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [
+            {
+              id: "salsa_eval_intro_image",
+              prompt: "Create an educational presentation visual for the opening slide.",
+            },
+          ],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T20:05:00.000Z",
+    updatedAt: "2026-04-18T20:05:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    !evaluation.checks.some(
+      (check) => check.code === "intro_slide_substance" && check.status !== "pass",
     ),
   );
 });

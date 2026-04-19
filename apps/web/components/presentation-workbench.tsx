@@ -16,6 +16,7 @@ import type {
   VoiceTurnResponse,
   WebResearchQueryResponse,
 } from "@slidespeech/types";
+import { resolvePresentationTheme } from "@slidespeech/types";
 import {
   DebugPanel,
   PresenterControls,
@@ -278,6 +279,12 @@ export const PresentationWorkbench = () => {
   }, [generationStartedAt, isGeneratingDeck]);
 
   const slides = response?.deck.slides ?? [];
+  const deckTheme = response
+    ? resolvePresentationTheme(
+        response.deck.metadata.theme,
+        `${response.deck.id}:${response.deck.topic}`,
+      )
+    : undefined;
   const activeSlide = slides[currentSlideIndex];
   const narration = getNarration(response, activeSlide?.id);
   const narrationSegments = useMemo(
@@ -1161,6 +1168,7 @@ export const PresentationWorkbench = () => {
                       slide={activeSlide}
                       dark
                       illustrationAsset={activeIllustration}
+                      theme={deckTheme}
                     />
                     {illustrationLoadingSlideId === activeSlide.id ? (
                       <p className="mt-3 text-xs text-paper/60">
@@ -1649,6 +1657,7 @@ export const PresentationWorkbench = () => {
                 illustrationAsset={illustrationsBySlideId[slide.id]}
                 slide={slide}
                 slideNumber={index + 1}
+                theme={deckTheme}
               />
             </button>
           ))}

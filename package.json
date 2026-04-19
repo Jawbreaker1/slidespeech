@@ -12,6 +12,7 @@
     "dev:web": "npm run dev --workspace @slidespeech/web",
     "verify:api": "./scripts/verify_api_fixed_port.sh",
     "eval:decks": "tsx scripts/evaluate_decks.ts",
+    "bench:structured": "tsx scripts/benchmark_structured_output.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "tsx --test tests/**/*.test.ts"
   },

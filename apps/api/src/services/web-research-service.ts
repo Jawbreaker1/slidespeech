@@ -19,7 +19,7 @@ const DISCUSSION_SOURCE_PATTERN =
   /\b(forum|forums|community|discussion|thread)\b/i;
 
 const LOW_SIGNAL_QA_SOURCE_PATTERN =
-  /\b(stackexchange\.com|stackoverflow\.com|reddit\.com|quora\.com)\b/i;
+  /\b(stackexchange\.com|stackoverflow\.com|reddit\.com|quora\.com|fandom\.com|wikia\.com)\b/i;
 
 const NAVIGATION_NOISE_PATTERN =
   /\b(home|contact|career|careers|about us|privacy|newsletter|knowledge hub|customer case|open positions|follow us|view all news|follow warcraft)\b/i;
@@ -58,15 +58,88 @@ const QUERY_STOPWORDS = new Set([
   "one",
   "ones",
   "latest",
+  "their",
+  "use",
+  "used",
+  "using",
+  "tool",
+  "tools",
+  "work",
+  "working",
+  "daily",
 ]);
 
+const WORD_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu;
+
+const tokenizeWords = (value: string): string[] =>
+  Array.from(value.normalize("NFKC").matchAll(WORD_TOKEN_PATTERN))
+    .map((match) => match[0]?.trim() ?? "")
+    .filter(Boolean);
+
 const tokenize = (value: string): string[] =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3);
+  tokenizeWords(value)
+    .filter((token) => token.length >= 3 || /^\p{Lu}{2,}$/u.test(token))
+    .map((token) => token.toLowerCase());
+
+const hasRepeatedWordWindow = (value: string, minWindowSize = 5): boolean => {
+  const tokens = tokenizeWords(value)
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 2);
+
+  if (tokens.length < minWindowSize * 2) {
+    return false;
+  }
+
+  const maxWindowSize = Math.min(10, Math.floor(tokens.length / 2));
+
+  for (let windowSize = maxWindowSize; windowSize >= minWindowSize; windowSize -= 1) {
+    for (let start = 0; start + windowSize * 2 <= tokens.length; start += 1) {
+      let matches = true;
+      for (let index = 0; index < windowSize; index += 1) {
+        if (tokens[start + index] !== tokens[start + windowSize + index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
+
+const looksLikeTaxonomyNoise = (value: string): boolean => {
+  const tokens = tokenizeWords(value).filter((token) => /\p{L}/u.test(token));
+
+  if (tokens.length < 8) {
+    return false;
+  }
+
+  const isTitleishToken = (token: string): boolean => /^\p{Lu}/u.test(token);
+  const titleishCount = tokens.filter(isTitleishToken).length;
+  const lowercaseCount = tokens.filter((token) => /^\p{Ll}/u.test(token)).length;
+  const titleRatio = titleishCount / tokens.length;
+
+  let longestTitleishRun = 0;
+  let currentRun = 0;
+  for (const token of tokens) {
+    if (isTitleishToken(token)) {
+      currentRun += 1;
+      if (currentRun > longestTitleishRun) {
+        longestTitleishRun = currentRun;
+      }
+    } else {
+      currentRun = 0;
+    }
+  }
+
+  return (
+    (hasRepeatedWordWindow(value) || longestTitleishRun >= 7 || titleRatio >= 0.7) &&
+    lowercaseCount <= Math.max(3, Math.floor(tokens.length * 0.3))
+  );
+};
 
 const uniqueStrings = (values: string[]): string[] => [...new Set(values)];
 
@@ -76,6 +149,9 @@ const buildQueryTokens = (query: string): string[] =>
       (token) => !QUERY_STOPWORDS.has(token),
     ),
   );
+
+const buildSpecificQueryTokens = (query: string): string[] =>
+  buildQueryTokens(query).filter((token) => token.length >= 5 || /\d/.test(token));
 
 const trimExplicitSourceLeadIn = (content: string): string => {
   const markers = [
@@ -117,6 +193,7 @@ export const sanitizeFetchedFinding = (
   }
 
   const queryTokens = buildQueryTokens(query);
+  const specificQueryTokens = buildSpecificQueryTokens(query);
   const specializedQuery = SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query);
   const normalizedContent = finding.content
     .replace(/\u00a0/g, " ")
@@ -131,22 +208,32 @@ export const sanitizeFetchedFinding = (
     .map((sentence) => sentence.replace(/\s+/g, " ").trim())
     .filter((sentence) => sentence.length >= 30 && sentence.length <= (options?.allowTrustedExplicitSource ? 420 : 280))
     .filter((sentence) => !NAVIGATION_NOISE_PATTERN.test(sentence))
-    .filter((sentence) => !PROMOTIONAL_NOISE_PATTERN.test(sentence));
+    .filter((sentence) => !PROMOTIONAL_NOISE_PATTERN.test(sentence))
+    .filter((sentence) => !looksLikeTaxonomyNoise(sentence));
 
   const scoredSentences = sentences
     .map((sentence) => {
       const lower = sentence.toLowerCase();
       const overlap = queryTokens.filter((token) => lower.includes(token)).length;
+      const specificOverlap = specificQueryTokens.filter((token) =>
+        lower.includes(token),
+      ).length;
       const informativeBoost = INFORMATIVE_FINDING_PATTERN.test(sentence) ? 2 : 0;
       const factualBoost = /\b\d{4}\b/.test(sentence) ? 1 : 0;
       return {
         sentence,
         overlap,
-        score: overlap * 2 + informativeBoost + factualBoost,
+        specificOverlap,
+        score: overlap * 2 + specificOverlap * 3 + informativeBoost + factualBoost,
       };
     })
     .filter((candidate) =>
       options?.allowTrustedExplicitSource ? candidate.score >= 1 : candidate.score >= 2,
+    )
+    .filter((candidate) =>
+      options?.allowTrustedExplicitSource || specificQueryTokens.length === 0
+        ? true
+        : candidate.specificOverlap >= 1 || candidate.overlap >= 2,
     )
     .filter(
       (candidate) =>
@@ -186,6 +273,7 @@ const findingLooksRelevant = (
   }
 
   const queryTokens = buildQueryTokens(query);
+  const specificQueryTokens = buildSpecificQueryTokens(query);
   const specializedQuery = SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query);
 
   if (queryTokens.length === 0) {
@@ -194,9 +282,16 @@ const findingLooksRelevant = (
 
   const haystack = `${input.title} ${input.content.slice(0, 1200)} ${input.url}`.toLowerCase();
   const overlap = queryTokens.filter((token) => haystack.includes(token)).length;
+  const specificOverlap = specificQueryTokens.filter((token) =>
+    haystack.includes(token),
+  ).length;
 
   if (specializedQuery) {
     return overlap >= 3;
+  }
+
+  if (specificQueryTokens.length > 0) {
+    return specificOverlap >= 1 || overlap >= 2;
   }
 
   return overlap >= 1;
@@ -522,7 +617,7 @@ type ResearchCacheKeyInput =
     };
 
 const RESEARCH_CACHE_DIR = resolve(process.cwd(), "data/research-cache");
-const RESEARCH_CACHE_VERSION = 9;
+const RESEARCH_CACHE_VERSION = 12;
 
 const cacheKeyFor = (input: ResearchCacheKeyInput): string => {
   const hash = createHash("sha1");

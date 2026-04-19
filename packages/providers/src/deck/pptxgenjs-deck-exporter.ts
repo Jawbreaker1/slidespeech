@@ -14,6 +14,47 @@ import { ensureDirForFile } from "../shared";
 export class PptxGenJSDeckExporter implements DeckExporter {
   readonly name = "pptxgenjs";
 
+  private normalizeComparableText(value: string) {
+    return value
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private buildAudienceCallouts(slide: Slide) {
+    const likelyQuestionSet = new Set(
+      slide.likelyQuestions
+        .map((value) => this.normalizeComparableText(value))
+        .filter(Boolean),
+    );
+    const alreadyVisible = new Set(
+      [
+        ...slide.keyPoints,
+        ...slide.visuals.cards.map((card) => card.body),
+        ...slide.visuals.diagramNodes.map((node) => node.label),
+        slide.learningGoal,
+        slide.beginnerExplanation,
+      ]
+        .map((value) => this.normalizeComparableText(value))
+        .filter(Boolean),
+    );
+
+    return slide.visuals.callouts.filter((callout) => {
+      const normalized = this.normalizeComparableText(callout.text);
+      if (!normalized) {
+        return false;
+      }
+
+      if (likelyQuestionSet.has(normalized)) {
+        return false;
+      }
+
+      return !alreadyVisible.has(normalized);
+    });
+  }
+
   private normalizeColor(value?: string, fallback = "1C7C7D") {
     const normalized = value?.trim().replace(/^#/, "").toUpperCase();
     return normalized && /^[0-9A-F]{6}$/.test(normalized) ? normalized : fallback;
@@ -41,6 +82,10 @@ export class PptxGenJSDeckExporter implements DeckExporter {
     slide: Slide,
     accent: string,
   ) {
+    if (slide.visuals.layoutTemplate === "three-step-flow") {
+      return;
+    }
+
     const cards = slide.visuals.cards.slice(0, 3);
     if (cards.length === 0) {
       return;
@@ -93,7 +138,7 @@ export class PptxGenJSDeckExporter implements DeckExporter {
     slide: Slide,
     accent: string,
   ) {
-    const callouts = slide.visuals.callouts.slice(0, 2);
+    const callouts = this.buildAudienceCallouts(slide).slice(0, 2);
     if (callouts.length === 0) {
       return;
     }

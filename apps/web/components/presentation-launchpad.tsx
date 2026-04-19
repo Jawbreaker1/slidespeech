@@ -4,7 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { generatePresentation } from "../lib/api";
+import type { PresentationGenerationJobStatusResponse } from "@slidespeech/types";
+
+import {
+  enqueuePresentationGeneration,
+  fetchPresentationGenerationJobStatus,
+} from "../lib/api";
 
 const suggestedTopics = [
   "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
@@ -53,10 +58,15 @@ export const PresentationLaunchpad = () => {
   const [error, setError] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationJob, setGenerationJob] =
+    useState<PresentationGenerationJobStatusResponse | null>(null);
+
+  const isGenerating = generationJob?.status === "generating";
+  const isQueued = generationJob?.status === "queued";
+  const isWaitingForGeneration = isGenerating || isQueued;
 
   useEffect(() => {
-    if (!isGenerating || startedAt === null) {
+    if (!isWaitingForGeneration || startedAt === null) {
       setElapsedSeconds(0);
       return;
     }
@@ -69,15 +79,71 @@ export const PresentationLaunchpad = () => {
     return () => {
       window.clearInterval(timer);
     };
-  }, [isGenerating, startedAt]);
+  }, [isWaitingForGeneration, startedAt]);
 
   const statusMessage = useMemo(() => {
-    if (!isGenerating) {
+    if (!generationJob) {
       return null;
     }
 
+    if (generationJob.status === "queued") {
+      return generationJob.jobsAhead <= 1
+        ? "Queued behind the current generation"
+        : `Queued behind ${generationJob.jobsAhead} presentation${generationJob.jobsAhead === 1 ? "" : "s"}`;
+    }
+
     return statusMessages[Math.min(Math.floor(elapsedSeconds / 12), statusMessages.length - 1)];
-  }, [elapsedSeconds, isGenerating]);
+  }, [elapsedSeconds, generationJob]);
+
+  useEffect(() => {
+    if (!generationJob || generationJob.status === "completed" || generationJob.status === "failed") {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const nextStatus = await fetchPresentationGenerationJobStatus(generationJob.jobId);
+
+        if (!cancelled) {
+          setGenerationJob(nextStatus);
+        }
+      } catch (pollError) {
+        if (!cancelled) {
+          setError((pollError as Error).message);
+          setGenerationJob(null);
+          setStartedAt(null);
+        }
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [generationJob]);
+
+  useEffect(() => {
+    if (!generationJob) {
+      return;
+    }
+
+    if (generationJob.status === "completed" && generationJob.sessionId) {
+      setStartedAt(null);
+      router.push(`/present/${generationJob.sessionId}`);
+      return;
+    }
+
+    if (generationJob.status === "failed") {
+      setError(generationJob.error ?? "Presentation generation failed.");
+      setGenerationJob(null);
+      setStartedAt(null);
+    }
+  }, [generationJob, router]);
 
   const selectedLength =
     lengthPresets.find((preset) => preset.id === selectedLengthId) ??
@@ -91,18 +157,16 @@ export const PresentationLaunchpad = () => {
     void (async () => {
       try {
         setError(null);
-        setIsGenerating(true);
         setStartedAt(Date.now());
-        const result = await generatePresentation(topic.trim(), {
+        const result = await enqueuePresentationGeneration(topic.trim(), {
           useWebResearch: forceWebResearch,
           targetDurationMinutes: selectedLength.durationMinutes,
           targetSlideCount: selectedLength.slideCount,
         });
-        router.push(`/present/${result.session.id}`);
+        setGenerationJob(result);
       } catch (generationError) {
         setError((generationError as Error).message);
-      } finally {
-        setIsGenerating(false);
+        setGenerationJob(null);
         setStartedAt(null);
       }
     })();
@@ -127,6 +191,12 @@ export const PresentationLaunchpad = () => {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
+              <Link
+                className="rounded-full border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-white"
+                href="/library"
+              >
+                Ready presentations
+              </Link>
               <Link
                 className="rounded-full border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-white"
                 href="/workbench"
@@ -235,28 +305,37 @@ export const PresentationLaunchpad = () => {
               </div>
             ) : null}
 
-            {isGenerating ? (
+            {isWaitingForGeneration ? (
               <div className="mt-4 rounded-[24px] border border-coral/30 bg-coral/10 px-5 py-4">
                 <div className="flex items-center gap-3">
                   <span className="inline-flex h-5 w-5 animate-spin rounded-full border-2 border-coral/25 border-t-coral" />
                   <p className="text-sm font-semibold uppercase tracking-[0.2em] text-coral">
-                    Generating deck
+                    {isQueued ? "Queued for generation" : "Generating deck"}
                   </p>
                 </div>
                 <p className="mt-2 text-lg font-semibold text-slate-950">
                   {statusMessage}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Local models can take 1-3 minutes. When generation completes, the app opens presenter mode automatically.
+                  {isQueued
+                    ? "Only one heavy generation runs at a time in this demo. The page keeps polling until your turn starts."
+                    : "Local models can take several minutes. When generation completes, the app opens presenter mode automatically."}
                 </p>
                 <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
                   <div
                     className="h-full rounded-full bg-coral transition-[width]"
-                    style={{ width: `${Math.min(92, 18 + elapsedSeconds * 1.6)}%` }}
+                    style={{
+                      width: isQueued
+                        ? `${Math.min(36, 14 + elapsedSeconds * 0.35)}%`
+                        : `${Math.min(92, 18 + elapsedSeconds * 1.6)}%`,
+                    }}
                   />
                 </div>
                 <p className="mt-3 text-sm font-medium text-slate-700">
                   {elapsedSeconds}s elapsed
+                  {isQueued && generationJob?.queuePosition
+                    ? ` · queue position ${generationJob.queuePosition}`
+                    : ""}
                 </p>
               </div>
             ) : null}
@@ -264,11 +343,11 @@ export const PresentationLaunchpad = () => {
             <div className="mt-6 flex flex-wrap gap-3">
               <button
                 className="rounded-full bg-coral px-6 py-3 text-sm font-semibold text-white transition hover:bg-coral/90 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isGenerating || !topic.trim()}
+                disabled={isWaitingForGeneration || !topic.trim()}
                 onClick={handleGenerate}
                 type="button"
               >
-                {isGenerating ? "Generating..." : "Generate presentation"}
+                {isQueued ? "Queued..." : isGenerating ? "Generating..." : "Generate presentation"}
               </button>
               <Link
                 className="rounded-full border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"

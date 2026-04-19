@@ -31,6 +31,22 @@ const EnvSchema = z.object({
   FASTER_WHISPER_COMPUTE_TYPE: z.string().default("int8"),
   FASTER_WHISPER_BEAM_SIZE: z.coerce.number().default(3),
   FASTER_WHISPER_LANGUAGE: z.string().default("en"),
+  PIPER_TTS_PYTHON_BIN: z.string().default(".venv-tts/bin/python"),
+  PIPER_TTS_MODEL_PATH: z
+    .string()
+    .default("models/tts/en_US-lessac-medium.onnx"),
+  PIPER_TTS_CONFIG_PATH: z
+    .string()
+    .default("models/tts/en_US-lessac-medium.onnx.json"),
+  PIPER_TTS_SPEAKER_ID: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value === undefined || value.trim() === ""
+        ? undefined
+        : Number.parseInt(value, 10),
+    ),
+  PIPER_TTS_SENTENCE_SILENCE_MS: z.coerce.number().default(120),
   SYSTEM_TTS_VOICE: z.string().default("Daniel"),
   SYSTEM_TTS_RATE_WPM: z.coerce.number().default(180),
   STORAGE_ROOT: z.string().default("data"),

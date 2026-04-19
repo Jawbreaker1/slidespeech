@@ -1,10 +1,12 @@
 interface PresenterControlsProps {
   canGoBack: boolean;
   canGoForward: boolean;
+  isBusy?: boolean;
   isPresenting: boolean;
   onBack: () => void;
   onTogglePresenting: () => void;
   onForward: () => void;
+  presentLabel?: string;
 }
 
 const buttonClassName =
@@ -13,10 +15,12 @@ const buttonClassName =
 export const PresenterControls = ({
   canGoBack,
   canGoForward,
+  isBusy = false,
   isPresenting,
   onBack,
   onTogglePresenting,
   onForward,
+  presentLabel,
 }: PresenterControlsProps) => (
   <div className="flex flex-wrap gap-2.5">
     <button
@@ -25,14 +29,15 @@ export const PresenterControls = ({
       onClick={onBack}
       type="button"
     >
-      Back
+      Previous slide
     </button>
     <button
-      className="rounded-full bg-coral px-5 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+      className="rounded-full bg-coral px-5 py-2 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-70"
+      disabled={isBusy}
       onClick={onTogglePresenting}
       type="button"
     >
-      {isPresenting ? "Pause" : "Present"}
+      {presentLabel ?? (isPresenting ? "Pause" : "Present")}
     </button>
     <button
       className={buttonClassName}
@@ -40,7 +45,7 @@ export const PresenterControls = ({
       onClick={onForward}
       type="button"
     >
-      Next
+      Next slide
     </button>
   </div>
 );

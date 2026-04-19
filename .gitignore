@@ -5,8 +5,11 @@ coverage
 .env
 .env.local
 .venv-stt
+.venv-tts
 *.log
 *.tsbuildinfo
+models/tts/*.onnx
+models/tts/*.onnx.json
 data/decks/*.json
 data/evaluations/*.json
 data/exports/*.pptx

@@ -12,7 +12,7 @@ test("compacts presentation brief into framing rather than prompt instructions",
       "onboarding presentation about our company",
       "System Verification",
     ),
-    "onboarding",
+    "onboarding presentation about System Verification",
   );
 
   assert.equal(
@@ -20,7 +20,15 @@ test("compacts presentation brief into framing rather than prompt instructions",
       "short presentation about Volvo for children",
       "Volvo",
     ),
-    "short for children",
+    "Volvo for children",
+  );
+
+  assert.equal(
+    compactPresentationBrief(
+      "Create a short presentation about how to make the perfect salsa dip.",
+      "Making the perfect salsa dip",
+    ),
+    "how to make the perfect salsa dip",
   );
 });
 

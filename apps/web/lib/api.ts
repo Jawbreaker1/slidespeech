@@ -1,6 +1,10 @@
 import type {
+  DeletePresentationResponse,
   GeneratePresentationResponse,
+  GeneratePresentationRequest,
+  ListSavedPresentationsResponse,
   NarrationProgressResponse,
+  PresentationGenerationJobStatusResponse,
   SpeechSynthesisResponse,
   SelectSlideResponse,
   SessionSnapshotResponse,
@@ -44,18 +48,7 @@ export const generatePresentation = async (
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      topic,
-      ...(options?.useWebResearch !== undefined
-        ? { useWebResearch: options.useWebResearch }
-        : {}),
-      ...(options?.targetDurationMinutes !== undefined
-        ? { targetDurationMinutes: options.targetDurationMinutes }
-        : {}),
-      ...(options?.targetSlideCount !== undefined
-        ? { targetSlideCount: options.targetSlideCount }
-        : {}),
-    }),
+    body: JSON.stringify(buildGeneratePresentationPayload(topic, options)),
   });
 
   if (!response.ok) {
@@ -66,6 +59,125 @@ export const generatePresentation = async (
   }
 
   return (await response.json()) as GeneratePresentationResponse;
+};
+
+const buildGeneratePresentationPayload = (
+  topic: string,
+  options?: {
+    useWebResearch?: boolean;
+    targetDurationMinutes?: number;
+    targetSlideCount?: number;
+  },
+): GeneratePresentationRequest => ({
+  topic,
+  ...(options?.useWebResearch !== undefined
+    ? { useWebResearch: options.useWebResearch }
+    : {}),
+  ...(options?.targetDurationMinutes !== undefined
+    ? { targetDurationMinutes: options.targetDurationMinutes }
+    : {}),
+  ...(options?.targetSlideCount !== undefined
+    ? { targetSlideCount: options.targetSlideCount }
+    : {}),
+});
+
+export const enqueuePresentationGeneration = async (
+  topic: string,
+  options?: {
+    useWebResearch?: boolean;
+    targetDurationMinutes?: number;
+    targetSlideCount?: number;
+  },
+): Promise<PresentationGenerationJobStatusResponse> => {
+  const response = await fetch(`${API_BASE_URL}/api/presentations/generate-jobs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(buildGeneratePresentationPayload(topic, options)),
+  });
+
+  if (!response.ok) {
+    const message =
+      ((await response.json()) as { error?: string }).error ??
+      "Failed to queue presentation generation.";
+    throw new Error(message);
+  }
+
+  return (await response.json()) as PresentationGenerationJobStatusResponse;
+};
+
+export const fetchPresentationGenerationJobStatus = async (
+  jobId: string,
+): Promise<PresentationGenerationJobStatusResponse> => {
+  const response = await fetch(
+    `${API_BASE_URL}/api/presentations/generate-jobs/${jobId}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const message =
+      ((await response.json()) as { error?: string }).error ??
+      "Failed to load generation status.";
+    throw new Error(message);
+  }
+
+  return (await response.json()) as PresentationGenerationJobStatusResponse;
+};
+
+export const listSavedPresentations = async (input?: {
+  limit?: number;
+  offset?: number;
+  readyOnly?: boolean;
+}): Promise<ListSavedPresentationsResponse> => {
+  const searchParams = new URLSearchParams();
+
+  if (input?.limit !== undefined) {
+    searchParams.set("limit", String(input.limit));
+  }
+
+  if (input?.offset !== undefined) {
+    searchParams.set("offset", String(input.offset));
+  }
+
+  if (input?.readyOnly !== undefined) {
+    searchParams.set("readyOnly", String(input.readyOnly));
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/api/presentations${searchParams.size > 0 ? `?${searchParams.toString()}` : ""}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const message =
+      ((await response.json()) as { error?: string }).error ??
+      "Failed to list presentations.";
+    throw new Error(message);
+  }
+
+  return (await response.json()) as ListSavedPresentationsResponse;
+};
+
+export const deleteSavedPresentation = async (
+  sessionId: string,
+): Promise<DeletePresentationResponse> => {
+  const response = await fetch(`${API_BASE_URL}/api/presentations/${sessionId}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const message =
+      ((await response.json()) as { error?: string }).error ??
+      "Failed to delete presentation.";
+    throw new Error(message);
+  }
+
+  return (await response.json()) as DeletePresentationResponse;
 };
 
 export const fetchSlideNarration = async (

@@ -16,6 +16,7 @@ import type {
   TranscriptTurn,
   VoiceTurnResponse,
 } from "@slidespeech/types";
+import { resolvePresentationTheme } from "@slidespeech/types";
 import { PresenterControls, VisualSlideCanvas } from "@slidespeech/ui";
 
 import {
@@ -153,7 +154,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [isInteracting, setIsInteracting] = useState(false);
   const [isSynthesizingSpeech, setIsSynthesizingSpeech] = useState(false);
   const [isPlayingSpeech, setIsPlayingSpeech] = useState(false);
-  const [autoPlaySpeech, setAutoPlaySpeech] = useState(false);
   const [lastSpokenText, setLastSpokenText] = useState<string | null>(null);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isListeningBrowserVoice, setIsListeningBrowserVoice] = useState(false);
@@ -164,11 +164,14 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [lastVoiceTranscript, setLastVoiceTranscript] =
     useState<VoiceTranscriptSummary | null>(null);
   const [pendingUserTurn, setPendingUserTurn] = useState<string | null>(null);
+  const [pendingPresentationStart, setPendingPresentationStart] = useState(false);
+  const [showBlockingOverlay, setShowBlockingOverlay] = useState(false);
   const [isPending, startTransition] = useTransition();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playbackSequenceRef = useRef(0);
   const illustrationPrefetchRef = useRef<Set<string>>(new Set());
   const narrationPrefetchRef = useRef<Set<string>>(new Set());
+  const narrationRequestsRef = useRef<Map<string, Promise<SlideNarration>>>(new Map());
   const browserSpeechProviderRef = useRef<BrowserSpeechToTextProvider | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -176,6 +179,9 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const liveVoiceModeRef = useRef(false);
   const voiceLoopRunningRef = useRef(false);
   const speechRequestVersionRef = useRef(0);
+  const answerSpeechCacheRef = useRef<
+    Map<string, Promise<SpeechSynthesisResponse> | SpeechSynthesisResponse>
+  >(new Map());
 
   useEffect(() => () => {
     playbackSequenceRef.current += 1;
@@ -193,6 +199,10 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       mediaStreamRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    answerSpeechCacheRef.current.clear();
+  }, [sessionId]);
 
   useEffect(() => {
     const provider = createBrowserSpeechToTextProvider();
@@ -245,6 +255,12 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   }, [sessionId]);
 
   const slides = state?.deck.slides ?? [];
+  const deckTheme = state
+    ? resolvePresentationTheme(
+        state.deck.metadata.theme,
+        `${state.deck.id}:${state.deck.topic}`,
+      )
+    : undefined;
   const currentSlideIndex =
     slides.length === 0
       ? 0
@@ -275,9 +291,159 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     : undefined;
   const isPresenting =
     state?.session.state === "presenting" || state?.session.state === "resuming";
+  const narrationAutoPlay = true;
+  const autoResumeBridge =
+    "Now I will continue where I left off in the presentation.";
+  const narrationReadySlideCount = slides.filter(
+    (slide) => Boolean(state?.narrationsBySlideId[slide.id]),
+  ).length;
+  const missingNarrationCount = Math.max(slides.length - narrationReadySlideCount, 0);
+  const isDeckNarrationReady = slides.length > 0 && missingNarrationCount === 0;
+  const isWaitingForNarrationDuringPlayback =
+    isPresenting && isSynthesizingSpeech && !isPlayingSpeech;
+  const isBuildingAnswer =
+    Boolean(pendingUserTurn) ||
+    isInteracting ||
+    (isSubmittingVoice && !isRecordingVoice);
+  const rawBlockingPresenterWork =
+    pendingPresentationStart || isWaitingForNarrationDuringPlayback || isBuildingAnswer;
   const latestAssistantMessage =
     [...interactionLog].reverse().find((entry) => entry.role === "assistant")?.text ??
     null;
+  const workingOverlayTitle = isBuildingAnswer
+    ? "Building answer"
+    : pendingPresentationStart
+      ? "Preparing full narration"
+      : "Generating content";
+  const workingOverlayMessage = isBuildingAnswer
+    ? pendingUserTurn
+      ? `Working on a spoken answer to “${pendingUserTurn}”.`
+      : isSubmittingVoice && !isRecordingVoice
+        ? "Transcribing your question and preparing the answer."
+        : "Preparing the next answer for the presentation."
+    : pendingPresentationStart
+      ? `Getting the remaining slide narration ready before presentation starts. ${narrationReadySlideCount} of ${slides.length} slides are ready.`
+      : activeSlide
+        ? `Generating the next spoken segment for “${activeSlide.title}”.`
+        : "Generating the next spoken segment for the presentation.";
+  const presentButtonLabel = pendingPresentationStart
+    ? "Preparing..."
+    : isPresenting
+      ? "Pause"
+      : "Present";
+
+  const mergeNarrationIntoState = (nextNarration: SlideNarration) => {
+    setState((previous) =>
+      previous
+        ? {
+            ...previous,
+            session: {
+              ...previous.session,
+              narrationBySlideId: {
+                ...previous.session.narrationBySlideId,
+                [nextNarration.slideId]: nextNarration,
+              },
+            },
+            narrationsBySlideId: {
+              ...previous.narrationsBySlideId,
+              [nextNarration.slideId]: nextNarration,
+            },
+          }
+        : previous,
+    );
+  };
+
+  const loadNarration = async (
+    slideId: string,
+    options?: {
+      foreground?: boolean;
+      suppressError?: boolean;
+    },
+  ): Promise<SlideNarration> => {
+    const existingNarration = state?.narrationsBySlideId[slideId];
+
+    if (existingNarration) {
+      return existingNarration;
+    }
+
+    const inFlightRequest = narrationRequestsRef.current.get(slideId);
+
+    if (inFlightRequest) {
+      return await inFlightRequest;
+    }
+
+    if (options?.foreground) {
+      setNarrationLoadingSlideId(slideId);
+    }
+
+    const request = fetchSlideNarration(sessionId, slideId)
+      .then((nextNarration) => {
+        mergeNarrationIntoState(nextNarration);
+        return nextNarration;
+      })
+      .catch((loadError) => {
+        if (!options?.suppressError) {
+          setError((loadError as Error).message);
+        }
+
+        throw loadError;
+      })
+      .finally(() => {
+        narrationRequestsRef.current.delete(slideId);
+
+        if (options?.foreground) {
+          setNarrationLoadingSlideId((current) =>
+            current === slideId ? null : current,
+          );
+        }
+      });
+
+    narrationRequestsRef.current.set(slideId, request);
+    return await request;
+  };
+
+  const buildAnswerSpeechCacheKey = (text: string): string =>
+    `${state?.session.pedagogicalProfile.pace ?? "balanced"}::${text.trim()}`;
+
+  const prefetchAnswerSpeech = async (
+    text: string,
+  ): Promise<SpeechSynthesisResponse> => {
+    const trimmedText = text.trim();
+    const cacheKey = buildAnswerSpeechCacheKey(trimmedText);
+    const cached = answerSpeechCacheRef.current.get(cacheKey);
+
+    if (cached) {
+      return await Promise.resolve(cached);
+    }
+
+    const request = synthesizeSpeech(sessionId, {
+      text: trimmedText,
+      style: "answer",
+    })
+      .then((result) => {
+        answerSpeechCacheRef.current.set(cacheKey, result);
+        return result;
+      })
+      .catch((error) => {
+        if (answerSpeechCacheRef.current.get(cacheKey) === request) {
+          answerSpeechCacheRef.current.delete(cacheKey);
+        }
+        throw error;
+      });
+
+    answerSpeechCacheRef.current.set(cacheKey, request);
+    return await request;
+  };
+
+  useEffect(() => {
+    if (!latestAssistantMessage?.trim()) {
+      return;
+    }
+
+    void prefetchAnswerSpeech(latestAssistantMessage).catch(() => {
+      // Best-effort prewarm only.
+    });
+  }, [latestAssistantMessage, sessionId, state?.session.pedagogicalProfile.pace]);
 
   useEffect(() => {
     if (
@@ -290,43 +456,14 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     let cancelled = false;
-    setNarrationLoadingSlideId(activeSlide.id);
 
-    fetchSlideNarration(sessionId, activeSlide.id)
-      .then((nextNarration) => {
+    void loadNarration(activeSlide.id, { foreground: true, suppressError: false }).catch(
+      () => {
         if (cancelled) {
           return;
         }
-
-        setState((previous) =>
-          previous
-            ? {
-                ...previous,
-                session: {
-                  ...previous.session,
-                  narrationBySlideId: {
-                    ...previous.session.narrationBySlideId,
-                    [nextNarration.slideId]: nextNarration,
-                  },
-                },
-                narrationsBySlideId: {
-                  ...previous.narrationsBySlideId,
-                  [nextNarration.slideId]: nextNarration,
-                },
-              }
-            : previous,
-        );
-      })
-      .catch((loadError) => {
-        if (!cancelled) {
-          setError((loadError as Error).message);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setNarrationLoadingSlideId(null);
-        }
-      });
+      },
+    );
 
     return () => {
       cancelled = true;
@@ -359,30 +496,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         narrationPrefetchRef.current.add(slide.id);
 
         try {
-          const nextNarration = await fetchSlideNarration(sessionId, slide.id);
-
-          if (cancelled) {
-            return;
-          }
-
-          setState((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  session: {
-                    ...previous.session,
-                    narrationBySlideId: {
-                      ...previous.session.narrationBySlideId,
-                      [nextNarration.slideId]: nextNarration,
-                    },
-                  },
-                  narrationsBySlideId: {
-                    ...previous.narrationsBySlideId,
-                    [nextNarration.slideId]: nextNarration,
-                  },
-                }
-              : previous,
-          );
+          await loadNarration(slide.id, { suppressError: true });
         } catch {
           // Keep narration preloading non-blocking for presenter mode.
         } finally {
@@ -395,6 +509,61 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       cancelled = true;
     };
   }, [sessionId, state]);
+
+  useEffect(() => {
+    if (!pendingPresentationStart || isDeckNarrationReady) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      for (const slide of slides) {
+        if (cancelled) {
+          return;
+        }
+
+        if (state?.narrationsBySlideId[slide.id]) {
+          continue;
+        }
+
+        try {
+          await loadNarration(slide.id, {
+            foreground: slide.id === activeSlide?.id,
+            suppressError: true,
+          });
+        } catch {
+          // Let the overlay stay visible and allow the user to retry explicitly.
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSlide?.id,
+    isDeckNarrationReady,
+    pendingPresentationStart,
+    sessionId,
+    slides,
+    state,
+  ]);
+
+  useEffect(() => {
+    if (!rawBlockingPresenterWork) {
+      setShowBlockingOverlay(false);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setShowBlockingOverlay(true);
+    }, isBuildingAnswer ? 250 : 650);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isBuildingAnswer, rawBlockingPresenterWork]);
 
   useEffect(() => {
     if (
@@ -503,6 +672,15 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     setIsPlayingSpeech(false);
   };
 
+  const disarmLiveVoiceMode = () => {
+    liveVoiceModeRef.current = false;
+    browserSpeechProviderRef.current?.stop();
+    setLiveVoiceMode(false);
+    setIsListeningBrowserVoice(false);
+    setBrowserInterimTranscript("");
+    voiceLoopRunningRef.current = false;
+  };
+
   const stopActiveMediaStream = () => {
     if (mediaStreamRef.current) {
       for (const track of mediaStreamRef.current.getTracks()) {
@@ -541,12 +719,52 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       ]);
     }
 
-    if (assistantMessage && autoPlaySpeech) {
-      await playSpeech({
-        text: assistantMessage,
-        style: "answer",
-      });
+    if (!assistantMessage || !shouldAutoResumeAfterAnswer(result)) {
+      return;
     }
+
+    const resumeSlideId = result.session.currentSlideId;
+    const resumeNarrationIndex = result.session.currentNarrationIndex;
+
+    await playSpeech({
+      text: `${assistantMessage} ${autoResumeBridge}`,
+      style: "answer",
+      onEnded: async () => {
+        try {
+          if (!resumeSlideId) {
+            return;
+          }
+
+          await playSpeech({
+            slideId: resumeSlideId,
+            narrationIndex: resumeNarrationIndex,
+            style: "narration",
+            continueSequence: true,
+            advanceSlides: narrationAutoPlay,
+          });
+        } catch (resumeError) {
+          setError((resumeError as Error).message);
+        }
+      },
+    });
+  };
+
+  const shouldAutoResumeAfterAnswer = (
+    result: SessionInteractionPayload | VoiceTurnResponse,
+  ): boolean => {
+    const interruptionType = result.interruption?.type;
+    const responseMode = result.turnDecision?.responseMode;
+
+    return (
+      interruptionType !== undefined &&
+      ["question", "simplify", "deepen", "example", "repeat"].includes(
+        interruptionType,
+      ) &&
+      (responseMode === undefined ||
+        ["question", "simplify", "deepen", "example", "repeat"].includes(
+          responseMode,
+        ))
+    );
   };
 
   const handleBackendVoiceRecording = () => {
@@ -601,6 +819,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         recorder.onstop = async () => {
           try {
             setIsSubmittingVoice(true);
+            disarmLiveVoiceMode();
             const blob = new Blob(chunksRef.current, {
               type: recorder.mimeType || "audio/webm",
             });
@@ -667,7 +886,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
     try {
       setError(null);
-      setIsSubmittingVoice(true);
       const transcript = await provider.listenOnce({
         lang: "en-US",
         onStart: () => {
@@ -686,6 +904,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       });
 
       stopActiveAudio();
+      disarmLiveVoiceMode();
 
       setLastVoiceTranscript({
         source: "browser",
@@ -722,7 +941,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       setIsInteracting(false);
       setIsListeningBrowserVoice(false);
       setBrowserInterimTranscript("");
-      setIsSubmittingVoice(false);
     }
   };
 
@@ -774,12 +992,16 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     style?: "narration" | "answer" | "summary";
     continueSequence?: boolean;
     advanceSlides?: boolean;
+    onEnded?: () => Promise<void> | void;
   }) => {
     try {
       setError(null);
       setIsSynthesizingSpeech(true);
       const speechRequestVersion = speechRequestVersionRef.current;
-      const result = await synthesizeSpeech(sessionId, input);
+      const result =
+        input.text && (input.style ?? "narration") === "answer"
+          ? await prefetchAnswerSpeech(input.text)
+          : await synthesizeSpeech(sessionId, input);
 
       if (speechRequestVersion !== speechRequestVersionRef.current) {
         return;
@@ -803,6 +1025,9 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           result.source.type !== "narration_segment" ||
           playbackSequenceRef.current !== playbackSequenceId
         ) {
+          if (input.onEnded) {
+            await input.onEnded();
+          }
           return;
         }
 
@@ -876,6 +1101,10 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         } catch (playbackError) {
           setError((playbackError as Error).message);
         }
+
+        if (input.onEnded) {
+          await input.onEnded();
+        }
       };
       audio.onerror = () => {
         setIsPlayingSpeech(false);
@@ -928,7 +1157,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         });
         setState((previous) => (previous ? applyUpdate(previous, result) : previous));
 
-        if (autoPlaySpeech) {
+        if (narrationAutoPlay) {
           await playSpeech({
             slideId: activeSlide.id,
             narrationIndex: nextNarrationIndex,
@@ -954,6 +1183,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       try {
         setError(null);
         setIsInteracting(true);
+        disarmLiveVoiceMode();
         stopActiveAudio();
         setPendingUserTurn(userText);
         setInteractionLog((previous) => [
@@ -961,23 +1191,9 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           { role: "user", text: userText },
         ]);
         const result = await interactWithSession(sessionId, userText);
-        setState((previous) => (previous ? applyUpdate(previous, result) : previous));
-        const assistantMessage = result.assistantMessage?.trim();
-        if (assistantMessage) {
-          setInteractionLog((previous) => [
-            ...previous,
-            { role: "assistant", text: assistantMessage },
-          ]);
-        }
+        await applyInteractionResponse(result);
         setPendingUserTurn(null);
         setCommandInput("");
-
-        if (assistantMessage && autoPlaySpeech) {
-          await playSpeech({
-            text: assistantMessage,
-            style: "answer",
-          });
-        }
       } catch (interactionError) {
         setError((interactionError as Error).message);
       } finally {
@@ -987,24 +1203,136 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     });
   };
 
+  const startPresentationPlayback = async () => {
+    setError(null);
+    stopActiveAudio();
+    const result = await interactWithSession(sessionId, "continue");
+    setState((previous) => (previous ? applyUpdate(previous, result) : previous));
+
+    if (result.assistantMessage?.trim()) {
+      setInteractionLog((previous) => [
+        ...previous,
+        { role: "assistant", text: result.assistantMessage },
+      ]);
+    }
+
+    if (!result.session.currentSlideId) {
+      return;
+    }
+
+    await playSpeech({
+      slideId: result.session.currentSlideId,
+      narrationIndex: result.session.currentNarrationIndex,
+      style: "narration",
+      continueSequence: true,
+      advanceSlides: narrationAutoPlay,
+    });
+  };
+
+  useEffect(() => {
+    if (!pendingPresentationStart || !isDeckNarrationReady || isPresenting) {
+      return;
+    }
+
+    let cancelled = false;
+
+    startTransition(async () => {
+      try {
+        await startPresentationPlayback();
+        if (!cancelled) {
+          setPendingPresentationStart(false);
+        }
+      } catch (interactionError) {
+        if (!cancelled) {
+          setError((interactionError as Error).message);
+          setPendingPresentationStart(false);
+        }
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isDeckNarrationReady, isPresenting, pendingPresentationStart, sessionId]);
+
   const togglePresenting = () => {
     startTransition(async () => {
       try {
-        setError(null);
-        stopActiveAudio();
-        const result = await interactWithSession(
-          sessionId,
-          isPresenting ? "stop" : "continue",
-        );
-        setState((previous) => (previous ? applyUpdate(previous, result) : previous));
-        if (result.assistantMessage?.trim()) {
-          setInteractionLog((previous) => [
-            ...previous,
-            { role: "assistant", text: result.assistantMessage },
-          ]);
+        if (pendingPresentationStart) {
+          setPendingPresentationStart(false);
+          return;
         }
+
+        if (isPresenting) {
+          setError(null);
+          stopActiveAudio();
+          const result = await interactWithSession(sessionId, "stop");
+          setState((previous) => (previous ? applyUpdate(previous, result) : previous));
+
+          if (result.assistantMessage?.trim()) {
+            setInteractionLog((previous) => [
+              ...previous,
+              { role: "assistant", text: result.assistantMessage },
+            ]);
+          }
+
+          return;
+        }
+
+        if (!isDeckNarrationReady) {
+          setPendingPresentationStart(true);
+          return;
+        }
+
+        await startPresentationPlayback();
       } catch (interactionError) {
         setError((interactionError as Error).message);
+      }
+    });
+  };
+
+  const restartPresentationFromBeginning = () => {
+    const firstSlide = slides[0];
+
+    if (!firstSlide) {
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        setError(null);
+        disarmLiveVoiceMode();
+        stopActiveAudio();
+        setPendingPresentationStart(false);
+
+        if (isPresenting) {
+          const stopResult = await interactWithSession(sessionId, "stop");
+          setState((previous) =>
+            previous ? applyUpdate(previous, stopResult) : previous,
+          );
+        }
+
+        const selectionResult = await selectSlide(sessionId, firstSlide.id);
+        setState((previous) =>
+          previous ? applyUpdate(previous, selectionResult) : previous,
+        );
+
+        const progressResult = await updateNarrationProgress(sessionId, {
+          slideId: firstSlide.id,
+          narrationIndex: 0,
+        });
+        setState((previous) =>
+          previous ? applyUpdate(previous, progressResult) : previous,
+        );
+
+        if (!isDeckNarrationReady) {
+          setPendingPresentationStart(true);
+          return;
+        }
+
+        await startPresentationPlayback();
+      } catch (restartError) {
+        setError((restartError as Error).message);
       }
     });
   };
@@ -1041,6 +1369,43 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
   return (
     <main className="min-h-screen bg-ink px-4 py-5 text-paper md:px-8 md:py-8">
+      {showBlockingOverlay ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/72 px-6 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-slate-950/90 px-6 py-6 shadow-2xl">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex h-10 w-10 animate-spin rounded-full border-[3px] border-white/15 border-t-coral" />
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-paper/55">
+                  Working
+                </p>
+                <p className="mt-1 text-xl font-semibold text-paper">
+                  {workingOverlayTitle}
+                </p>
+              </div>
+            </div>
+            <p className="mt-4 text-sm leading-6 text-paper/75">
+              {workingOverlayMessage}
+            </p>
+            {slides.length > 0 ? (
+              <div className="mt-5">
+                <div className="h-2 overflow-hidden rounded-full bg-white/8">
+                  <div
+                    className="h-full rounded-full bg-coral transition-[width] duration-300"
+                    style={{
+                      width: `${Math.round(
+                        (narrationReadySlideCount / Math.max(slides.length, 1)) * 100,
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-3 text-xs uppercase tracking-[0.18em] text-paper/45">
+                  {narrationReadySlideCount} / {slides.length} slides ready
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex flex-col gap-4 rounded-[30px] border border-white/10 bg-white/5 p-5 md:flex-row md:items-center md:justify-between">
           <div>
@@ -1074,6 +1439,13 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           </div>
         ) : null}
 
+        {!pendingPresentationStart && !isDeckNarrationReady ? (
+          <div className="mb-5 rounded-[20px] border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-paper/85">
+            Preparing narration in the background. {narrationReadySlideCount} of{" "}
+            {slides.length} slides are ready.
+          </div>
+        ) : null}
+
         {activeSlide ? (
           <section className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_360px]">
             <div className="rounded-[32px] bg-white p-4 text-ink shadow-2xl md:p-6">
@@ -1102,6 +1474,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                 <VisualSlideCanvas
                   slide={activeSlide}
                   illustrationAsset={activeIllustration}
+                  theme={deckTheme}
                 />
                 {illustrationLoadingSlideId === activeSlide.id ? (
                   <p className="mt-3 text-sm text-slate-500">Resolving slide illustration...</p>
@@ -1180,13 +1553,19 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                   <PresenterControls
                     canGoBack={currentSlideIndex > 0}
                     canGoForward={currentSlideIndex < slides.length - 1}
+                    isBusy={pendingPresentationStart}
                     isPresenting={isPresenting}
                     onBack={() => handleSelectSlide(Math.max(currentSlideIndex - 1, 0))}
                     onForward={() =>
                       handleSelectSlide(Math.min(currentSlideIndex + 1, slides.length - 1))
                     }
                     onTogglePresenting={togglePresenting}
+                    presentLabel={presentButtonLabel}
                   />
+                  <p className="mt-3 text-sm leading-6 text-paper/60">
+                    Slide controls move between slides. Point controls below only move within
+                    the current slide&apos;s narration.
+                  </p>
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -1228,7 +1607,8 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     disabled={
                       !activeSlide ||
                       narrationLoadingSlideId === activeSlide.id ||
-                      isSynthesizingSpeech
+                      isSynthesizingSpeech ||
+                      pendingPresentationStart
                     }
                     onClick={() =>
                       void playSpeech({
@@ -1236,7 +1616,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                         narrationIndex: currentNarrationIndex,
                         style: "narration",
                         continueSequence: true,
-                        advanceSlides: autoPlaySpeech,
+                        advanceSlides: narrationAutoPlay,
                       })
                     }
                     type="button"
@@ -1252,17 +1632,18 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     Stop audio
                   </button>
                   <button
-                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                      autoPlaySpeech
-                        ? "bg-white text-ink"
-                        : "border border-white/20 text-paper hover:border-white/40"
-                    }`}
-                    onClick={() => setAutoPlaySpeech((previous) => !previous)}
+                    className="rounded-full border border-white/20 px-4 py-2 text-sm transition hover:border-white/40 disabled:opacity-50"
+                    disabled={slides.length === 0 || pendingPresentationStart}
+                    onClick={restartPresentationFromBeginning}
                     type="button"
                   >
-                    {autoPlaySpeech ? "Auto-play on" : "Auto-play off"}
+                    Restart from beginning
                   </button>
                 </div>
+                <p className="mt-3 text-sm leading-6 text-paper/60">
+                  Narration continues automatically. After a spoken answer, the presenter
+                  bridges back into the deck and resumes from the current point.
+                </p>
                 {lastSpokenText ? (
                   <p className="mt-3 text-sm leading-6 text-paper/65">
                     Last spoken: {lastSpokenText}
@@ -1289,7 +1670,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                   </button>
                   <button
                     className="rounded-full border border-white/20 px-4 py-2 text-sm transition hover:border-white/40 disabled:opacity-50"
-                    disabled={isSubmittingVoice}
+                    disabled={isSubmittingVoice || isListeningBrowserVoice || isInteracting}
                     onClick={() => {
                       handleBackendVoiceRecording();
                     }}
@@ -1305,7 +1686,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                 <p className="mt-3 text-sm leading-6 text-paper/60">
                   {browserSpeechSupported
                     ? liveVoiceMode
-                      ? "Browser speech recognition is armed for live interruption testing. One-shot questions use backend STT."
+                      ? "Browser speech recognition is armed for live interruption testing. It disarms automatically when a question is sent."
                       : "Record question uses backend STT. Live voice remains available for interruption-style browser testing."
                     : "Browser speech recognition is not available here. Record question uses backend server-side STT."}
                 </p>
@@ -1459,6 +1840,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     slide={slide}
                     dark
                     illustrationAsset={illustrationsBySlideId[slide.id]}
+                    theme={deckTheme}
                   />
                 </div>
               </button>

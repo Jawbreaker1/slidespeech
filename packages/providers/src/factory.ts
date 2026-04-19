@@ -3,6 +3,7 @@ import type {
   SlideIllustrationProvider,
   SpeechToTextProvider,
   TextToSpeechProvider,
+  VisionProvider,
   VoiceActivityProvider,
   WebResearchProvider,
 } from "@slidespeech/types";
@@ -19,16 +20,23 @@ import {
 import { MockSTTProvider } from "./stt/mock-stt-provider";
 import { MockTTSProvider } from "./tts/mock-tts-provider";
 import {
+  PIPER_TTS_DEFAULTS,
+  PiperTTSProvider,
+} from "./tts/piper-tts-provider";
+import {
   SYSTEM_TTS_DEFAULTS,
   SystemTTSProvider,
 } from "./tts/system-tts-provider";
 import { MockVADProvider } from "./vad/mock-vad-provider";
+import { LMStudioVisionProvider } from "./vision/lmstudio-vision-provider";
+import { MockVisionProvider } from "./vision/mock-vision-provider";
 import { HostedWebResearchProvider } from "./web-research/hosted-web-research-provider";
 import { MockWebResearchProvider } from "./web-research/mock-web-research-provider";
 
 export interface ProviderFactoryConfig {
   llmProvider: "mock" | "lmstudio" | "openai-compatible" | "hosted";
   illustrationProvider: "mock" | "hosted";
+  visionProvider: "mock" | "lmstudio" | "hosted";
   sttProvider: "mock" | "faster-whisper" | "hosted";
   ttsProvider: "mock" | "piper" | "system" | "hosted";
   vadProvider: "mock" | "silero";
@@ -38,10 +46,16 @@ export interface ProviderFactoryConfig {
   fasterWhisperComputeType: string;
   fasterWhisperBeamSize: number;
   fasterWhisperLanguage: string;
+  piperTtsPythonBin: string;
+  piperTtsModelPath: string;
+  piperTtsConfigPath: string;
+  piperTtsSpeakerId?: number;
+  piperTtsSentenceSilenceMs: number;
   systemTtsVoice: string;
   systemTtsRateWpm: number;
   lmstudioBaseUrl: string;
   lmstudioModel: string;
+  lmstudioVisionModel: string;
   lmstudioApiKey?: string | undefined;
   llmTimeoutMs: number;
   fallbackToMockOnError: boolean;
@@ -95,17 +109,51 @@ export const createIllustrationProvider = (
   config: Pick<
     ProviderFactoryConfig,
     "illustrationProvider" | "webResearchTimeoutMs"
-  > & { webResearchProvider: WebResearchProvider },
+  > & {
+    webResearchProvider: WebResearchProvider;
+    visionProvider?: VisionProvider | undefined;
+  },
 ): SlideIllustrationProvider => {
   switch (config.illustrationProvider) {
     case "hosted":
       return new HostedIllustrationProvider({
         webResearchProvider: config.webResearchProvider,
         timeoutMs: config.webResearchTimeoutMs,
+        ...(config.visionProvider ? { visionProvider: config.visionProvider } : {}),
       });
     case "mock":
     default:
       return new MockIllustrationProvider();
+  }
+};
+
+export const createVisionProvider = (
+  config: Pick<
+    ProviderFactoryConfig,
+    | "visionProvider"
+    | "lmstudioBaseUrl"
+    | "lmstudioModel"
+    | "lmstudioVisionModel"
+    | "lmstudioApiKey"
+    | "llmTimeoutMs"
+  >,
+): VisionProvider => {
+  switch (config.visionProvider) {
+    case "lmstudio":
+    case "hosted":
+      return new LMStudioVisionProvider({
+        baseUrl: config.lmstudioBaseUrl,
+        model:
+          config.lmstudioVisionModel &&
+          config.lmstudioVisionModel !== "local-vision-model"
+            ? config.lmstudioVisionModel
+            : config.lmstudioModel,
+        ...(config.lmstudioApiKey ? { apiKey: config.lmstudioApiKey } : {}),
+        timeoutMs: config.llmTimeoutMs,
+      });
+    case "mock":
+    default:
+      return new MockVisionProvider();
   }
 };
 
@@ -148,10 +196,30 @@ export const createSpeechToTextProvider = (
 export const createTextToSpeechProvider = (
   config: Pick<
     ProviderFactoryConfig,
-    "ttsProvider" | "systemTtsVoice" | "systemTtsRateWpm"
+    | "ttsProvider"
+    | "systemTtsVoice"
+    | "systemTtsRateWpm"
+    | "piperTtsPythonBin"
+    | "piperTtsModelPath"
+    | "piperTtsConfigPath"
+    | "piperTtsSpeakerId"
+    | "piperTtsSentenceSilenceMs"
   >,
 ): TextToSpeechProvider => {
   switch (config.ttsProvider) {
+    case "piper":
+      return new PiperTTSProvider({
+        pythonBin: config.piperTtsPythonBin || PIPER_TTS_DEFAULTS.pythonBin,
+        modelPath: config.piperTtsModelPath || PIPER_TTS_DEFAULTS.modelPath,
+        configPath:
+          config.piperTtsConfigPath || PIPER_TTS_DEFAULTS.configPath,
+        sentenceSilenceMs:
+          config.piperTtsSentenceSilenceMs ||
+          PIPER_TTS_DEFAULTS.sentenceSilenceMs,
+        ...(config.piperTtsSpeakerId !== undefined
+          ? { speakerId: config.piperTtsSpeakerId }
+          : {}),
+      });
     case "system":
       return new SystemTTSProvider({
         voice: config.systemTtsVoice || SYSTEM_TTS_DEFAULTS.voice,

@@ -81,9 +81,22 @@ test("narration validation reanchors narration that is not tied to the slide", (
         visuals: {
           layoutTemplate: "hero-focus",
           accentColor: "1C7C7D",
-          cards: [],
+          cards: [
+            {
+              id: "card_generic_1",
+              title: "Key point 1",
+              body: "Essential ingredients shape the balance, texture, or overall character of making the perfect salsa dip.",
+              tone: "accent",
+            },
+          ],
           callouts: [],
-          diagramNodes: [],
+          diagramNodes: [
+            {
+              id: "node_generic_1",
+              label: "Essential ingredients shape the balance, texture, or overall character of making the perfect salsa dip.",
+              tone: "info",
+            },
+          ],
           diagramEdges: [],
           imageSlots: [],
         },
@@ -181,10 +194,888 @@ test("narration validation rebuilds audience-facing narration without slide-meta
 
   const result = validateAndRepairNarrations(deck, [weakNarration]);
   const narration = result.value[0]?.narration ?? "";
+  const repairedNarration = result.value[0];
 
   assert.equal(result.repaired, true);
-  assert.doesNotMatch(narration, /on this slide|first key point/i);
-  assert.match(narration, /System Verification|QA operations|delivery/i);
+  assert.ok(repairedNarration);
+  assert.notEqual(narration, weakNarration.narration);
+  assert.equal(repairedNarration.segments.length >= 4, true);
+  assert.equal(narration.length > weakNarration.narration.length, true);
+});
+
+test("repaired narration keeps transition metadata separate from played segments", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_transition",
+    title: "AI tools at VGR",
+    topic: "AI tools in daily work",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "AI tools in daily work",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_transition_1",
+        order: 0,
+        title: "Using AI as a drafting assistant",
+        learningGoal: "Understand where AI drafting support helps without replacing judgement.",
+        keyPoints: [
+          "AI drafting speeds up first-pass summaries and planning notes.",
+          "Human review still decides what is accurate, useful, and safe to share.",
+          "Sensitive information needs the same data-handling discipline as any other work.",
+        ],
+        beginnerExplanation:
+          "AI works best here as a fast first draft, not as an automatic decision-maker.",
+        advancedExplanation:
+          "The value comes from reducing repetitive drafting work while keeping accountability with the team.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_transition_2",
+        order: 1,
+        title: "Evaluating output safely",
+        learningGoal: "Check AI output against quality and policy constraints.",
+        keyPoints: [
+          "Teams compare generated output with approved source material.",
+          "Quality checks catch hallucinations and unsafe wording before reuse.",
+          "The workflow stays accountable because review happens before adoption.",
+        ],
+        beginnerExplanation:
+          "The next step is to verify what the tool produced before anyone relies on it.",
+        advancedExplanation:
+          "Safe adoption depends on review discipline rather than model confidence alone.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T10:00:00.000Z",
+    updatedAt: "2026-04-18T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const weakNarration = SlideNarrationSchema.parse({
+    slideId: "slide_transition_1",
+    narration:
+      "On this slide, the first key point is that AI drafting speeds up first-pass summaries and planning notes.",
+    segments: [
+      "On this slide, the first key point is that AI drafting speeds up first-pass summaries and planning notes.",
+    ],
+    summaryLine: "Weak narration",
+    promptsForPauses: [],
+    suggestedTransition: "Continue.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [weakNarration]);
+  const repaired = result.value[0];
+
+  assert.ok(repaired);
+  assert.equal(repaired.segments.length >= 4, true);
+  assert.equal(
+    repaired.segments.some((segment) => /evaluating output safely/i.test(segment)),
+    false,
+  );
+  assert.match(repaired.suggestedTransition, /Evaluating output safely/i);
+});
+
+test("well-anchored narration is not reanchored just because it shares one visible phrase", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_anchor",
+    title: "AI tools at VGR",
+    topic: "AI tools in daily work",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "AI tools in daily work",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_anchor_intro",
+        order: 0,
+        title: "Introduction",
+        learningGoal: "Set up the topic.",
+        keyPoints: [
+          "AI support changes daily work by speeding up drafting and comparison tasks.",
+          "Teams still review outputs before using them in real decisions.",
+          "The useful question is where the tool saves time without creating risk.",
+        ],
+        beginnerExplanation:
+          "This opening slide explains why AI support matters in practical work.",
+        advancedExplanation:
+          "The talk frames AI as a productivity aid that still depends on accountable review.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_anchor_focus",
+        order: 1,
+        title: "AI drafting in project work",
+        learningGoal: "See where AI drafting support helps and where judgement still matters.",
+        keyPoints: [
+          "AI drafting speeds up first-pass summaries and planning notes.",
+          "Human review still decides what is accurate, useful, and safe to share.",
+          "Sensitive information needs the same data-handling discipline as any other work.",
+        ],
+        beginnerExplanation:
+          "The slide shows AI as a drafting aid that saves time without replacing judgement.",
+        advancedExplanation:
+          "A strong workflow combines drafting speed with review, accountability, and data discipline.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T10:00:00.000Z",
+    updatedAt: "2026-04-18T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const goodNarration = SlideNarrationSchema.parse({
+    slideId: "slide_anchor_focus",
+    narration:
+      "AI drafting speeds up first-pass summaries and planning notes. In practice, that matters because teams can compare ideas faster before they commit to a final plan. The important boundary is that people still review what is accurate, useful, and safe to share.",
+    segments: [
+      "AI drafting speeds up first-pass summaries and planning notes.",
+      "In practice, that matters because teams can compare ideas faster before they commit to a final plan.",
+      "The important boundary is that people still review what is accurate, useful, and safe to share.",
+    ],
+    summaryLine: "AI drafting support",
+    promptsForPauses: [],
+    suggestedTransition: "Bridge clearly into the next slide.",
+  });
+
+  const isolatedResult = validateAndRepairNarrations(deck, [goodNarration], {
+    generateMissing: false,
+  });
+
+  assert.equal(isolatedResult.repaired, false);
+  assert.equal(isolatedResult.value[0]?.narration, goodNarration.narration);
+});
+
+test("well-anchored narration remains stable for Swedish slide content", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_sv",
+    title: "AI-stöd i Västra Götalandsregionen",
+    topic: "AI-stöd i dagligt arbete",
+    summary: "Sammanfattning",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "AI-stöd i dagligt arbete",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_sv_intro",
+        order: 0,
+        title: "AI som skrivstöd i projektarbete",
+        learningGoal: "Se var AI-stöd hjälper i textarbete utan att ersätta omdöme.",
+        keyPoints: [
+          "AI-stöd snabbar upp första utkast och planeringsanteckningar.",
+          "Mänsklig granskning avgör fortfarande vad som är korrekt och säkert att dela.",
+          "Känslig information kräver samma disciplin som i annat kvalitetsarbete.",
+        ],
+        beginnerExplanation:
+          "Poängen är att använda AI som ett snabbt första steg, inte som en automatisk beslutsfattare.",
+        advancedExplanation:
+          "Ett hållbart arbetssätt kombinerar snabbare skrivarbete med tydligt ansvar för granskning.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_sv_next",
+        order: 1,
+        title: "Kontroll före användning",
+        learningGoal: "Kontrollera AI-utkast innan någon använder dem i skarpa beslut.",
+        keyPoints: [
+          "Teamet jämför AI-utkast med godkänt källmaterial.",
+          "Granskning fångar hallucinationer och osäker formulering innan återanvändning.",
+          "Arbetsflödet är säkert först när någon tar ansvar för kontrollen.",
+        ],
+        beginnerExplanation:
+          "Nästa steg är att kontrollera det verktyget producerade innan någon litar på det.",
+        advancedExplanation:
+          "Säker användning beror på granskningsdisciplin snarare än modellens självförtroende.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T10:00:00.000Z",
+    updatedAt: "2026-04-18T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "sv",
+    },
+  });
+
+  const goodNarration = SlideNarrationSchema.parse({
+    slideId: "slide_sv_intro",
+    narration:
+      "AI-stöd snabbar upp första utkast och planeringsanteckningar. I praktiken betyder det att teamet kan jämföra idéer snabbare innan någon låser en slutlig plan. Den viktiga gränsen är att människor fortfarande granskar vad som är korrekt och säkert att dela.",
+    segments: [
+      "AI-stöd snabbar upp första utkast och planeringsanteckningar.",
+      "I praktiken betyder det att teamet kan jämföra idéer snabbare innan någon låser en slutlig plan.",
+      "Den viktiga gränsen är att människor fortfarande granskar vad som är korrekt och säkert att dela.",
+      "Det gör AI till ett stöd i arbetet snarare än en ersättning för omdöme.",
+    ],
+    summaryLine: "AI som skrivstöd",
+    promptsForPauses: [],
+    suggestedTransition: "Gå vidare till nästa del.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [goodNarration], {
+    generateMissing: false,
+  });
+
+  assert.equal(result.repaired, false);
+  assert.equal(result.value[0]?.narration, goodNarration.narration);
+});
+
+test("repaired narration prefers concrete speaker notes and examples over slide-goal phrasing", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_priority",
+    title: "Salsa structure",
+    topic: "Making the perfect salsa dip",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Making the perfect salsa dip",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_salsa_intro",
+        order: 0,
+        title: "Opening",
+        learningGoal: "See which ingredients, steps, and final adjustments define making the perfect salsa dip.",
+        keyPoints: [
+          "Fresh tomatoes and lime give the salsa brightness before any seasoning changes the balance.",
+          "Salt and rest time control how much moisture stays in the bowl.",
+          "Final tasting decides whether the dip needs more acid, heat, or herbs.",
+        ],
+        speakerNotes: [
+          "Start with the practical picture: if the tomatoes are watery, the whole bowl feels flat before you even adjust the seasoning.",
+          "Point out that resting the salsa is not decoration. It is what lets salt and acid settle into the vegetables.",
+        ],
+        beginnerExplanation:
+          "This slide frames the ingredients, method, and final adjustment as one practical sequence.",
+        advancedExplanation:
+          "The quality of the final bowl depends on moisture control and staged tasting rather than one secret ingredient.",
+        examples: [
+          "A batch with Roma tomatoes usually holds together better than one made with very watery tomatoes.",
+        ],
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_salsa_next",
+        order: 1,
+        title: "Rest and taste",
+        learningGoal: "See why resting and tasting change the result.",
+        keyPoints: [
+          "Resting gives the chopped vegetables time to release and redistribute moisture.",
+          "Tasting after a short rest reveals whether the lime or salt is still out of balance.",
+          "A final herb adjustment should happen only after the base flavor is stable.",
+        ],
+        beginnerExplanation:
+          "The next slide shows why waiting a little changes what the salsa tastes like.",
+        advancedExplanation:
+          "Rest time changes texture and flavor integration before the final correction step.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-19T10:00:00.000Z",
+    updatedAt: "2026-04-19T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const weakNarration = SlideNarrationSchema.parse({
+    slideId: "slide_salsa_intro",
+    narration: "See which ingredients, steps, and final adjustments define making the perfect salsa dip.",
+    segments: [
+      "See which ingredients, steps, and final adjustments define making the perfect salsa dip.",
+    ],
+    summaryLine: "Weak intro",
+    promptsForPauses: [],
+    suggestedTransition: "Continue.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [weakNarration], {
+    generateMissing: false,
+  });
+
+  const repaired = result.value[0];
+  assert.ok(repaired);
+  assert.equal(result.repaired, true);
+  assert.equal(
+    repaired.segments.some((segment) =>
+      /watery|resting the salsa|roma tomatoes|moisture control/i.test(segment),
+    ),
+    true,
+  );
+  assert.equal(
+    repaired.segments.some((segment) =>
+      /see which ingredients, steps, and final adjustments define/i.test(segment),
+    ),
+    false,
+  );
+});
+
+test("intro narration repair can borrow concrete detail from later slides when the intro copy is generic", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_intro_deck_support",
+    title: "Salsa structure",
+    topic: "Making the perfect salsa dip",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Making the perfect salsa dip",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_intro_generic",
+        order: 0,
+        title: "Making the perfect salsa dip",
+        learningGoal: "See which ingredients, steps, and final adjustments define making the perfect salsa dip.",
+        keyPoints: [
+          "The starting ingredients and inputs shape making the perfect salsa dip before any main steps begin.",
+          "The sequence of preparation steps changes texture, balance, and consistency.",
+          "Final tasting and adjustment determine when making the perfect salsa dip is ready.",
+        ],
+        beginnerExplanation:
+          "This opening slide frames the ingredients, method, and final adjustment as one practical sequence.",
+        advancedExplanation:
+          "The final bowl depends on moisture control and staged tasting rather than one secret ingredient.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_intro_support",
+        order: 1,
+        title: "Essential ingredients",
+        learningGoal: "See which inputs shape the flavor, balance, and texture of making the perfect salsa dip.",
+        keyPoints: [
+          "Fresh lime and ripe tomatoes create the bright base flavor.",
+          "Salt controls how much moisture stays in the bowl.",
+          "The chili choice changes whether the salsa lands sharp or smoky.",
+        ],
+        speakerNotes: [
+          "If the tomatoes are watery, the whole bowl feels flat before seasoning can rescue it.",
+        ],
+        beginnerExplanation:
+          "The right ingredients create balance before any final adjustment happens.",
+        advancedExplanation:
+          "Moisture control and acidity determine whether the texture stays cohesive.",
+        examples: [
+          "Roma tomatoes usually hold together better than very watery salad tomatoes.",
+        ],
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-19T10:00:00.000Z",
+    updatedAt: "2026-04-19T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const weakNarration = SlideNarrationSchema.parse({
+    slideId: "slide_intro_generic",
+    narration: "See which ingredients, steps, and final adjustments define making the perfect salsa dip.",
+    segments: [
+      "See which ingredients, steps, and final adjustments define making the perfect salsa dip.",
+    ],
+    summaryLine: "Weak intro",
+    promptsForPauses: [],
+    suggestedTransition: "Continue.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [weakNarration], {
+    generateMissing: false,
+  });
+
+  const repaired = result.value[0];
+  assert.ok(repaired);
+  assert.equal(result.repaired, true);
+  assert.equal(
+    repaired.segments.some((segment) =>
+      /watery|roma tomatoes|moisture control/i.test(segment),
+    ),
+    true,
+  );
+  assert.equal(
+    repaired.segments.some((segment) =>
+      /see which ingredients, steps, and final adjustments define/i.test(segment),
+    ),
+    false,
+  );
+});
+
+test("intro narration repair prefers unique later-slide examples over repeated deck boilerplate", () => {
+  const repeatedDeckLine =
+    "Whether you need expert support, project-specific QA, or strategic insights, we help you optimize software quality and move forward safely.";
+
+  const deck = DeckSchema.parse({
+    id: "deck_narration_intro_repetition",
+    title: "System Verification",
+    topic: "System Verification",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "System Verification",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_sv_intro_generic",
+        order: 0,
+        title: "System Verification",
+        learningGoal: "See what System Verification is and why it matters.",
+        keyPoints: [
+          "Core systems and focus areas is one concrete way to understand System Verification.",
+          "Real-world applications is one concrete way to understand System Verification.",
+          "Define System Verification and its role in ensuring software quality and safety.",
+        ],
+        beginnerExplanation:
+          "This opening slide frames the definition, scope, and importance of System Verification.",
+        advancedExplanation:
+          "The opening slide establishes the concept before moving into concrete use cases.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_sv_generic_1",
+        order: 1,
+        title: "Core systems and focus areas",
+        learningGoal: "See the key components and focus areas of System Verification.",
+        keyPoints: [repeatedDeckLine],
+        examples: [repeatedDeckLine],
+        beginnerExplanation: repeatedDeckLine,
+        advancedExplanation: repeatedDeckLine,
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_sv_generic_2",
+        order: 2,
+        title: "Real-world applications",
+        learningGoal: "See how System Verification appears in practice.",
+        keyPoints: [repeatedDeckLine],
+        examples: [repeatedDeckLine],
+        beginnerExplanation: repeatedDeckLine,
+        advancedExplanation: repeatedDeckLine,
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_sv_unique_example",
+        order: 3,
+        title: "Operational examples",
+        learningGoal: "See concrete verification examples.",
+        keyPoints: [
+          "Verification catches risky data changes before they spread into production.",
+          "Automation provides repeatable evidence rather than one-off judgement calls.",
+          "Teams can spot drift earlier when checks run continuously.",
+        ],
+        speakerNotes: [
+          "Focus on the mechanism of validation: how raw data becomes trusted information.",
+          "Highlight the operational consequence when verification is skipped.",
+        ],
+        examples: [
+          "Automated scripts can verify database integrity during a migration before users are affected.",
+          "A new server cluster can be validated against security policies before it goes live.",
+        ],
+        beginnerExplanation:
+          "The slide turns the concept into concrete checks on systems and data.",
+        advancedExplanation:
+          "Operational verification creates evidence before incidents become user-facing failures.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-19T10:00:00.000Z",
+    updatedAt: "2026-04-19T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const weakNarration = SlideNarrationSchema.parse({
+    slideId: "slide_sv_intro_generic",
+    narration: "See what System Verification is and why it matters.",
+    segments: ["See what System Verification is and why it matters."],
+    summaryLine: "Weak intro",
+    promptsForPauses: [],
+    suggestedTransition: "Continue.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [weakNarration], {
+    generateMissing: false,
+  });
+
+  const repaired = result.value[0];
+  assert.ok(repaired);
+  assert.equal(result.repaired, true);
+  assert.equal(
+    repaired.segments.some((segment) =>
+      /server cluster|database integrity|migration/i.test(segment),
+    ),
+    true,
+  );
+  assert.equal(
+    repaired.segments.some((segment) =>
+      /Whether you need expert support, project-specific QA, or strategic insights/i.test(segment),
+    ),
+    false,
+  );
+  assert.equal(
+    repaired.segments.some((segment) =>
+      /Focus on the mechanism|Highlight the operational consequence/i.test(segment),
+    ),
+    false,
+  );
+});
+
+test("missing Swedish narration is rebuilt from slide content without English scaffold phrases", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_sv_missing",
+    title: "AI-stöd i Västra Götalandsregionen",
+    topic: "AI-stöd i dagligt arbete",
+    summary: "Sammanfattning",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "AI-stöd i dagligt arbete",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_sv_missing",
+        order: 0,
+        title: "AI som skrivstöd i projektarbete",
+        learningGoal: "Se var AI-stöd hjälper i textarbete utan att ersätta omdöme.",
+        keyPoints: [
+          "AI-stöd snabbar upp första utkast och planeringsanteckningar.",
+          "Mänsklig granskning avgör fortfarande vad som är korrekt och säkert att dela.",
+          "Känslig information kräver samma disciplin som i annat kvalitetsarbete.",
+        ],
+        beginnerExplanation:
+          "Poängen är att använda AI som ett snabbt första steg, inte som en automatisk beslutsfattare.",
+        advancedExplanation:
+          "Ett hållbart arbetssätt kombinerar snabbare skrivarbete med tydligt ansvar för granskning.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_sv_missing_next",
+        order: 1,
+        title: "Kontroll före användning",
+        learningGoal: "Kontrollera AI-utkast innan någon använder dem i skarpa beslut.",
+        keyPoints: [
+          "Teamet jämför AI-utkast med godkänt källmaterial.",
+          "Granskning fångar hallucinationer och osäker formulering innan återanvändning.",
+          "Arbetsflödet är säkert först när någon tar ansvar för kontrollen.",
+        ],
+        beginnerExplanation:
+          "Nästa steg är att kontrollera det verktyget producerade innan någon litar på det.",
+        advancedExplanation:
+          "Säker användning beror på granskningsdisciplin snarare än modellens självförtroende.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T10:00:00.000Z",
+    updatedAt: "2026-04-18T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "sv",
+    },
+  });
+
+  const result = validateAndRepairNarrations(deck, [], {
+    generateMissing: true,
+  });
+
+  const rebuiltNarration = result.value[0];
+  assert.ok(rebuiltNarration);
+  assert.equal(result.repaired, true);
+  assert.equal((rebuiltNarration?.segments.length ?? 0) >= 4, true);
+  assert.match(rebuiltNarration?.narration ?? "", /AI-stöd|granskning|kvalitetsarbete/u);
+  assert.doesNotMatch(
+    rebuiltNarration?.narration ?? "",
+    /today i want to orient you|a practical point here is that|another thing to notice is that|this also means that/i,
+  );
+});
+
+test("over-segmented narration is rebuilt into a bounded number of spoken beats", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_segment_limit",
+    title: "System Verification onboarding",
+    topic: "System Verification",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "System Verification",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_segment_limit",
+        order: 0,
+        title: "System Verification",
+        learningGoal:
+          "See how system Verification supports software reliability and compliance.",
+        keyPoints: [
+          "System verification confirms that software behaves as intended before release.",
+          "The process reduces delivery risk by catching failures before they spread.",
+          "Reliable verification supports compliance, trust, and operational stability.",
+        ],
+        beginnerExplanation:
+          "The main idea is that structured verification turns quality from guesswork into evidence.",
+        advancedExplanation:
+          "Verification connects requirements, implementation checks, and release confidence into one disciplined flow.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T10:00:00.000Z",
+    updatedAt: "2026-04-18T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const overSegmentedNarration = SlideNarrationSchema.parse({
+    slideId: "slide_segment_limit",
+    narration:
+      "Welcome everyone. System verification matters. It reduces risk. It catches failures. It supports compliance. It builds trust. It protects releases.",
+    segments: [
+      "Welcome everyone.",
+      "System verification matters.",
+      "It reduces risk.",
+      "It catches failures.",
+      "It supports compliance.",
+      "It builds trust.",
+      "It protects releases.",
+    ],
+    summaryLine: "Too many beats",
+    promptsForPauses: [],
+    suggestedTransition: "Continue.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [overSegmentedNarration], {
+    generateMissing: false,
+  });
+
+  const repairedNarration = result.value[0];
+  assert.ok(repairedNarration);
+  assert.equal(result.repaired, true);
+  assert.equal((repairedNarration?.segments.length ?? 0) <= 6, true);
 });
 
 test("deck validation rewrites meta presentation slides into topic-facing content", () => {
@@ -502,6 +1393,124 @@ test("deck-wide meta repair preserves slide-specific facts when they exist", () 
   assert.match(
     repairedSlide?.visuals.imagePrompt ?? "",
     /Global QA Operations|Germany|Poland|System Verification/i,
+  );
+});
+
+test("deck validation ignores visual scaffolding when the audience-facing slide text is already clean", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_visual_meta_only",
+    title: "State machines",
+    topic: "State machines",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "State machines",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_visual_meta_only_1",
+        order: 0,
+        title: "Why state machines matter",
+        learningGoal: "See what a state machine is and why it matters in practical systems.",
+        keyPoints: [
+          "A state machine makes behavior easier to reason about when a system can only be in one mode at a time.",
+          "Explicit transitions show what event or condition moves the system into a new state.",
+          "The model reduces ambiguity because valid moves are visible and testable.",
+        ],
+        beginnerExplanation:
+          "A state machine is a simple way to describe how a system changes from one clearly named mode to another.",
+        advancedExplanation:
+          "The structure becomes useful when reliability depends on explicit transitions instead of hidden branching logic.",
+        examples: [
+          "A login flow can move between signed out, waiting for verification, and signed in.",
+        ],
+        likelyQuestions: ["What triggers a transition from one state to another?"],
+        visualNotes: ["Use a clean slide with visible arrows and avoid clutter."],
+        visuals: {
+          layoutTemplate: "three-step-flow",
+          accentColor: "1C7C7D",
+          cards: [
+            {
+              id: "card_visual_meta_only_1",
+              title: "Design cue",
+              body: "Keep the slide visually simple so the arrows stand out.",
+              tone: "neutral",
+            },
+          ],
+          callouts: [
+            {
+              id: "callout_visual_meta_only_1",
+              label: "Presentation note",
+              text: "Use one clear diagram instead of several small screenshots.",
+              tone: "info",
+            },
+          ],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_visual_meta_only_2",
+        order: 1,
+        title: "Transitions keep the logic visible",
+        learningGoal: "See how transitions make system behavior easier to inspect and test.",
+        keyPoints: [
+          "A transition defines the exact event or condition that moves the system from one state to another.",
+          "The explicit path makes it easier to test invalid moves and missing edge cases.",
+          "Visible transitions also make it easier to explain the system to another engineer.",
+        ],
+        beginnerExplanation:
+          "Transitions matter because they show exactly when the system is allowed to change behavior.",
+        advancedExplanation:
+          "Once transitions are explicit, the model can be inspected, tested, and reviewed without guessing hidden control flow.",
+        examples: [
+          "A payment flow might move from pending to authorized only after a gateway confirmation arrives.",
+        ],
+        likelyQuestions: ["Why not just use if-statements everywhere?"],
+        visualNotes: ["Avoid text-heavy slide design and keep the diagram readable."],
+        visuals: {
+          layoutTemplate: "two-column-callouts",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T10:00:00.000Z",
+    updatedAt: "2026-04-18T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const result = validateAndRepairDeck(deck);
+
+  assert.ok(
+    !(result.value.metadata.validation?.issues ?? []).some(
+      (issue) =>
+        issue.code === "deck_wide_meta_presentation_repaired" ||
+        issue.code === "meta_presentation_slide_repaired",
+    ),
+  );
+  assert.ok(
+    (result.value.metadata.validation?.issues ?? []).every(
+      (issue) => issue.code !== "slide_language_repaired",
+    ),
   );
 });
 

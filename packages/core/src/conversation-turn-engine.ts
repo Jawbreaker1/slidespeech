@@ -16,37 +16,22 @@ const matchesAny = (text: string, patterns: RegExp[]): boolean =>
 
 const unique = <T>(items: T[]): T[] => [...new Set(items)];
 
-const looksStructuredEnoughForRules = (text: string): boolean => {
+const looksLikeDirectRuntimeCommand = (text: string): boolean => {
   const normalized = text.trim();
 
   if (!normalized) {
     return true;
   }
 
-  return (
-    /^[a-z\s?!.,'-]+$/i.test(normalized) ||
-    matchesAny(normalized, [
-      /^stop\b/i,
-      /^pause\b/i,
-      /^continue\b/i,
-      /^resume\b/i,
-      /^back\b/i,
-      /go back/i,
-      /previous slide/i,
-      /explain simpler/i,
-      /\bsimpler\b/i,
-      /give .*example/i,
-      /\bexample\b/i,
-      /go deeper/i,
-      /more detail/i,
-      /^repeat\b/i,
-      /say that again/i,
-      /\b(what|why|how|when|where|which|who)\b/i,
-      /\bcan you\b/i,
-      /\bcould you\b/i,
-      /\bwould you\b/i,
-    ])
-  );
+  return matchesAny(normalized, [
+    /^stop\b/i,
+    /^pause\b/i,
+    /^continue\b/i,
+    /^resume\b/i,
+    /^back\b/i,
+    /go back/i,
+    /previous slide/i,
+  ]);
 };
 
 export class RuleBasedConversationTurnEngine implements ConversationTurnEngine {
@@ -249,7 +234,7 @@ export class LLMConversationTurnEngine implements ConversationTurnEngine {
       interruptionType?: InterruptionType | undefined;
     }>;
   }): Promise<ConversationTurnDecision> {
-    if (looksStructuredEnoughForRules(input.text)) {
+    if (looksLikeDirectRuntimeCommand(input.text)) {
       return this.fallback.planTurn(input);
     }
 

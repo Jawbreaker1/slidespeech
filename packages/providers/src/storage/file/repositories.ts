@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -70,6 +70,10 @@ export class FileDeckRepository
   async list(): Promise<Deck[]> {
     return this.listCollection<Deck>("decks");
   }
+
+  async delete(id: string): Promise<void> {
+    await rm(this.pathFor("decks", id), { force: true });
+  }
 }
 
 export class FileSessionRepository
@@ -87,6 +91,10 @@ export class FileSessionRepository
   async list(): Promise<Session[]> {
     return this.listCollection<Session>("sessions");
   }
+
+  async delete(id: string): Promise<void> {
+    await rm(this.pathFor("sessions", id), { force: true });
+  }
 }
 
 export class FileTranscriptRepository
@@ -102,6 +110,13 @@ export class FileTranscriptRepository
     return turns
       .filter((turn) => turn.sessionId === sessionId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  async deleteBySessionId(sessionId: string): Promise<void> {
+    const turns = await this.listBySessionId(sessionId);
+    await Promise.all(
+      turns.map((turn) => rm(this.pathFor("transcripts", turn.id), { force: true })),
+    );
   }
 }
 

@@ -106,6 +106,79 @@ test("sanitizeFetchedFinding trims navigation-heavy trusted explicit sources bef
   assert.match(finding.content, /hälso- och sjukvård|hållbar utveckling|folkhälsa/i);
 });
 
+test("sanitizeFetchedFinding keeps short acronym intent and drops unrelated 'using' language matches", () => {
+  const finding = sanitizeFetchedFinding(
+    "Using AI tools in their daily work",
+    {
+      url: "https://en.cppreference.com/w/cpp/language/using_declaration.html",
+      title: "using-declaration - cppreference.com",
+      content:
+        "In class definition, the name of a previously declared member template of the base class may be reused. A using-declaration introduces a member of a base class into the derived class definition.",
+    },
+  );
+
+  assert.equal(finding, null);
+});
+
+test("sanitizeFetchedFinding preserves AI-specific content even when the key acronym is short", () => {
+  const finding = sanitizeFetchedFinding(
+    "Using AI tools in their daily work",
+    {
+      url: "https://example.com/ai-workflows",
+      title: "AI workflows for project teams",
+      content:
+        "AI tools can summarize requirement documents, draft meeting notes, and suggest test scenarios for project teams. These workflows help reduce repetitive manual effort while keeping human review in the loop.",
+    },
+  );
+
+  assert.ok(finding);
+  assert.match(finding.content, /AI tools can summarize requirement documents/i);
+});
+
+test("sanitizeFetchedFinding drops unrelated shell-tooling content for entertainment named-entity queries", () => {
+  const finding = sanitizeFetchedFinding(
+    "Spongebob squarepants and his adventures in bikinibottom",
+    {
+      url: "https://lib.rs/crates/skim",
+      title: "Skim — command-line utility in Rust",
+      content:
+        'This is particularly useful when piping in input from rg to match on both file name and content. -name "*.rs" | sk -m) This last command lets you select files with the ".rs" extension and opens your selections in Vim. Shell Bindings for Fish, Bash and Zsh are available in the shell directory.',
+    },
+  );
+
+  assert.equal(finding, null);
+});
+
+test("sanitizeFetchedFinding drops taxonomy-heavy fandom menu content for entertainment queries", () => {
+  const finding = sanitizeFetchedFinding(
+    "Nickelodeon official SpongeBob SquarePants character guide Bikini Bottom residents",
+    {
+      url: "https://nickelodeon.fandom.com/wiki/Nickelodeon_Wiki",
+      title: "Nickelodeon | Fandom",
+      content:
+        "Ni Hao, Kai-Lan The Fresh Beat Band Bubble Guppies Shimmer and Shine Movies The Rugrats Movie Jimmy Neutron, Boy Genius The SpongeBob SquarePants Movie Rango The Adventures of Tintin Grow Up, Timmy Turner! Ni Hao, Kai-Lan The Fresh Beat Band Bubble Guppies Shimmer and Shine Movies The Rugrats Movie Jimmy Neutron, Boy Genius The SpongeBob SquarePants Movie Rango The Adventures of Tintin Grow Up, Timmy Turner! READ MORE Sign In Create a Free Account Nickelodeon Explore Main Page Discuss All Pages Community Interactive Maps Recent Blog Posts Shows Nicktoons Rugrats Ren & Stimpy Rocko's Modern Life Hey Arnold! Nickelodeon | Fandom Nickelodeon Nickipedia, the Nickelodeon Wiki Welcome to Nickipedia, a Nickelodeon database that anyone can edit.",
+    },
+  );
+
+  assert.equal(finding, null);
+});
+
+test("sanitizeFetchedFinding keeps informative entertainment prose with named entities", () => {
+  const finding = sanitizeFetchedFinding(
+    "Nickelodeon official SpongeBob SquarePants character guide Bikini Bottom residents",
+    {
+      url: "https://example.com/spongebob-guide",
+      title: "SpongeBob SquarePants character guide",
+      content:
+        "SpongeBob SquarePants is the optimistic fry cook at the center of Bikini Bottom, while Patrick Star brings impulsive energy and Squidward Tentacles provides a more cynical counterpoint. Together they define the tone of the town and its everyday adventures.",
+    },
+  );
+
+  assert.ok(finding);
+  assert.match(finding.content, /SpongeBob SquarePants is the optimistic fry cook/i);
+  assert.match(finding.content, /Patrick Star|Squidward Tentacles/i);
+});
+
 test("buildGuessedKnowledgeUrls generates encyclopedic candidates for specialized named-entity queries", () => {
   const urls = buildGuessedKnowledgeUrls(
     "\"Corrupted Blood\" plague event researchers disease spread World of Warcraft",

@@ -17,7 +17,9 @@ import type {
   TranscriptRepository,
   TranscriptTurn,
   UserInterruption,
+  WebResearchProvider,
 } from "@slidespeech/types";
+import { pickPresentationTheme } from "@slidespeech/types";
 
 import { DEFAULT_PEDAGOGICAL_PROFILE } from "./defaults";
 import {
@@ -31,6 +33,7 @@ import {
   PresentationPlanner,
   PresentationQualityReviewer,
 } from "./planners";
+import { QuestionAnswerService } from "./question-answer-service";
 import { SimpleResumePlanner } from "./resume-planner";
 import { transitionSessionState } from "./state-machine";
 import { createId, nowIso } from "./utils";
@@ -82,6 +85,16 @@ export interface SessionSnapshotResult {
   transcripts: TranscriptTurn[];
 }
 
+const ensureDeckTheme = (deck: Deck): Deck => ({
+  ...deck,
+  metadata: {
+    ...deck.metadata,
+    theme:
+      deck.metadata.theme ??
+      pickPresentationTheme(`${deck.id}:${deck.topic}`),
+  },
+});
+
 type ValidationIssue = {
   code: string;
   message: string;
@@ -95,6 +108,7 @@ type DeckCandidateAssessment = {
   score: number;
   reasons: string[];
   revisionNotes: string[];
+  failingCoreChecks: string[];
 };
 
 const REVIEW_NARRATION_REPAIR_CODE_PATTERN =
@@ -154,8 +168,59 @@ const splitNarrationIntoSegments = (text: string): string[] => {
     .map((segment) => segment.trim())
     .filter(Boolean);
 
+  const splitLongSegment = (segment: string, maxLength = 260): string[] => {
+    if (segment.length <= maxLength) {
+      return [segment];
+    }
+
+    const clausePieces = segment
+      .split(/(?<=[,;:])\s+/)
+      .map((piece) => piece.trim())
+      .filter(Boolean);
+
+    if (clausePieces.length > 1) {
+      const grouped: string[] = [];
+      let current = "";
+
+      for (const piece of clausePieces) {
+        const next = current ? `${current} ${piece}` : piece;
+        if (current && next.length > maxLength) {
+          grouped.push(current);
+          current = piece;
+        } else {
+          current = next;
+        }
+      }
+
+      if (current) {
+        grouped.push(current);
+      }
+
+      if (grouped.every((piece) => piece.length < segment.length)) {
+        return grouped.flatMap((piece) => splitLongSegment(piece, maxLength));
+      }
+    }
+
+    const words = segment.split(/\s+/).filter(Boolean);
+    if (words.length < 8) {
+      return [segment];
+    }
+
+    const midpoint = Math.max(1, Math.floor(words.length / 2));
+    return [
+      words.slice(0, midpoint).join(" "),
+      words.slice(midpoint).join(" "),
+    ].flatMap((piece) => splitLongSegment(piece, maxLength));
+  };
+
+  const rebalanceSegments = (segments: string[]): string[] =>
+    segments
+      .flatMap((segment) => splitLongSegment(segment))
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
   if (sentenceLikeSegments.length > 1) {
-    return sentenceLikeSegments;
+    return rebalanceSegments(sentenceLikeSegments);
   }
 
   const clauseSegments = normalized
@@ -163,7 +228,9 @@ const splitNarrationIntoSegments = (text: string): string[] => {
     .map((segment) => segment.trim())
     .filter(Boolean);
 
-  return clauseSegments.length > 1 ? clauseSegments : [normalized];
+  return clauseSegments.length > 1
+    ? rebalanceSegments(clauseSegments)
+    : rebalanceSegments([normalized]);
 };
 
 const evaluateDeckCandidateForRetry = (
@@ -218,7 +285,8 @@ const evaluateDeckCandidateForRetry = (
       ) && !introSlide.title.toLowerCase().includes(deck.topic.toLowerCase());
     const thinIntro =
       introSlide.keyPoints.length < 3 ||
-      introSlide.beginnerExplanation.trim().length < 90;
+      (introSlide.beginnerExplanation.trim().length < 90 &&
+        introSlide.learningGoal.trim().length < 70);
 
     if (abstractIntro || thinIntro) {
       reasons.push(
@@ -271,6 +339,7 @@ const evaluateDeckCandidateForRetry = (
         check.code === "language_quality") &&
       check.status === "fail",
   );
+  const failingCoreChecks = severeEvaluationWarnings.map((check) => check.code);
   if (severeEvaluationWarnings.length > 0) {
     reasons.push(
       "The generated deck still fails one or more core quality checks for topic focus or opening quality.",
@@ -288,6 +357,7 @@ const evaluateDeckCandidateForRetry = (
     score: reasons.length + (fatal ? 10 : 0),
     reasons,
     revisionNotes: [...new Set(revisionNotes)],
+    failingCoreChecks,
   };
 };
 
@@ -301,18 +371,64 @@ const buildDeckRevisionGuidance = (topic: string, assessment: DeckCandidateAsses
     "Make slide 1 a strong introduction to the actual subject, not an abstract framing slide.",
   ].join(" ");
 
+const CORE_DECK_QUALITY_FAILURE_CODES = new Set([
+  "meta_slide_language",
+  "topic_alignment",
+  "intro_slide_substance",
+  "source_noise_contamination",
+  "language_quality",
+  "prompt_contamination",
+]);
+
+const tryAcceptDeckAfterLocalRepair = (
+  deck: Deck,
+): Deck | null => {
+  const validation = validateAndRepairDeck(deck);
+  if (!validation.repaired) {
+    return null;
+  }
+
+  const heavyRepairIssueCount = validation.issues.filter(
+    (issue) =>
+      issue.code === "deck_wide_meta_presentation_repaired" ||
+      issue.code === "meta_presentation_slide_repaired" ||
+      issue.code === "slide_language_repaired",
+  ).length;
+
+  if (
+    validation.issues.some((issue) => issue.code === "deck_wide_meta_presentation_repaired") ||
+    heavyRepairIssueCount > Math.ceil(validation.value.slides.length / 2)
+  ) {
+    return null;
+  }
+
+  const repairedEvaluation = evaluateDeckQuality(validation.value, []);
+  const stillFailsCoreChecks = repairedEvaluation.checks.some(
+    (check) =>
+      check.status === "fail" && CORE_DECK_QUALITY_FAILURE_CODES.has(check.code),
+  );
+
+  return stillFailsCoreChecks ? null : validation.value;
+};
+
 const ensureNarrationSegments = (narration: SlideNarration): SlideNarration => ({
   ...narration,
-  segments:
+  segments: (
     narration.segments.length > 0
       ? narration.segments
-      : splitNarrationIntoSegments(narration.narration),
+      : splitNarrationIntoSegments(narration.narration)
+  )
+    .flatMap((segment) =>
+      segment.length > 260 ? splitNarrationIntoSegments(segment) : [segment.trim()],
+    )
+    .filter(Boolean),
 });
 
 export class PresentationSessionService {
   private readonly planner: PresentationPlanner;
   private readonly narrationEngine: NarrationEngine;
   private readonly qualityReviewer: PresentationQualityReviewer;
+  private readonly questionAnswerService: QuestionAnswerService;
   private readonly backgroundEnrichmentTasks = new Map<string, Promise<void>>();
 
   constructor(
@@ -322,10 +438,15 @@ export class PresentationSessionService {
     private readonly transcriptRepository: TranscriptRepository,
     private readonly conversationTurnEngine: ConversationTurnEngine = new RuleBasedConversationTurnEngine(),
     private readonly resumePlanner: ResumePlanner = new SimpleResumePlanner(),
+    private readonly webResearchProvider?: WebResearchProvider,
   ) {
     this.planner = new PresentationPlanner(llmProvider);
     this.narrationEngine = new NarrationEngine(llmProvider);
     this.qualityReviewer = new PresentationQualityReviewer(llmProvider);
+    this.questionAnswerService = new QuestionAnswerService(
+      llmProvider,
+      webResearchProvider,
+    );
   }
 
   async createSession(
@@ -414,12 +535,19 @@ export class PresentationSessionService {
                     "The previous draft was not concrete or audience-facing enough.",
                   ],
                   revisionNotes: [],
+                  failingCoreChecks: [],
                 },
               ),
             };
 
       try {
         const candidateDeck = await this.planner.generateDeck(deckAttemptInput);
+        const locallyAcceptedDeck = tryAcceptDeckAfterLocalRepair(candidateDeck);
+        if (locallyAcceptedDeck) {
+          generatedDeck = locallyAcceptedDeck;
+          break;
+        }
+
         const candidateAssessment = evaluateDeckCandidateForRetry(
           candidateDeck,
           input.intent,
@@ -440,7 +568,11 @@ export class PresentationSessionService {
         }
 
         console.warn(
-          `[slidespeech] generated deck attempt ${attemptIndex + 1} for topic "${input.topic}" still needs repair-heavy cleanup: ${candidateAssessment.reasons.join(" | ")}`,
+          `[slidespeech] generated deck attempt ${attemptIndex + 1} for topic "${input.topic}" still needs repair-heavy cleanup: ${candidateAssessment.reasons.join(" | ")}${
+            candidateAssessment.failingCoreChecks.length > 0
+              ? ` | failing checks: ${candidateAssessment.failingCoreChecks.join(", ")}`
+              : ""
+          }`,
         );
       } catch (error) {
         console.warn(
@@ -454,21 +586,16 @@ export class PresentationSessionService {
         `No usable LLM-generated deck was produced for "${input.topic}".`,
       );
     } else if (!generatedDeck) {
-      if (bestDeckAssessment?.fatal) {
+      if (bestDeckAssessment?.fatal || bestDeckAssessment?.retryable) {
         throw new Error(
           `No acceptable LLM-generated deck was produced for "${input.topic}". The best draft still relied on repair-heavy cleanup: ${bestDeckAssessment.reasons.join(" | ")}`,
         );
       }
       generatedDeck = bestGeneratedDeck;
-      if (bestDeckAssessment?.retryable) {
-        console.warn(
-          `[slidespeech] proceeding with the best available deck for topic "${input.topic}" even though it still requires some repair: ${bestDeckAssessment.reasons.join(" | ")}`,
-        );
-      }
     }
 
     const deckValidation = validateAndRepairDeck(generatedDeck);
-    let deck = {
+    let deck = ensureDeckTheme({
       ...deckValidation.value,
       metadata: {
         ...deckValidation.value.metadata,
@@ -478,7 +605,7 @@ export class PresentationSessionService {
           backgroundEnrichmentPending: deckValidation.value.slides.length > 1,
         },
       },
-    };
+    });
 
     const introSlide = deck.slides[0];
     const initialNarrations: SlideNarration[] = [];
@@ -575,47 +702,49 @@ export class PresentationSessionService {
         topic: input.topic,
       });
     } else if (introNarration) {
-      let review;
-
-      try {
-        review = await this.qualityReviewer.review({
-          deck,
-          narrations: [introNarration],
-          pedagogicalProfile,
-        });
-      } catch (error) {
-        console.warn(
-          `[slidespeech] single-slide review fallback for topic "${input.topic}": ${(error as Error).message}`,
-        );
-        review = buildDeterministicReview({
-          deck,
-          validationIssues: introNarrationIssues,
-          repairedNarrations: [introNarration],
-          note: "Deterministic review used while completing the initial single-slide presentation.",
-        });
-      }
+      const review = await this.reviewPresentationWithFallback({
+        deck,
+        narrations: [introNarration],
+        pedagogicalProfile,
+        validationIssues: introNarrationIssues,
+        fallbackNote:
+          "Deterministic review used while completing the initial single-slide presentation.",
+        topic: input.topic,
+      });
 
       const finalNarrations = this.mergeReviewedNarrations(
         [introNarration],
         review.repairedNarrations,
       );
-      const locallyRepairedNarrations = this.applyLocalNarrationRepairsFromReview(
+      const reviewedNarrationValidation = validateAndRepairNarrations(
         deck,
         finalNarrations,
+        { generateMissing: false },
+      );
+      const locallyRepairedNarrations = this.applyLocalNarrationRepairsFromReview(
+        deck,
+        reviewedNarrationValidation.value,
         review,
       );
       const finalizedDeck = this.finalizeDeckMetadata(
         deck,
         locallyRepairedNarrations.narrations,
         review,
-        [...introNarrationIssues, ...locallyRepairedNarrations.issues],
+        [
+          ...introNarrationIssues,
+          ...reviewedNarrationValidation.issues,
+          ...locallyRepairedNarrations.issues,
+        ],
       );
       await this.deckRepository.save(finalizedDeck);
 
       await this.sessionRepository.save({
         ...persistedSession,
         narrationBySlideId: Object.fromEntries(
-          locallyRepairedNarrations.narrations.map((narration) => [narration.slideId, narration]),
+          locallyRepairedNarrations.narrations.map((narration) => [
+            narration.slideId,
+            ensureNarrationSegments(narration),
+          ]),
         ),
         updatedAt: nowIso(),
       });
@@ -900,6 +1029,9 @@ export class PresentationSessionService {
         }
         break;
       }
+      case "summarize_current_slide":
+      case "general_contextual":
+      case "grounded_factual":
       default: {
         session = this.transitionIfPossible(
           session,
@@ -912,21 +1044,14 @@ export class PresentationSessionService {
           "Answering user question in context.",
         );
 
-        try {
-          const answer = await this.llmProvider.answerQuestion({
-            deck,
-            slide: activeSlide,
-            session,
-            pedagogicalProfile: session.pedagogicalProfile,
-            question: text,
-          });
-          assistantMessage = answer.text;
-        } catch (error) {
-          console.warn(
-            `[slidespeech] question answering fallback for slide ${activeSlide.id}: ${(error as Error).message}`,
-          );
-          assistantMessage = this.buildInteractionFallback("question", activeSlide);
-        }
+        assistantMessage = await this.questionAnswerService.answer({
+          deck,
+          slide: activeSlide,
+          session,
+          pedagogicalProfile: session.pedagogicalProfile,
+          question: text,
+          turnDecision,
+        });
 
         if (
           turnDecision.runtimeEffects.adaptDetailLevel ||
@@ -955,7 +1080,7 @@ export class PresentationSessionService {
       }
     }
 
-    session = this.applyResumePlan(session, resumePlan, narration);
+    session = this.applyResumePlan(session, deck, resumePlan, narration);
     session = this.applyRuntimeEffects(session, turnDecision);
 
     session = await this.appendTurn(session, {
@@ -1050,38 +1175,39 @@ export class PresentationSessionService {
         { generateMissing: false },
       );
 
-      let review;
-      try {
-        review = await this.qualityReviewer.review({
-          deck: latestDeck,
-          narrations: narrationValidation.value,
-          pedagogicalProfile: input.pedagogicalProfile,
-        });
-      } catch (error) {
-        console.warn(
-          `[slidespeech] presentation review fallback for topic "${input.topic}": ${(error as Error).message}`,
-        );
-        review = buildDeterministicReview({
-          deck: latestDeck,
-          validationIssues: narrationValidation.issues,
-          repairedNarrations: narrationValidation.value,
-        });
-      }
+      const review = await this.reviewPresentationWithFallback({
+        deck: latestDeck,
+        narrations: narrationValidation.value,
+        pedagogicalProfile: input.pedagogicalProfile,
+        validationIssues: narrationValidation.issues,
+        fallbackNote:
+          "Deterministic quality review used because the LLM review step was unavailable or overruled.",
+        topic: input.topic,
+      });
 
       const finalNarrations = this.mergeReviewedNarrations(
         narrationValidation.value,
         review.repairedNarrations,
       );
-      const locallyRepairedNarrations = this.applyLocalNarrationRepairsFromReview(
+      const reviewedNarrationValidation = validateAndRepairNarrations(
         latestDeck,
         finalNarrations,
+        { generateMissing: false },
+      );
+      const locallyRepairedNarrations = this.applyLocalNarrationRepairsFromReview(
+        latestDeck,
+        reviewedNarrationValidation.value,
         review,
       );
       const finalizedDeck = this.finalizeDeckMetadata(
         latestDeck,
         locallyRepairedNarrations.narrations,
         review,
-        [...narrationValidation.issues, ...locallyRepairedNarrations.issues],
+        [
+          ...narrationValidation.issues,
+          ...reviewedNarrationValidation.issues,
+          ...locallyRepairedNarrations.issues,
+        ],
       );
       await this.deckRepository.save(finalizedDeck);
 
@@ -1205,6 +1331,85 @@ export class PresentationSessionService {
     };
   }
 
+  private buildDeterministicPresentationReview(
+    deck: Deck,
+    validationIssues: ValidationIssue[],
+    repairedNarrations: SlideNarration[],
+    note?: string,
+  ): PresentationReview {
+    return buildDeterministicReview({
+      deck,
+      validationIssues: validationIssues.map((issue) => ({
+        code: issue.code,
+        message: issue.message,
+        severity: issue.severity,
+        ...(issue.slideId ? { slideId: issue.slideId } : {}),
+      })),
+      repairedNarrations,
+      ...(note ? { note } : {}),
+    });
+  }
+
+  private shouldPreferDeterministicReview(
+    llmReview: PresentationReview,
+    deterministicReview: PresentationReview,
+  ): boolean {
+    if (llmReview.repairedNarrations.length > 0) {
+      return false;
+    }
+
+    const scoreGap = deterministicReview.overallScore - llmReview.overallScore;
+    const issueGap = llmReview.issues.length - deterministicReview.issues.length;
+    const llmIsMuchHarsher =
+      deterministicReview.approved &&
+      !llmReview.approved &&
+      scoreGap >= 0.15;
+
+    return (
+      llmIsMuchHarsher ||
+      scoreGap >= 0.25 ||
+      (scoreGap >= 0.15 && issueGap >= 2)
+    );
+  }
+
+  private async reviewPresentationWithFallback(input: {
+    deck: Deck;
+    narrations: SlideNarration[];
+    pedagogicalProfile: PedagogicalProfile;
+    validationIssues: ValidationIssue[];
+    fallbackNote: string;
+    topic: string;
+  }): Promise<PresentationReview> {
+    const deterministicReview = this.buildDeterministicPresentationReview(
+      input.deck,
+      input.validationIssues,
+      input.narrations,
+      input.fallbackNote,
+    );
+
+    try {
+      const llmReview = await this.qualityReviewer.review({
+        deck: input.deck,
+        narrations: input.narrations,
+        pedagogicalProfile: input.pedagogicalProfile,
+      });
+
+      if (this.shouldPreferDeterministicReview(llmReview, deterministicReview)) {
+        console.warn(
+          `[slidespeech] review reconciliation fallback for topic "${input.topic}": LLM review contradicted the stronger deterministic baseline (llm_score=${llmReview.overallScore.toFixed(2)}, deterministic_score=${deterministicReview.overallScore.toFixed(2)}).`,
+        );
+        return deterministicReview;
+      }
+
+      return llmReview;
+    } catch (error) {
+      console.warn(
+        `[slidespeech] presentation review fallback for topic "${input.topic}": ${(error as Error).message}`,
+      );
+      return deterministicReview;
+    }
+  }
+
   private mergeReviewedNarrations(
     narrations: SlideNarration[],
     repairedNarrations: SlideNarration[],
@@ -1310,7 +1515,7 @@ export class PresentationSessionService {
       review.overallScore,
     );
 
-    return {
+    return ensureDeckTheme({
       ...deck,
       updatedAt: nowIso(),
       metadata: {
@@ -1327,7 +1532,7 @@ export class PresentationSessionService {
           nowIso(),
         ),
       },
-    };
+    });
   }
 
   private requireCurrentSlide(deck: Deck, session: Session): Slide {
@@ -1558,6 +1763,7 @@ export class PresentationSessionService {
 
   private applyResumePlan(
     session: Session,
+    deck: Deck,
     resumePlan: ResumePlan,
     narration?: SlideNarration,
   ): Session {
@@ -1581,6 +1787,8 @@ export class PresentationSessionService {
 
     return {
       ...session,
+      currentSlideId,
+      currentSlideIndex: this.getSlideIndex(deck, currentSlideId),
       currentNarrationIndex: targetNarrationIndex,
       narrationProgressBySlideId: {
         ...session.narrationProgressBySlideId,

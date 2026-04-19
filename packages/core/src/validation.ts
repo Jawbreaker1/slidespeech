@@ -21,42 +21,14 @@ type AudienceFacingSource =
   | "diagramNode"
   | "explanation";
 
-const STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "how",
-  "in",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "that",
-  "the",
-  "this",
-  "to",
-  "we",
-  "will",
-  "with",
-  "you",
-  "your",
-]);
+const WORD_LIKE_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}\p{M}-]*/gu;
 
 const tokenize = (value: string): string[] =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+  (value.toLocaleLowerCase().match(WORD_LIKE_TOKEN_PATTERN) ?? [])
+    .map((token) => token.normalize("NFKC").replace(/^-+|-+$/g, ""))
+    .filter((token) => token.length >= 2 || /\p{N}/u.test(token));
+
+const semanticKey = (value: string): string => tokenize(value).join(" ");
 
 const unique = <T>(values: T[]): T[] => [...new Set(values)];
 
@@ -87,6 +59,17 @@ const slideConceptTokens = (slide: Slide): string[] =>
     ),
   );
 
+const audienceFacingSlideText = (slide: Slide): string =>
+  [
+    slide.title,
+    slide.learningGoal,
+    slide.beginnerExplanation,
+    slide.advancedExplanation,
+    ...slide.keyPoints,
+    ...slide.examples,
+    ...slide.likelyQuestions,
+  ].join(" ");
+
 const PRESENTATION_META_PATTERNS = [
   /\bfor every slide\b/i,
   /\bthis slide\b/i,
@@ -105,7 +88,6 @@ const PRESENTATION_META_PATTERNS = [
   /\bshort opener\b/i,
   /\bvisually simple\b/i,
   /\bclean slide design\b/i,
-  /\bour mission\b/i,
   /\bto wrap up\b/i,
   /\bnext steps?\b/i,
   /\borients? you\b/i,
@@ -122,9 +104,6 @@ const GENERIC_AUDIENCE_LANGUAGE_PATTERNS = [
   /^\s*term success derived from\b/i,
   /^\s*use specific\b/i,
 ];
-
-const INFORMATIVE_STATEMENT_PATTERN =
-  /\b(is|are|was|were|helps?|support(?:s)?|show(?:s)?|mean(?:s)?|include(?:s)?|use(?:s|d)?|serve(?:s|d)?|function(?:s)?|operate(?:s)?|connect(?:s)?|explain(?:s|ed)?|confirm(?:s|ed)?|provide(?:s|d)?|ensure(?:s|d)?|adapt(?:s|ed)?|improve(?:s|d)?|reduce(?:s|d)?|allow(?:s|ed)?|span(?:s|ned)?|cover(?:s|ed)?|enable(?:s|d)?)\b/i;
 
 const PRESENTATION_DESIGN_TOPIC_PATTERNS = [
   /\bslide design\b/i,
@@ -178,7 +157,6 @@ const META_REPAIR_AVOID_PATTERNS = [
   /^the main services, products, or focus areas connected to\b/i,
   /^the main systems, parts, or focus areas that define\b/i,
   /\bthis session\b/i,
-  /\bour mission\b/i,
   /\bto wrap up\b/i,
   /\bnext steps?\b/i,
   /\borients? you\b/i,
@@ -194,18 +172,7 @@ const deckLooksSystemicallyMeta = (deck: Deck, slides: Slide[]): boolean => {
   }
 
   const metaLikeSlides = slides.filter((slide) => {
-    const slideText = [
-      slide.title,
-      slide.learningGoal,
-      slide.beginnerExplanation,
-      slide.advancedExplanation,
-      ...slide.keyPoints,
-      ...slide.examples,
-      ...slide.visualNotes,
-      ...slide.visuals.cards.map((card) => `${card.title} ${card.body}`),
-      ...slide.visuals.callouts.map((callout) => `${callout.label} ${callout.text}`),
-    ].join(" ");
-
+    const slideText = audienceFacingSlideText(slide);
     return countMetaMatches(slideText) >= 1;
   }).length;
 
@@ -217,17 +184,7 @@ const isMetaPresentationSlide = (deck: Deck, slide: Slide): boolean => {
     return false;
   }
 
-  const slideText = [
-    slide.title,
-    slide.learningGoal,
-    slide.beginnerExplanation,
-    slide.advancedExplanation,
-    ...slide.keyPoints,
-    ...slide.examples,
-    ...slide.visualNotes,
-    ...slide.visuals.cards.map((card) => `${card.title} ${card.body}`),
-    ...slide.visuals.callouts.map((callout) => `${callout.label} ${callout.text}`),
-  ].join(" ");
+  const slideText = audienceFacingSlideText(slide);
   const metaMatches = countMetaMatches(slideText);
   const topicTokens = unique(tokenize(deck.topic));
   const slideTokens = slideConceptTokens(slide);
@@ -254,7 +211,7 @@ const uniqueStatements = (values: string[]): string[] => {
   const result: string[] = [];
 
   for (const value of values) {
-    const key = value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const key = semanticKey(value);
     if (!key || seen.has(key)) {
       continue;
     }
@@ -281,7 +238,7 @@ const looksFragmentaryAudienceStatement = (value: string): boolean => {
     return true;
   }
 
-  if (/^[a-z]/.test(trimmed)) {
+  if (/^\p{Ll}/u.test(trimmed)) {
     return true;
   }
 
@@ -290,7 +247,10 @@ const looksFragmentaryAudienceStatement = (value: string): boolean => {
   }
 
   const tokens = unique(tokenize(trimmed));
-  return tokens.length >= 5 && !INFORMATIVE_STATEMENT_PATTERN.test(trimmed);
+  if (tokens.length >= 8 && /[.!?]$/.test(trimmed)) {
+    return false;
+  }
+  return tokens.length >= 5 && !/[.!?]$/.test(trimmed);
 };
 
 const hasConcreteDetailSignals = (value: string): boolean => {
@@ -298,71 +258,132 @@ const hasConcreteDetailSignals = (value: string): boolean => {
     return true;
   }
 
-  const properNouns =
-    value.match(/\b[A-Z][a-z]+(?:['-][A-Z][a-z]+)*\b/g)?.filter(
-      (token) => !["A", "An", "The", "This", "That", "In"].includes(token),
-    ) ?? [];
-  if (properNouns.length >= 1) {
+  if (
+    /[\p{Ps}\p{Pe}"“”'«»]/u.test(value) ||
+    /[:;()]/.test(value) ||
+    /\b\p{Lu}{2,}\b/u.test(value)
+  ) {
     return true;
   }
 
-  return /\b(research(?:er|ers)?|stud(?:y|ied|ies)|outbreak|incident|quarantine|contagion|epidemi\w*|spread|leaked|launched|founded|released|observed|measured|boss)\b/i.test(
-    value,
-  );
+  return false;
 };
 
-const paraphraseForNarration = (value: string, index: number): string => {
-  let normalized = value.replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "");
+const normalizeNarrationSourceStatement = (value: string): string => {
+  const normalized = value
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[\-\u2022*\d.)\s]+/, "")
+    .replace(/[.!?]+$/g, "");
+
   if (!normalized) {
     return "";
   }
 
-  const replacements: Array<[RegExp, string]> = [
-    [/\bDD\s*&\s*Insights\b/gi, "data and insight work"],
-    [/\bQA Operations\b/gi, "quality-assurance operations"],
-    [/\bAI-accelerated\b/gi, "AI-supported"],
-    [/\bleverages\b/gi, "uses"],
-    [/\bwhile maintaining\b/gi, "and still keeps"],
-    [/\bensures\b/gi, "helps make sure"],
-    [/\bdrive(s|)\b/gi, "support$1"],
-    [/\bbridges the gap between\b/gi, "connects"],
-    [/\blead to\b/gi, "show up as"],
-    [/\ballow us to see deeper into\b/gi, "give the team a clearer view into"],
-  ];
-
-  for (const [pattern, replacement] of replacements) {
-    normalized = normalized.replace(pattern, replacement);
-  }
-
-  normalized = normalized.replace(/^our\s+/i, "the company's ");
-  normalized = normalized.replace(/^we\s+/i, "the team ");
-  normalized = normalized.replace(/^this slide\s+/i, "");
-
-  const lowered = normalized.charAt(0).toLowerCase() + normalized.slice(1);
-  const prefix =
-    index === 0
-      ? "A practical point here is that "
-      : index === 1
-        ? "Another thing to notice is that "
-        : "This also means that ";
-
-  return ensureSentence(`${prefix}${lowered}`);
+  return ensureSentence(normalized);
 };
 
-const buildNarrationSupportStatements = (slide: Slide): string[] =>
-  uniqueStatements(
-    [
-      ...splitStatements([
-        slide.beginnerExplanation,
-        slide.advancedExplanation,
-        ...slide.speakerNotes.filter((note) => /[.!?]\s*$/.test(note.trim())),
-      ]),
-      ...slide.keyPoints.slice(0, 3),
-      ...slide.examples.slice(0, 1).map((example) => `A concrete example is ${example}`),
-    ]
-      .map((value, index) => paraphraseForNarration(value, index))
-      .filter((value) => value.length >= 24),
+const buildNarrationSupportStatements = (deck: Deck, slide: Slide): string[] => {
+  const prefersBeginnerFriendlyLanguage =
+    deck.pedagogicalProfile.audienceLevel === "beginner";
+  const visibleNarrationAnchors = [
+    slide.learningGoal,
+    slide.visuals.heroStatement ?? "",
+    ...slide.keyPoints,
+    ...slide.visuals.cards.map((card) => card.body),
+    ...slide.visuals.diagramNodes.map((node) => node.label),
+  ]
+    .map((value) => normalizeNarrationSourceStatement(value))
+    .filter(Boolean);
+
+  const sourcePriority = (source: AudienceFacingSource) =>
+    source === "example"
+      ? 6
+      : source === "keyPoint"
+        ? 5
+        : source === "explanation"
+          ? 4
+          : source === "speakerNote"
+            ? 3
+            : 2;
+
+  const scoredStatements = [
+    ...slide.examples.slice(0, 2).map((text) => ({ source: "example" as const, text })),
+    ...slide.keyPoints.slice(0, 3).map((text) => ({ source: "keyPoint" as const, text })),
+    { source: "explanation" as const, text: slide.beginnerExplanation },
+    ...(!prefersBeginnerFriendlyLanguage || slide.examples.length + slide.speakerNotes.length < 2
+      ? [{ source: "explanation" as const, text: slide.advancedExplanation }]
+      : []),
+  ]
+    .flatMap(({ source, text }) =>
+      splitStatements([text]).map((statement) => ({ source, text: statement })),
+    )
+    .map(({ source, text }) => {
+      const normalized = normalizeNarrationSourceStatement(text);
+      const concreteBoost = hasConcreteDetailSignals(normalized) ? 3 : 0;
+      const overlapPenalty = visibleNarrationAnchors.some(
+        (anchor) => anchor && tokenOverlapRatio(normalized, anchor) >= 0.94,
+      )
+        ? 3
+        : visibleNarrationAnchors.some(
+              (anchor) => anchor && tokenOverlapRatio(normalized, anchor) >= 0.84,
+            )
+          ? 1
+          : 0;
+      const explanationPenalty =
+        source === "explanation" && !hasConcreteDetailSignals(normalized) ? 1 : 0;
+
+      return {
+        source,
+        text: normalized,
+        score: sourcePriority(source) + concreteBoost - overlapPenalty - explanationPenalty,
+      };
+    })
+    .filter(
+      (candidate) =>
+        candidate.text.length >= 24 &&
+        !looksFragmentaryAudienceStatement(candidate.text),
+    );
+
+  const bestByStatement = new Map<
+    string,
+    { source: AudienceFacingSource; text: string; score: number }
+  >();
+  for (const candidate of scoredStatements) {
+    const key = semanticKey(candidate.text);
+    const existing = bestByStatement.get(key);
+    if (!existing || candidate.score > existing.score) {
+      bestByStatement.set(key, candidate);
+    }
+  }
+
+  const prioritizedCurrentStatements = [...bestByStatement.values()]
+    .sort((left, right) => right.score - left.score)
+    .map((candidate) => candidate.text);
+
+  if (slide.order !== 0) {
+    return prioritizedCurrentStatements;
+  }
+
+  const currentConcreteCount = prioritizedCurrentStatements.filter((statement) =>
+    hasConcreteDetailSignals(statement),
+  ).length;
+
+  if (currentConcreteCount >= 2 && prioritizedCurrentStatements.length >= 4) {
+    return prioritizedCurrentStatements;
+  }
+
+  const deckLevelSupport = buildDeckLevelNarrationSupportStatements(
+    deck,
+    slide,
+    visibleNarrationAnchors,
   );
+
+  return uniqueStatements([
+    ...deckLevelSupport,
+    ...prioritizedCurrentStatements,
+  ]);
+};
 
 const looksUsefulForMetaRepair = (
   deck: Deck,
@@ -430,7 +451,7 @@ const buildAudienceFacingStatements = (deck: Deck, slide: Slide): string[] => {
 
   const bestByStatement = new Map<string, { source: AudienceFacingSource; text: string }>();
   for (const candidate of candidates) {
-    const key = candidate.text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const key = semanticKey(candidate.text);
     const existing = bestByStatement.get(key);
     const sourcePriority = (value: AudienceFacingSource) =>
       value === "diagramNode"
@@ -476,6 +497,102 @@ const buildAudienceFacingStatements = (deck: Deck, slide: Slide): string[] => {
   return ranked.slice(0, 3).map((candidate) => candidate.text);
 };
 
+const buildDeckLevelNarrationSupportStatements = (
+  deck: Deck,
+  currentSlide: Slide,
+  visibleNarrationAnchors: string[],
+): string[] => {
+  const deckLevelCandidates = deck.slides
+    .filter((slide) => slide.id !== currentSlide.id)
+    .flatMap((slide) => [
+      ...slide.examples.map((text) => ({ slide, source: "example" as const, text })),
+      ...slide.visuals.callouts.map((callout) => ({
+        slide,
+        source: "callout" as const,
+        text: callout.text,
+      })),
+      ...slide.keyPoints.map((text) => ({ slide, source: "keyPoint" as const, text })),
+      { slide, source: "explanation" as const, text: slide.beginnerExplanation },
+      { slide, source: "explanation" as const, text: slide.advancedExplanation },
+    ])
+    .flatMap(({ slide, source, text }) =>
+      splitStatements([text]).map((statement, index) => ({
+        slide,
+        source,
+        text: statement,
+        rank: index,
+      })),
+    );
+
+  const repetitionCounts = new Map<string, number>();
+  for (const candidate of deckLevelCandidates) {
+    const key = semanticKey(candidate.text);
+    if (!key) {
+      continue;
+    }
+
+    repetitionCounts.set(key, (repetitionCounts.get(key) ?? 0) + 1);
+  }
+
+  const scoredStatements = deckLevelCandidates
+    .map(({ slide, source, text, rank }) => {
+      const normalized = normalizeNarrationSourceStatement(text);
+      const sourceBoost =
+        source === "example"
+          ? 7
+          : source === "callout"
+            ? 6
+            : source === "keyPoint"
+              ? 5
+              : 4;
+      const concreteBoost = hasConcreteDetailSignals(normalized) ? 4 : 0;
+      const proximityBoost = Math.max(0, 3 - Math.abs(slide.order - currentSlide.order));
+      const repetitionPenalty = Math.max(
+        0,
+        (repetitionCounts.get(semanticKey(text)) ?? 1) - 1,
+      ) * 3;
+      const overlapPenalty = visibleNarrationAnchors.some(
+        (anchor) => anchor && tokenOverlapRatio(normalized, anchor) >= 0.92,
+      )
+        ? 3
+        : visibleNarrationAnchors.some(
+              (anchor) => anchor && tokenOverlapRatio(normalized, anchor) >= 0.84,
+            )
+          ? 1
+          : 0;
+
+      return {
+        text: normalized,
+        score:
+          sourceBoost +
+          concreteBoost +
+          proximityBoost -
+          repetitionPenalty -
+          overlapPenalty -
+          rank,
+      };
+    })
+    .filter(
+      (candidate) =>
+        candidate.text.length >= 24 &&
+        !looksFragmentaryAudienceStatement(candidate.text),
+    );
+
+  const bestByStatement = new Map<string, { text: string; score: number }>();
+  for (const candidate of scoredStatements) {
+    const key = semanticKey(candidate.text);
+    const existing = bestByStatement.get(key);
+    if (!existing || candidate.score > existing.score) {
+      bestByStatement.set(key, candidate);
+    }
+  }
+
+  return [...bestByStatement.values()]
+    .sort((left, right) => right.score - left.score)
+    .map((candidate) => candidate.text)
+    .slice(0, 3);
+};
+
 const buildDeckLevelConcreteStatements = (deck: Deck, currentSlide: Slide): string[] =>
   uniqueStatements(
     deck.slides
@@ -493,22 +610,22 @@ const buildAudienceFacingLearningGoal = (deck: Deck, slide: Slide): string => {
   const lowerTitle = normalizedTitle.charAt(0).toLowerCase() + normalizedTitle.slice(1);
 
   if (slide.order === 0) {
-    return `Understand what ${deck.topic} is, why it matters, and one concrete way it shows up in practice.`;
+    return `See what ${deck.topic} is, why it matters, and one concrete way to recognize it.`;
   }
 
   if (/^why\b/i.test(normalizedTitle)) {
-    return `Understand why ${deck.topic} matters in practice.`;
+    return `See why ${deck.topic} matters in practice.`;
   }
 
   if (/^what\b/i.test(normalizedTitle)) {
-    return `Understand what ${deck.topic} is and why it matters.`;
+    return `See what ${deck.topic} is and why it matters.`;
   }
 
   if (/^core systems and focus areas$/i.test(normalizedTitle)) {
-    return `Understand the main systems, features, or focus areas that define ${deck.topic}.`;
+    return `See the main systems, features, or focus areas that define ${deck.topic}.`;
   }
 
-  return `Understand how ${lowerTitle} contributes to ${deck.topic}.`;
+  return `See how ${lowerTitle} shapes ${deck.topic}.`;
 };
 
 const buildAudienceFacingFallbackStatements = (deck: Deck, slide: Slide): string[] => {
@@ -523,16 +640,16 @@ const buildAudienceFacingFallbackStatements = (deck: Deck, slide: Slide): string
 
   if (slide.order === 0 || /^why\b/i.test(normalizedTitle) || titleMostlyRepeatsTopic) {
     return uniqueStatements([
-      `${deck.topic} influences real outcomes, not just abstract descriptions.`,
-      `In practice, understanding ${deck.topic} changes decisions, priorities, or behavior.`,
-      `That is why ${deck.topic} matters beyond a simple definition.`,
+      `${deck.topic} becomes clearer when one concrete mechanism, example, or responsibility is visible.`,
+      `A strong opening on ${deck.topic} names what it is and what changes because of it.`,
+      `One concrete consequence shows why ${deck.topic} matters beyond a definition.`,
     ]);
   }
 
   return uniqueStatements([
-    `${normalizedTitle} reveals a specific part of how ${deck.topic} works.`,
-    `The main takeaway is that ${lowerTitle} becomes clearer when you connect it to concrete evidence.`,
-    `Seen in context, ${lowerTitle} makes ${deck.topic} more specific and easier to apply.`,
+    `${normalizedTitle} is one concrete part of ${deck.topic}.`,
+    `${normalizedTitle} changes what people notice, decide, or experience in ${deck.topic}.`,
+    `A concrete effect or example makes ${lowerTitle} easier to recognize.`,
   ]);
 };
 
@@ -574,14 +691,14 @@ const slideNeedsLanguageRepair = (deck: Deck, slide: Slide): boolean => {
     (/^what\b/i.test(normalizedTitle) && /\bcontributes to\b/i.test(learningGoal)) ||
     (/^core systems and focus areas$/i.test(normalizedTitle) &&
       /\bcontributes to\b/i.test(learningGoal));
-  const weakKeyPoints = slide.keyPoints.some(
+  const weakKeyPoints = slide.keyPoints.filter(
     (point) =>
       META_REPAIR_AVOID_PATTERNS.some((pattern) => pattern.test(point)) ||
       GENERIC_AUDIENCE_LANGUAGE_PATTERNS.some((pattern) => pattern.test(point)) ||
       looksFragmentaryAudienceStatement(point),
   );
 
-  return awkwardLearningGoal || weakKeyPoints;
+  return awkwardLearningGoal || weakKeyPoints.length >= 2;
 };
 
 const repairMetaPresentationSlide = (deck: Deck, slide: Slide): Slide => {
@@ -682,27 +799,9 @@ export const rebuildNarrationFromSlideAnchors = (
 ): SlideNarration => {
   const nextSlide = deck.slides[slide.order + 1];
   const isIntro = slide.order === 0;
-  const supportStatements = buildNarrationSupportStatements(slide);
-  const primaryStatement =
-    supportStatements[0] ??
-    ensureSentence(`A practical point here is that ${slide.beginnerExplanation.toLowerCase()}`);
-  const secondaryStatement = supportStatements[1];
-  const tertiaryStatement = supportStatements[2];
-  const openingSegment = isIntro
-    ? `Today I want to orient you to ${deck.topic} and show why it matters.`
-    : slide.order === deck.slides.length - 1
-      ? `To bring the story together, let us look at ${slide.title.toLowerCase()}.`
-      : `The next piece of the story is ${slide.title.toLowerCase()}.`;
-  const transitionSegment = nextSlide
-    ? `From here, we can move into ${nextSlide.title.toLowerCase()}.`
-    : "This brings the presentation to a clear close.";
-  const draftSegments = [
-    openingSegment,
-    primaryStatement,
-    ...(secondaryStatement ? [secondaryStatement] : []),
-    ...(tertiaryStatement && isIntro ? [tertiaryStatement] : []),
-    transitionSegment,
-  ]
+  const supportStatements = buildNarrationSupportStatements(deck, slide);
+  const draftSegments = supportStatements
+    .slice(0, isIntro ? 4 : 3)
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
@@ -710,15 +809,38 @@ export const rebuildNarrationFromSlideAnchors = (
   const segments: string[] = [];
 
   for (const candidate of draftSegments) {
-    if (segments.some((segment) => tokenOverlapRatio(segment, candidate) >= 0.72)) {
+    if (segments.some((segment) => tokenOverlapRatio(segment, candidate) >= 0.86)) {
       continue;
     }
 
     segments.push(candidate);
   }
 
-  while (segments.length < minSegmentCount && !segments.includes(transitionSegment)) {
-    segments.push(transitionSegment);
+  const fallbackCandidates = [
+    ...slide.examples.slice(0, 1).map((example) =>
+      normalizeNarrationSourceStatement(example),
+    ),
+    ...slide.keyPoints
+      .slice(0, 3)
+      .map((point) => normalizeNarrationSourceStatement(point)),
+    normalizeNarrationSourceStatement(slide.beginnerExplanation),
+    normalizeNarrationSourceStatement(slide.advancedExplanation),
+    normalizeNarrationSourceStatement(slide.visuals.heroStatement ?? ""),
+    normalizeNarrationSourceStatement(slide.learningGoal),
+  ]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  for (const candidate of fallbackCandidates) {
+    if (segments.length >= minSegmentCount) {
+      break;
+    }
+
+    if (segments.some((segment) => tokenOverlapRatio(segment, candidate) >= 0.9)) {
+      continue;
+    }
+
+    segments.push(candidate);
   }
 
   return {
@@ -729,15 +851,10 @@ export const rebuildNarrationFromSlideAnchors = (
     promptsForPauses:
       existing?.promptsForPauses.length
         ? existing.promptsForPauses
-        : [
-            "Pause me if you want this explained more simply.",
-            "Ask for an example if you want something more concrete.",
-          ],
-    suggestedTransition:
-      existing?.suggestedTransition ??
-      (nextSlide
-        ? `Bridge clearly into ${nextSlide.title}.`
-        : "Finish with a concise recap of the final slide."),
+        : [],
+    suggestedTransition: nextSlide
+      ? `Bridge clearly into ${nextSlide.title}.`
+      : "Finish with a concise recap of the final slide.",
   };
 };
 
@@ -874,6 +991,7 @@ export const validateAndRepairNarrations = (
       return null;
     }
     const minSegments = slide.order === 0 ? 4 : 3;
+    const maxSegments = slide.order === 0 ? 6 : 5;
     const slideTokens = slideConceptTokens(slide);
     const narrationTokens = tokenize(
       [
@@ -891,14 +1009,22 @@ export const validateAndRepairNarrations = (
       .map((value) => value.replace(/\s+/g, " ").trim().toLowerCase())
       .filter((value) => value.length >= 24);
     const normalizedNarration = (existing?.narration ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    const normalizedSegments = (existing?.segments ?? [])
+      .map((segment) => segment.replace(/\s+/g, " ").trim().toLowerCase())
+      .filter(Boolean);
+    const nearLiteralSegmentMatches = normalizedSegments.filter((segment) =>
+      visibleSlidePhrases.some((phrase) => tokenOverlapRatio(segment, phrase) >= 0.92),
+    ).length;
+    const exactVisiblePhraseMatches = visibleSlidePhrases.filter((phrase) =>
+      normalizedNarration.includes(phrase),
+    ).length;
     const readsVisualTextTooClosely =
-      /\b(first|second|third) key point\b/i.test(existing?.narration ?? "") ||
-      /\bas shown here\b/i.test(existing?.narration ?? "") ||
-      /\bon this slide\b/i.test(existing?.narration ?? "") ||
-      visibleSlidePhrases.some((phrase) => normalizedNarration.includes(phrase));
+      nearLiteralSegmentMatches >= 2 ||
+      exactVisiblePhraseMatches >= 2;
     const needsRepair =
       !existing ||
       existing.segments.length < minSegments ||
+      existing.segments.length > maxSegments ||
       existing.narration.trim().length < (slide.order === 0 ? 180 : 110) ||
       overlap.length < Math.min(3, Math.max(1, Math.floor(slideTokens.length / 6))) ||
       readsVisualTextTooClosely;

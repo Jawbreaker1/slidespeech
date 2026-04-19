@@ -1,5 +1,6 @@
 export * from "./domain";
 export * from "./events";
+export * from "./presentation-themes";
 export * from "./visuals";
 export type {
   AnalyzeDeckImagesInput,

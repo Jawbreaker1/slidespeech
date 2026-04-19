@@ -14,6 +14,7 @@ type CoverageExpectation = {
 type EvalScenario = {
   id?: string;
   prompt: string;
+  useWebResearch?: boolean;
   coverageExpectations?: CoverageExpectation[];
 };
 
@@ -22,23 +23,72 @@ const DEFAULT_SCENARIOS: EvalScenario[] = [
     id: "systemverification-onboarding",
     prompt:
       "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
+    useWebResearch: true,
   },
   {
     id: "ai-teacher",
     prompt: "Explain how an interruption-aware AI teacher works",
+    useWebResearch: false,
   },
   {
     id: "volvo",
     prompt: "Create a short presentation about Volvo Cars",
+    useWebResearch: true,
   },
   {
     id: "spongebob",
     prompt: "Create a short presentation about SpongeBob SquarePants",
+    useWebResearch: false,
+  },
+  {
+    id: "salsa-dip",
+    prompt: "Create a short presentation about how to make the perfect salsa dip.",
+    useWebResearch: false,
+    coverageExpectations: [
+      {
+        label: "ingredients",
+        anyOf: [
+          "tomato",
+          "tomatoes",
+          "onion",
+          "lime",
+          "cilantro",
+          "chili",
+          "jalapeno",
+          "salt",
+        ],
+      },
+      {
+        label: "preparation",
+        anyOf: [
+          "mix",
+          "chop",
+          "dice",
+          "blend",
+          "combine",
+          "taste",
+          "rest",
+        ],
+      },
+      {
+        label: "quality or serving",
+        anyOf: [
+          "fresh",
+          "texture",
+          "balance",
+          "serve",
+          "chips",
+          "flavor",
+          "taste",
+        ],
+      },
+    ],
   },
   {
     id: "warcraft-corrupted-blood",
     prompt:
       "Create a short presentation about World of Warcraft. Include at least one slide about the Corrupted Blood plague event and explain why researchers were interested in it as a model of disease spread.",
+    useWebResearch: true,
     coverageExpectations: [
       {
         label: "plague event",
@@ -61,6 +111,7 @@ const DEFAULT_SCENARIOS: EvalScenario[] = [
     id: "vgr-ai-workshop",
     prompt:
       "Create a workshop presentation for project managers, product owners, and test leads at VGR, Västra Götalandsregionen. Use https://www.vgregion.se/ for grounding. The presentation should explain how they can use AI tools in their daily work, and it must include at least one practical exercise for the audience to complete during the workshop.",
+    useWebResearch: true,
     coverageExpectations: [
       {
         label: "target audience",
@@ -157,7 +208,9 @@ const main = async () => {
     try {
       const result = await createPresentation({
         topic: scenario.prompt,
-        useWebResearch: true,
+        ...(scenario.useWebResearch !== undefined
+          ? { useWebResearch: scenario.useWebResearch }
+          : {}),
         targetDurationMinutes: 3,
         targetSlideCount: 4,
       });

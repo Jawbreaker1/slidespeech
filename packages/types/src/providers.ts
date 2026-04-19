@@ -25,9 +25,12 @@ import type {
 export interface PresentationIntent {
   subject: string;
   framing: string;
+  contentMode?: "descriptive" | "procedural";
   explicitSourceUrls: string[];
   coverageRequirements: string[];
   audienceCues: string[];
+  organization?: string;
+  presentationGoal?: string;
   deliveryFormat: "presentation" | "workshop";
   activityRequirement?: string;
 }
@@ -92,6 +95,13 @@ export interface PedagogicalContext {
 
 export interface AnswerQuestionInput extends PedagogicalContext {
   question: string;
+  answerMode?:
+    | "summarize_current_slide"
+    | "example"
+    | "general_contextual"
+    | "grounded_factual";
+  broaderDeckContext?: string;
+  sourceGroundingContext?: string;
 }
 
 export interface TransformExplanationInput extends PedagogicalContext {
@@ -152,8 +162,14 @@ export interface LLMProvider {
 
 export interface AnalyzeSlideImageInput {
   slideId: string;
+  topic: string;
+  slideTitle: string;
+  learningGoal: string;
+  keyPoints: string[];
   imageUrl?: string;
-  imageBase64?: string;
+  imageDataUrl?: string;
+  imageAltText?: string;
+  sourcePageUrl?: string;
 }
 
 export interface AnalyzeDeckImagesInput {
@@ -163,6 +179,8 @@ export interface AnalyzeDeckImagesInput {
 
 export interface VisionInsight {
   summary: string;
+  isRelevant: boolean;
+  relevanceScore: number;
   visualIssues: string[];
   pedagogicalHints: string[];
 }
@@ -281,17 +299,20 @@ export interface DeckRepository {
   save(deck: Deck): Promise<void>;
   getById(id: string): Promise<Deck | null>;
   list(): Promise<Deck[]>;
+  delete(id: string): Promise<void>;
 }
 
 export interface SessionRepository {
   save(session: Session): Promise<void>;
   getById(id: string): Promise<Session | null>;
   list(): Promise<Session[]>;
+  delete(id: string): Promise<void>;
 }
 
 export interface TranscriptRepository {
   append(turn: TranscriptTurn): Promise<void>;
   listBySessionId(sessionId: string): Promise<TranscriptTurn[]>;
+  deleteBySessionId(sessionId: string): Promise<void>;
 }
 
 export interface UserPreferences {

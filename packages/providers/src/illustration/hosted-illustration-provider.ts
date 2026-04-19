@@ -2,6 +2,7 @@ import type {
   RenderSlideIllustrationInput,
   SlideIllustrationProvider,
   SlideIllustrationAsset,
+  VisionProvider,
   WebResearchProvider,
   WebSearchResult,
 } from "@slidespeech/types";
@@ -17,7 +18,8 @@ const IMAGE_META_PATTERNS = [
   /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
 ];
 
-const IMG_SRC_PATTERN = /<img[^>]+src=["']([^"']+)["']/gi;
+const IMG_TAG_PATTERN = /<img\b[^>]*>/gi;
+const HTML_ATTRIBUTE_PATTERN = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['"])(.*?)\2/g;
 
 const STOP_WORDS = new Set([
   "a",
@@ -53,6 +55,7 @@ const LOW_QUALITY_IMAGE_SOURCE_PATTERNS = [
 
 interface HostedIllustrationProviderConfig {
   webResearchProvider: WebResearchProvider;
+  visionProvider?: VisionProvider | undefined;
   timeoutMs?: number;
   userAgent?: string;
 }
@@ -101,10 +104,17 @@ const domainFromUrl = (value: string): string => {
 const tokenize = (value: string): string[] =>
   value
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+
+interface ExtractedImageCandidate {
+  url: string;
+  altText?: string;
+  title?: string;
+  ariaLabel?: string;
+}
 
 const hostKeywords = (value: string): string[] =>
   domainFromUrl(value)
@@ -140,6 +150,69 @@ const scoreImageCandidateUrl = (url: string, preferredHosts: string[]): number =
 
   return score;
 };
+
+const parseHtmlAttributes = (tag: string) => {
+  const attributes = new Map<string, string>();
+
+  for (const match of tag.matchAll(HTML_ATTRIBUTE_PATTERN)) {
+    const name = match[1]?.toLowerCase();
+    const value = match[3]?.trim();
+
+    if (!name || !value) {
+      continue;
+    }
+
+    attributes.set(name, stripHtmlEntities(value));
+  }
+
+  return attributes;
+};
+
+const buildIllustrationSemanticTokens = (
+  input: RenderSlideIllustrationInput,
+): string[] => {
+  const slot = input.slide.visuals.imageSlots[0];
+
+  return [
+    ...new Set([
+      ...tokenize(sanitizeResearchQuery(input.deck.topic) || input.deck.topic),
+      ...tokenize(input.slide.title),
+      ...tokenize(input.slide.learningGoal),
+      ...tokenize(input.slide.visuals.imagePrompt ?? ""),
+      ...tokenize(slot?.prompt ?? ""),
+      ...tokenize(slot?.caption ?? ""),
+      ...tokenize(slot?.altText ?? ""),
+    ]),
+  ];
+};
+
+const scoreImageCandidateSemanticMatch = (
+  candidate: ExtractedImageCandidate,
+  desiredTokens: string[],
+): number => {
+  const metadataTokens = new Set([
+    ...tokenize(candidate.url),
+    ...tokenize(candidate.altText ?? ""),
+    ...tokenize(candidate.title ?? ""),
+    ...tokenize(candidate.ariaLabel ?? ""),
+  ]);
+
+  const matches = desiredTokens.filter((token) => metadataTokens.has(token)).length;
+
+  if (matches === 0) {
+    return -10;
+  }
+
+  return matches * 5;
+};
+
+export const scoreExtractedImageCandidate = (
+  candidate: ExtractedImageCandidate,
+  preferredHosts: string[],
+  desiredTokens: string[],
+) =>
+  scoreImageCandidateUrl(candidate.url, preferredHosts) +
+  scoreImageCandidateSemanticMatch(candidate, desiredTokens);
 
 export const scoreSearchResultForIllustration = (
   input: RenderSlideIllustrationInput,
@@ -196,7 +269,16 @@ export const extractImageCandidateUrls = (
   html: string,
   pageUrl: string,
 ): string[] => {
-  const candidates: string[] = [];
+  const candidates = extractImageCandidates(html, pageUrl);
+
+  return candidates.map((candidate) => candidate.url);
+};
+
+export const extractImageCandidates = (
+  html: string,
+  pageUrl: string,
+): ExtractedImageCandidate[] => {
+  const candidates: ExtractedImageCandidate[] = [];
 
   for (const pattern of IMAGE_META_PATTERNS) {
     const match = html.match(pattern);
@@ -207,23 +289,49 @@ export const extractImageCandidateUrls = (
 
     const absolute = normalizeUrl(raw, pageUrl);
     if (absolute) {
-      candidates.push(absolute);
+      candidates.push({ url: absolute });
     }
   }
 
-  for (const match of html.matchAll(IMG_SRC_PATTERN)) {
-    const raw = match[1] ? stripHtmlEntities(match[1].trim()) : "";
+  for (const tagMatch of html.matchAll(IMG_TAG_PATTERN)) {
+    const tag = tagMatch[0];
+    if (!tag) {
+      continue;
+    }
+
+    const attributes = parseHtmlAttributes(tag);
+    const raw = attributes.get("src")?.trim() ?? "";
     if (!raw) {
       continue;
     }
 
     const absolute = normalizeUrl(raw, pageUrl);
     if (absolute) {
-      candidates.push(absolute);
+      const altText = attributes.get("alt");
+      const title = attributes.get("title");
+      const ariaLabel = attributes.get("aria-label");
+
+      candidates.push({
+        url: absolute,
+        ...(altText ? { altText } : {}),
+        ...(title ? { title } : {}),
+        ...(ariaLabel ? { ariaLabel } : {}),
+      });
     }
   }
 
-  return [...new Set(candidates)].filter(looksUsefulImageUrl).slice(0, 8);
+  const seen = new Set<string>();
+  return candidates
+    .filter((candidate) => looksUsefulImageUrl(candidate.url))
+    .filter((candidate) => {
+      if (seen.has(candidate.url)) {
+        return false;
+      }
+
+      seen.add(candidate.url);
+      return true;
+    })
+    .slice(0, 8);
 };
 
 const preferredSourcePages = (input: RenderSlideIllustrationInput): string[] => {
@@ -265,6 +373,7 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
   readonly name = "hosted-illustration";
 
   private readonly webResearchProvider: WebResearchProvider;
+  private readonly visionProvider?: VisionProvider | undefined;
   private readonly timeoutMs: number;
   private readonly userAgent: string;
   private readonly illustrationCache = new Map<string, SlideIllustrationAsset>();
@@ -273,6 +382,7 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
 
   constructor(config: HostedIllustrationProviderConfig) {
     this.webResearchProvider = config.webResearchProvider;
+    this.visionProvider = config.visionProvider;
     this.timeoutMs = config.timeoutMs ?? 15000;
     this.userAgent =
       config.userAgent ??
@@ -374,6 +484,40 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
     return created;
   }
 
+  private async candidatePassesVisionCheck(input: {
+    deck: RenderSlideIllustrationInput["deck"];
+    slide: RenderSlideIllustrationInput["slide"];
+    result: WebSearchResult;
+    fetched: { dataUri: string };
+    candidate: ExtractedImageCandidate;
+  }) {
+    if (!this.visionProvider || this.visionProvider.name === "mock-vision") {
+      return true;
+    }
+
+    try {
+      const insight = await this.visionProvider.analyzeSlideImage({
+        slideId: input.slide.id,
+        topic: input.deck.topic,
+        slideTitle: input.slide.title,
+        learningGoal: input.slide.learningGoal,
+        keyPoints: input.slide.keyPoints,
+        imageDataUrl: input.fetched.dataUri,
+        ...(input.candidate.altText
+          ? { imageAltText: input.candidate.altText }
+          : {}),
+        sourcePageUrl: input.result.url,
+      });
+
+      return insight.isRelevant && insight.relevanceScore >= 0.55;
+    } catch (error) {
+      console.warn(
+        `[slidespeech] vision validation failed for slide ${input.slide.id}: ${(error as Error).message}`,
+      );
+      return false;
+    }
+  }
+
   private async trySearchResult(
     input: RenderSlideIllustrationInput,
     result: WebSearchResult,
@@ -389,17 +533,38 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
     const preferredHosts = preferredSourcePages(input).map((value) =>
       domainFromUrl(value),
     );
-    const imageCandidates = extractImageCandidateUrls(html, result.url).sort(
+    const desiredTokens = buildIllustrationSemanticTokens(input);
+    const imageCandidates = extractImageCandidates(html, result.url).sort(
       (left, right) =>
-        scoreImageCandidateUrl(right, preferredHosts) -
-        scoreImageCandidateUrl(left, preferredHosts),
+        scoreExtractedImageCandidate(right, preferredHosts, desiredTokens) -
+        scoreExtractedImageCandidate(left, preferredHosts, desiredTokens),
     );
     const usedSourceImages = this.getUsedSourceImages(input.deck.id);
     let duplicateFallback: SlideIllustrationAsset | null = null;
 
-    for (const imageUrl of imageCandidates) {
+    for (const candidate of imageCandidates) {
+      if (
+        scoreExtractedImageCandidate(candidate, preferredHosts, desiredTokens) < 8
+      ) {
+        continue;
+      }
+
+      const imageUrl = candidate.url;
+
       try {
         const fetched = await this.fetchImageData(imageUrl);
+        const passesVisionCheck = await this.candidatePassesVisionCheck({
+          deck: input.deck,
+          slide: input.slide,
+          result,
+          fetched,
+          candidate,
+        });
+
+        if (!passesVisionCheck) {
+          continue;
+        }
+
         const slot = input.slide.visuals.imageSlots[0];
         const asset: SlideIllustrationAsset = {
           slideId: input.slide.id,

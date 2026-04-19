@@ -90,6 +90,54 @@ test("detects brand and presentation-about prompts as requiring grounded researc
   );
 });
 
+test("does not force grounded research for generic how-to presentation prompts", () => {
+  const topic = "Create a short presentation about how to make the perfect salsa dip.";
+
+  assert.equal(topicLooksEntitySpecific(topic), false);
+  assert.equal(topicRequiresGroundedFacts(topic), false);
+  assert.equal(
+    shouldUseWebResearchForTopic({
+      topic,
+    }),
+    false,
+  );
+});
+
+test("builds procedural coverage goals for generic how-to prompts", () => {
+  const plan = buildResearchPlan({
+    topic: "Create a short presentation about how to make the perfect salsa dip.",
+  });
+
+  assert.ok(plan.coverageGoals.includes("Essential ingredients"));
+  assert.ok(plan.coverageGoals.includes("Key preparation steps"));
+  assert.ok(plan.coverageGoals.includes("Taste, texture, and adjustment"));
+  assert.equal(
+    plan.coverageGoals.some((goal) => /core mechanisms|real-world application/i.test(goal)),
+    false,
+  );
+});
+
+test("buildResearchPlan uses a cleaned subject for imperative entertainment prompts", () => {
+  const topic =
+    "Present spongebob squarepants and his adventures in bikinibottom. Who created the series and when did it start airing.";
+  const plan = buildResearchPlan({ topic });
+
+  assert.equal(
+    plan.subject,
+    "Spongebob squarepants and his adventures in bikinibottom",
+  );
+  assert.ok(
+    plan.searchQueries.some(
+      (query) =>
+        query === "Spongebob squarepants and his adventures in bikinibottom",
+    ),
+  );
+  assert.equal(
+    plan.searchQueries.some((query) => /who created the series/i.test(query)),
+    false,
+  );
+});
+
 test("builds guessed official urls for compact brand prompts", () => {
   assert.deepEqual(
     buildGuessedOfficialUrls(
@@ -162,6 +210,33 @@ test("detects research-specific prompts and avoids guessed official urls", () =>
   );
   assert.equal(
     plan.coverageGoals.some((goal) => /requested in the prompt/i.test(goal)),
+    false,
+  );
+});
+
+test("requested coverage goals suppress generic fallback coverage phrasing", () => {
+  const topic =
+    "Create a workshop presentation for project managers, product owners, and test leads at VGR, Västra Götalandsregionen. Use https://www.vgregion.se/ for grounding. The presentation should explain how they can use AI tools in their daily work, and it must include at least one practical exercise for the audience to complete during the workshop.";
+  const plan = buildResearchPlan({ topic });
+
+  assert.ok(
+    plan.coverageGoals.some((goal) => /how project managers, product owners, and test leads can use ai tools in their daily work/i.test(goal)),
+  );
+  assert.ok(
+    plan.coverageGoals.some((goal) => /project managers|product owners|test leads/i.test(goal)),
+  );
+  assert.ok(
+    plan.coverageGoals.some((goal) => /VGR|Västra Götalandsregionen/i.test(goal)),
+  );
+  assert.ok(
+    plan.coverageGoals.some((goal) => /practical exercise|audience/i.test(goal)),
+  );
+  assert.equal(
+    plan.coverageGoals.some((goal) => /defining ideas behind|real-world application/i.test(goal)),
+    false,
+  );
+  assert.equal(
+    plan.coverageGoals.some((goal) => /what .* is and why it matters/i.test(goal)),
     false,
   );
 });

@@ -12,6 +12,8 @@ export class MockVisionProvider implements VisionProvider {
   async analyzeSlideImage(input: { slideId: string }) {
     return {
       summary: `No visual analysis available yet for ${input.slideId}.`,
+      isRelevant: true,
+      relevanceScore: 0.5,
       visualIssues: ["Visual analysis is mocked in phase 1."],
       pedagogicalHints: ["Add rendered slide screenshots in phase 4."],
     };
@@ -31,4 +33,3 @@ export class MockVisionProvider implements VisionProvider {
     return ["Pedagogical visual hints are mocked in phase 1."];
   }
 }
-

@@ -4,31 +4,13 @@ type ResearchFinding = {
   content: string;
 };
 
-const BRIEF_STOP_PATTERNS = [
-  /\bcreate\b/gi,
-  /\bmake\b/gi,
-  /\bbuild\b/gi,
-  /\bgenerate\b/gi,
-  /\bwrite\b/gi,
-  /\bprepare\b/gi,
-  /\bpresentation\b/gi,
-  /\boverview\b/gi,
-  /\bdeck\b/gi,
-  /\btalk\b/gi,
-  /\bsession\b/gi,
-  /\bslides?\b/gi,
-  /\babout\b/gi,
-  /\bon\b/gi,
-  /\bregarding\b/gi,
-  /\bof\b/gi,
-  /\bthe\b/gi,
-  /\bour\b/gi,
-  /\bmy\b/gi,
-  /\bcompany\b/gi,
-  /\borganisation\b/gi,
-  /\borganization\b/gi,
-  /\bbusiness\b/gi,
-  /\bemployer\b/gi,
+const BRIEF_WRAPPER_PATTERNS = [
+  /^(?:create|build|generate|write|prepare)\s+/i,
+  /^(?:(?:a|an|the)\s+)?(?:(?:short|brief|quick)\s+)?(?:presentation|overview|deck|talk|session|slides?)\s+(?:about|on|regarding)\s+/i,
+  /^(?:about|on|regarding)\s+/i,
+];
+
+const BRIEF_NOISE_PATTERNS = [
   /\buse google\b.*$/gi,
   /\bmore information is available at\b.*$/gi,
 ];
@@ -82,9 +64,6 @@ const uniqueNonEmptyStrings = (values: Array<string | null | undefined>): string
   return result;
 };
 
-const escapeRegExp = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 const tokenize = (value: string): string[] =>
   value
     .toLowerCase()
@@ -107,18 +86,27 @@ export const compactPresentationBrief = (
     return undefined;
   }
 
-  const subjectPattern = new RegExp(`\\b${escapeRegExp(subject)}\\b`, "gi");
   const genericEntityPattern =
     /\b(?:our|my|the)\s+(?:company|organisation|organization|business|employer)\b/gi;
 
-  let compacted = brief.replace(subjectPattern, " ").replace(genericEntityPattern, " ");
-  for (const pattern of BRIEF_STOP_PATTERNS) {
+  const normalizedOriginal = brief.replace(/\s+/g, " ").trim().replace(/[.,;:!?]+$/g, "");
+  let compacted = normalizedOriginal.replace(genericEntityPattern, subject);
+  for (const pattern of BRIEF_NOISE_PATTERNS) {
     compacted = compacted.replace(pattern, " ");
   }
 
-  compacted = compacted.replace(/\s+/g, " ").trim().replace(/[.,;:!?]+$/g, "");
+  let stripped = compacted;
+  for (const pattern of BRIEF_WRAPPER_PATTERNS) {
+    stripped = stripped.replace(pattern, "");
+  }
 
-  return compacted.length > 1 ? compacted : undefined;
+  compacted = stripped.replace(/\s+/g, " ").trim().replace(/[.,;:!?]+$/g, "");
+
+  if (compacted.length < 8) {
+    return normalizedOriginal.length > 1 ? normalizedOriginal : undefined;
+  }
+
+  return compacted;
 };
 
 const normalizeFindingContent = (content: string): string =>

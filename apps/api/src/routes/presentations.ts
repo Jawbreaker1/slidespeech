@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
   GeneratePresentationRequestSchema,
   NarrationProgressRequestSchema,
+  PresentationGenerationJobStatusResponseSchema,
   SpeechSynthesisRequestSchema,
   SelectSlideRequestSchema,
   SessionInteractionRequestSchema,
@@ -12,18 +13,45 @@ import {
 import { appContext } from "../lib/context";
 import {
   createPresentation,
+  deleteSavedPresentation,
   exportPresentationPptx,
   getSlideIllustration,
   getSlideNarration,
   getSessionSnapshot,
   interactWithSession,
+  listSavedPresentations,
   selectSlide,
   updateNarrationProgress,
 } from "../services/presentation-service";
+import { presentationGenerationQueue } from "../services/generation-queue";
 import { synthesizeSessionSpeech } from "../services/tts-service";
 import { processVoiceTurn } from "../services/voice-service";
 
 export const presentationsRouter = Router();
+
+const normalizeGeneratePresentationInput = (
+  payload: ReturnType<typeof GeneratePresentationRequestSchema.parse>,
+) => ({
+  topic: payload.topic,
+  ...(payload.pedagogicalProfile
+    ? {
+        pedagogicalProfile: Object.fromEntries(
+          Object.entries(payload.pedagogicalProfile).filter(
+            (entry): entry is [string, string | boolean] => entry[1] !== undefined,
+          ),
+        ),
+      }
+    : {}),
+  ...(payload.useWebResearch !== undefined
+    ? { useWebResearch: payload.useWebResearch }
+    : {}),
+  ...(payload.targetDurationMinutes !== undefined
+    ? { targetDurationMinutes: payload.targetDurationMinutes }
+    : {}),
+  ...(payload.targetSlideCount !== undefined
+    ? { targetSlideCount: payload.targetSlideCount }
+    : {}),
+});
 
 presentationsRouter.get("/example", async (_request, response, next) => {
   try {
@@ -40,29 +68,18 @@ presentationsRouter.get("/example", async (_request, response, next) => {
 presentationsRouter.post("/generate", async (request, response, next) => {
   try {
     const payload = GeneratePresentationRequestSchema.parse(request.body);
-    const result = await createPresentation(
-      {
-        topic: payload.topic,
-        ...(payload.pedagogicalProfile
-          ? {
-              pedagogicalProfile: Object.fromEntries(
-                Object.entries(payload.pedagogicalProfile).filter(
-                  (entry): entry is [string, string | boolean] =>
-                    entry[1] !== undefined,
-                ),
-              ),
-            }
-          : {}),
-        ...(payload.useWebResearch !== undefined
-          ? { useWebResearch: payload.useWebResearch }
-          : {}),
-        ...(payload.targetDurationMinutes !== undefined
-          ? { targetDurationMinutes: payload.targetDurationMinutes }
-          : {}),
-        ...(payload.targetSlideCount !== undefined
-          ? { targetSlideCount: payload.targetSlideCount }
-          : {}),
-      },
+    const result = await createPresentation(normalizeGeneratePresentationInput(payload));
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+presentationsRouter.post("/generate-jobs", async (request, response, next) => {
+  try {
+    const payload = GeneratePresentationRequestSchema.parse(request.body);
+    const result = presentationGenerationQueue.enqueue(
+      normalizeGeneratePresentationInput(payload),
     );
     response.json(result);
   } catch (error) {
@@ -70,10 +87,54 @@ presentationsRouter.post("/generate", async (request, response, next) => {
   }
 });
 
+presentationsRouter.get("/generate-jobs/:jobId", async (request, response, next) => {
+  try {
+    const result = presentationGenerationQueue.getStatus(request.params.jobId);
+
+    if (!result) {
+      response.status(404).json({
+        error: `Generation job ${request.params.jobId} was not found.`,
+      });
+      return;
+    }
+
+    response.json(PresentationGenerationJobStatusResponseSchema.parse(result));
+  } catch (error) {
+    next(error);
+  }
+});
+
+presentationsRouter.get("/", async (request, response, next) => {
+  try {
+    const limitRaw = Array.isArray(request.query.limit)
+      ? request.query.limit[0]
+      : request.query.limit;
+    const offsetRaw = Array.isArray(request.query.offset)
+      ? request.query.offset[0]
+      : request.query.offset;
+    const readyOnlyRaw = Array.isArray(request.query.readyOnly)
+      ? request.query.readyOnly[0]
+      : request.query.readyOnly;
+
+    const result = await listSavedPresentations({
+      ...(limitRaw !== undefined ? { limit: Number.parseInt(String(limitRaw), 10) } : {}),
+      ...(offsetRaw !== undefined ? { offset: Number.parseInt(String(offsetRaw), 10) } : {}),
+      ...(readyOnlyRaw !== undefined
+        ? { readyOnly: String(readyOnlyRaw).toLowerCase() !== "false" }
+        : {}),
+    });
+
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 presentationsRouter.get("/health", async (_request, response) => {
-  const [llmHealth, illustrationHealth, sttHealth, ttsHealth, vadHealth] = await Promise.all([
+  const [llmHealth, illustrationHealth, visionHealth, sttHealth, ttsHealth, vadHealth] = await Promise.all([
     appContext.llmProvider.healthCheck(),
     appContext.illustrationProvider.healthCheck(),
+    appContext.visionProvider.healthCheck(),
     appContext.sttProvider.healthCheck(),
     appContext.ttsProvider.healthCheck(),
     appContext.vadProvider.healthCheck(),
@@ -85,6 +146,8 @@ presentationsRouter.get("/health", async (_request, response) => {
     llmHealth,
     illustrationProvider: appContext.illustrationProvider.name,
     illustrationHealth,
+    visionProvider: appContext.visionProvider.name,
+    visionHealth,
     sttProvider: appContext.sttProvider.name,
     sttHealth,
     ttsProvider: appContext.ttsProvider.name,
@@ -98,6 +161,15 @@ presentationsRouter.get("/:sessionId", async (request, response, next) => {
   try {
     const snapshot = await getSessionSnapshot(request.params.sessionId);
     response.json(snapshot);
+  } catch (error) {
+    next(error);
+  }
+});
+
+presentationsRouter.delete("/:sessionId", async (request, response, next) => {
+  try {
+    const result = await deleteSavedPresentation(request.params.sessionId);
+    response.json(result);
   } catch (error) {
     next(error);
   }

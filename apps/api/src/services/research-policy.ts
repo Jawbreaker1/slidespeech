@@ -38,6 +38,13 @@ export const topicLooksTimeSensitive = (topic: string): boolean => {
 
 export const topicLooksEntitySpecific = (topic: string): boolean => {
   const normalized = topic.trim().toLowerCase();
+  const subject = extractPresentationSubject(topic);
+  const subjectLooksLikeNamedEntity =
+    !!subject &&
+    !/^(?:how|what|why|when|where|who|using|make|build|create|explain|teach)\b/i.test(subject) &&
+    /^[A-Z][A-Za-z0-9&+-]*(?:\s+(?:[A-Z][A-Za-z0-9&+-]*|of|the|and|for|in|on|to|a|an)){0,7}$/.test(
+      subject,
+    );
 
   if (!normalized) {
     return false;
@@ -47,12 +54,10 @@ export const topicLooksEntitySpecific = (topic: string): boolean => {
     /\b(company|organization|organisation|firm|startup|vendor|employer|client)\b/i,
     /\b(brand|business|corporation|manufacturer|automaker|car maker|car company)\b/i,
     /\babout us|about the company|company presentation|company overview\b/i,
-    /\b(create|make|build)\s+a?\s*(presentation|overview|deck)\s+about\b/i,
-    /\bpresentation about\b/i,
     /\boverview of\b/i,
     /\bwho is\b.+\b(company|organization|organisation)\b/i,
     /\bwork at\b|\bour company\b|\bmy company\b/i,
-  ].some((pattern) => pattern.test(normalized));
+  ].some((pattern) => pattern.test(normalized)) || subjectLooksLikeNamedEntity;
 };
 
 export const topicLooksResearchSpecific = (topic: string): boolean => {
@@ -413,6 +418,7 @@ const buildHeuristicCoverageGoals = (input: {
   freshnessSensitive: boolean;
   entitySpecific: boolean;
   researchSpecific: boolean;
+  intent?: PresentationIntent | undefined;
   explicitSourceUrls: string[];
   requestedCoverageGoals: string[];
   specializedCoverageGoal?: string | null;
@@ -431,6 +437,23 @@ const buildHeuristicCoverageGoals = (input: {
                 ]
               : []),
           ]
+        : input.requestedCoverageGoals.length > 0
+          ? [
+              ...(input.intent?.deliveryFormat === "workshop" ||
+              Boolean(input.intent?.presentationGoal) ||
+              input.intent?.audienceCues.length
+                ? []
+                : [`What ${input.subject} is and why it matters`]),
+              ...input.requestedCoverageGoals,
+              input.specializedCoverageGoal ?? null,
+            ]
+        : input.intent?.contentMode === "procedural"
+          ? [
+              "Essential ingredients",
+              "Key preparation steps",
+              "Taste, texture, and adjustment",
+              input.specializedCoverageGoal ?? null,
+            ]
         : [
             `What ${input.subject} is and why it matters`,
             input.entitySpecific
@@ -449,6 +472,34 @@ const buildHeuristicCoverageGoals = (input: {
       )
       .filter((value): value is string => Boolean(value)),
   ).slice(0, 4);
+
+const compactAudienceCoverageSubject = (subject: string): string =>
+  subject
+    .replace(/^using\s+/i, "")
+    .replace(/\btheir\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const buildIntentCoverageGoals = (intent: PresentationIntent, subject: string): string[] => {
+  const compactSubject = compactAudienceCoverageSubject(subject) || subject;
+  const audienceGoal =
+    intent.audienceCues.length > 0
+      ? `${compactSubject.charAt(0).toUpperCase() + compactSubject.slice(1)} for ${intent.audienceCues.join(", ")}`
+      : null;
+  const organizationGoal = intent.organization
+    ? `${intent.organization} policies, constraints, or working context for ${compactSubject}`
+    : null;
+
+  return uniqueStrings(
+    [
+      intent.presentationGoal ?? null,
+      ...intent.coverageRequirements,
+      audienceGoal,
+      organizationGoal,
+      intent.activityRequirement ?? null,
+    ].filter((value): value is string => Boolean(value)),
+  ).slice(0, 4);
+};
 
 const buildGuessedOfficialUrls = (query: string): string[] => {
   const subject = sanitizeResearchQuery(query);
@@ -532,15 +583,20 @@ export const buildResearchPlan = (input: {
     ...explicitSourceUrls,
     ...(entitySpecific && !researchSpecific ? buildGuessedOfficialUrls(subject) : []),
   ].filter((value, index, values) => values.indexOf(value) === index);
-  const requestedCoverageGoals =
-    intent.coverageRequirements.length > 0
-      ? intent.coverageRequirements
-      : extractRequestedCoverageGoals(strippedTopic);
+  const requestedCoverageGoals = (() => {
+    const intentCoverageGoals = buildIntentCoverageGoals(intent, subject);
+    if (intentCoverageGoals.length > 0) {
+      return intentCoverageGoals;
+    }
+
+    return extractRequestedCoverageGoals(strippedTopic);
+  })();
   const coverageGoals = buildHeuristicCoverageGoals({
     subject,
     freshnessSensitive,
     entitySpecific,
     researchSpecific,
+    intent,
     explicitSourceUrls,
     requestedCoverageGoals,
     specializedCoverageGoal:

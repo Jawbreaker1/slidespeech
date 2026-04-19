@@ -1,4 +1,8 @@
-import type { Slide, SlideIllustrationAsset } from "@slidespeech/types";
+import type {
+  PresentationTheme,
+  Slide,
+  SlideIllustrationAsset,
+} from "@slidespeech/types";
 
 import { VisualSlideCanvas } from "./visual-slide-canvas";
 
@@ -7,6 +11,7 @@ interface SlidePreviewCardProps {
   isActive?: boolean;
   illustrationAsset?: SlideIllustrationAsset | undefined;
   slideNumber?: number;
+  theme?: PresentationTheme | undefined;
 }
 
 export const SlidePreviewCard = ({
@@ -14,6 +19,7 @@ export const SlidePreviewCard = ({
   isActive = false,
   illustrationAsset,
   slideNumber,
+  theme,
 }: SlidePreviewCardProps) => (
   <article
     className={`h-full overflow-hidden rounded-[22px] border p-4 shadow-panel transition md:p-5 ${
@@ -41,6 +47,7 @@ export const SlidePreviewCard = ({
         compact
         illustrationAsset={illustrationAsset}
         slide={slide}
+        theme={theme}
       />
     </div>
   </article>

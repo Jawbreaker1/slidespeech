@@ -82,6 +82,10 @@ const AWKWARD_LANGUAGE_PATTERNS = [
   /\bas$/i,
 ];
 
+const IMPERATIVE_KEY_POINT_PATTERNS = [
+  /^\s*(use|avoid|keep|start|add|mix|taste|review|walk through|show|tell|highlight|map out|validate)\b/i,
+];
+
 const INFORMATIVE_VERB_PATTERN =
   /\b(is|are|was|were|helps?|support(?:s)?|show(?:s)?|mean(?:s)?|include(?:s)?|use(?:s|d)?|serve(?:s|d)?|function(?:s)?|operate(?:s)?|connect(?:s)?|explain(?:s|ed)?|confirm(?:s|ed)?|provide(?:s|d)?)\b/i;
 
@@ -108,6 +112,17 @@ const slideText = (slide: Slide): string =>
     ...slide.visuals.callouts.map((callout) => `${callout.label} ${callout.text}`),
     ...slide.visuals.diagramNodes.map((node) => node.label),
     ...slide.visuals.imageSlots.map((slot) => `${slot.prompt} ${slot.caption ?? ""}`),
+  ].join(" ");
+
+const audienceFacingSlideText = (slide: Slide): string =>
+  [
+    slide.title,
+    slide.learningGoal,
+    slide.beginnerExplanation,
+    slide.advancedExplanation,
+    ...slide.keyPoints,
+    ...slide.examples,
+    ...slide.likelyQuestions,
   ].join(" ");
 
 const narrationText = (narration?: SlideNarration): string =>
@@ -144,6 +159,10 @@ const looksFragmentaryKeyPoint = (value: string): boolean => {
   }
 
   const tokens = tokenize(trimmed);
+  if (tokens.length >= 7 && /[.!?]$/.test(trimmed)) {
+    return false;
+  }
+
   return tokens.length >= 6 && !INFORMATIVE_VERB_PATTERN.test(trimmed);
 };
 
@@ -173,8 +192,11 @@ export const evaluateDeckQuality = (
   if (introSlide) {
     const introScore =
       (introSlide.keyPoints.length >= 3 ? 1 : 0) +
-      (introSlide.beginnerExplanation.trim().length >= 90 ? 1 : 0) +
-      (countMetaMatches(slideText(introSlide)) === 0 ? 1 : 0);
+      ((introSlide.beginnerExplanation.trim().length >= 90 ||
+        introSlide.learningGoal.trim().length >= 70)
+        ? 1
+        : 0) +
+      (countMetaMatches(audienceFacingSlideText(introSlide)) === 0 ? 1 : 0);
 
     checks.push(
       buildCheck(
@@ -188,7 +210,9 @@ export const evaluateDeckQuality = (
     );
   }
 
-  const metaSlides = deck.slides.filter((slide) => countMetaMatches(slideText(slide)) >= 2);
+  const metaSlides = deck.slides.filter(
+    (slide) => countMetaMatches(audienceFacingSlideText(slide)) >= 2,
+  );
   checks.push(
     buildCheck(
       "meta_slide_language",
@@ -260,6 +284,9 @@ export const evaluateDeckQuality = (
     const text = [slide.title, slide.learningGoal, ...slide.keyPoints].join(" ");
     return (
       AWKWARD_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text)) ||
+      slide.keyPoints.some((point) =>
+        IMPERATIVE_KEY_POINT_PATTERNS.some((pattern) => pattern.test(point)),
+      ) ||
       slide.keyPoints.some((point) => looksFragmentaryKeyPoint(point))
     );
   });

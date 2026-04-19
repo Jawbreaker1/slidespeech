@@ -13,6 +13,28 @@ The core idea is not "generate slides and stop there". The product is an orchest
 
 The architecture is intentionally modular so LLM, vision, STT, TTS, VAD, storage, and research backends can be swapped without rewriting the core product logic.
 
+## Demo focus, temporary freeze, and current reality
+
+The project is temporarily shifting focus from deep generator work to end-to-end demo readiness.
+That does **not** mean presentation generation is solved.
+
+Current reality:
+
+- presentation generation is still **not close to done**
+- the generator still relies on too many retries, repairs, and guarded fallback paths
+- opening-slide quality, deck-wide topic discipline, and narration consistency are still not reliable enough
+- generation latency is still too high for the final product shape
+
+What this temporary shift means:
+
+- we will build and polish the full user flow needed for a demo
+- we will use a curated set of prompts that currently behave well enough
+- we will continue measuring generation quality during that work
+- we are **not** treating current generation as production-ready, general-purpose, or even broadly reliable yet
+
+In other words: SlideSpeech may become demoable before its generation pipeline is truly good.
+That is acceptable for a POC, but it should not be mistaken for the generator being finished.
+
 ## Generation pipeline
 
 SlideSpeech is not meant to be "one prompt in, one static deck out".
@@ -87,6 +109,86 @@ flowchart TD
 - The current system is already architected around provider boundaries and grounded generation.
 - The target system keeps that architecture, but moves toward fewer retries, less repair, earlier first render, and much faster interaction.
 - This is the path to a demo-worthy product: good presentations in a reasonable time, then fast question answering on top.
+- We are not there yet. The current generator is still under active correction and should be treated as an unfinished subsystem.
+
+## Runtime Q&A pipeline
+
+Question answering should behave like a small agent runtime, not like a bag of presentation-specific special cases.
+
+### Target Q&A pipeline
+
+The intended runtime path is:
+
+1. Classify the learner turn with the LLM.
+2. Route the turn into a small set of answer modes.
+3. Build only the context that mode actually needs.
+4. Answer once.
+5. Resume from the right point after the answer.
+
+```mermaid
+flowchart TD
+    A["Learner question"] --> B["LLM turn classification"]
+    B --> C["Answer mode"]
+    C --> D["Current slide context"]
+    C --> E["Broader deck context"]
+    C --> F["Grounded source fetch when needed"]
+    D --> G["Single answer step"]
+    E --> G
+    F --> G
+    G --> H["Resume planning"]
+    H --> I["Continue presentation"]
+```
+
+The important design rule is that context-building follows classification, not the other way around.
+That keeps the runtime simpler, reduces unnecessary fetches, and makes the system easier to extend to more languages later.
+
+### Current answer modes
+
+The runtime is moving toward these modes:
+
+- `summarize_current_slide`
+- `general_contextual`
+- `grounded_factual`
+- `simplify`
+- `deepen`
+- `example`
+- `repeat`
+
+In practice this means:
+
+- current-slide summary questions should be answered from the current slide
+- broader conceptual questions should use current slide plus deck context
+- factual grounded questions may fetch source material before answering
+- resume planning should happen after the answer is known, not as a separate competing path
+
+This runtime is still under active refinement.
+The architecture is now moving toward a real classify -> route -> answer -> resume pipeline, but question quality and latency are not yet at the final bar.
+
+### Structured output findings
+
+Recent benchmarking against LM Studio with `qwen/qwen3.6-35b-a3b` showed a clear split between two structured-output strategies:
+
+- free JSON-in-text prompting was unreliable for small planner-style calls
+- the model often produced only `reasoning_content` and hit `finish_reason = "length"` without final `message.content`
+- this stayed true even when we tried:
+  - higher token budgets
+  - explicit thinking enabled
+  - explicit thinking disabled
+  - `/no_think`-style prompt prefixes
+
+- tool/function-style output was materially more reliable for the same planner task
+- with a required tool call, LM Studio returned structured tool arguments consistently enough to parse and validate
+
+In practice this means:
+
+- planner-like runtime classification should not rely on `chatText -> extract JSON -> parse`
+- answer generation can still remain free-text
+- critical structured runtime steps should move toward tool/function output when the serving layer supports it
+
+This matters for multilingual support too:
+
+- tool/function routing is more language-neutral than regex-heavy or prompt-fragile string parsing
+- it reduces the need for English-specific after-the-fact output repair
 
 ## Current status
 

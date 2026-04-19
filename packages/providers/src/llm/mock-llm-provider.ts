@@ -72,7 +72,7 @@ const makeCards = (
 
 const buildDeck = (input: GenerateDeckInput): Deck => {
   const topic = input.topic.trim();
-  const title = `${topic}: interactive introduction`;
+  const title = `${topic}: practical foundations`;
   const createdAt = nowIso();
   const wasGrounded = Boolean(input.groundingSummary?.trim());
 
@@ -80,23 +80,23 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
     {
       id: createId("slide"),
       order: 0,
-      title: `Why ${topic} matters and what you will learn`,
-      learningGoal: `Build motivation, scope, and a clear mental model for ${topic}.`,
+      title: `${topic}: purpose and value`,
+      learningGoal: `See what ${topic} does, why it matters, and how its parts fit together.`,
       keyPoints: [
-        `${topic} solves a concrete problem or unlocks a useful capability.`,
-        `This presentation will move from intuition to structure to concrete examples.`,
-        "Start with intuition before terminology.",
-        "The goal is understanding, not memorization.",
+        `${topic} is a practical response to a concrete need or capability gap.`,
+        `${topic} is clearer when its purpose, structure, and example are visible together.`,
+        `A simple mental model helps people explain and apply ${topic}.`,
+        `${topic} is easiest to learn through concrete use rather than isolated terminology.`,
       ],
       requiredContext: [],
       speakerNotes: [
         "Start from the learner's everyday context, explain why the topic matters now, and preview the path through the presentation.",
       ],
-      beginnerExplanation: `${topic} matters because it helps someone move from vague intuition to a clearer way of thinking and acting. In this presentation, we will first build a simple mental model, then break the topic into parts, and finally connect it to a concrete example. The goal is that the learner understands not just what ${topic} is, but why it is useful and how the pieces fit together.`,
-      advancedExplanation: `${topic} combines a conceptual model, a method, and often an operational workflow that generalizes across multiple problems. A strong introduction should establish motivation, scope, and the sequence of ideas that follow so later slides feel like a logical expansion rather than a topic switch.`,
+      beginnerExplanation: `${topic} matters because it helps someone move from vague intuition to a clearer way of thinking and acting. The clearest first step is to connect the topic to a simple mental model, then show its main parts, and finally tie those parts to one concrete example. That makes it easier to understand not just what ${topic} is, but why it is useful and how the pieces fit together.`,
+      advancedExplanation: `${topic} combines a conceptual model, a method, and often an operational workflow that generalizes across multiple problems. A useful opening makes the value, boundaries, and main mechanism visible before the topic becomes more detailed.`,
       examples: [
         `If you need to explain ${topic} to a colleague, start with why someone should care.`,
-        `A good introduction to ${topic} sounds like: why it matters, how we will break it down, and what example will make it concrete.`,
+        `A learner usually understands ${topic} faster once they can connect the main idea to one concrete outcome or example.`,
       ],
       likelyQuestions: [
         `What is ${topic} used for in practice?`,
@@ -105,7 +105,7 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
       canSkip: false,
       dependenciesOnOtherSlides: [],
       visualNotes: [
-        "Show the value of the topic first, then add details.",
+        "The visual should foreground the learner problem, the topic value, and one clear mental model.",
       ],
       visuals: {
         layoutTemplate: "hero-focus",
@@ -114,9 +114,9 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
         heroStatement: `${topic} becomes easier to trust and apply when the learner can see its value before the details.`,
         cards: makeCards(
           [
-            "Practical value: connect the topic to a real learner need.",
-            "Mental model: build intuition before terminology.",
-            "Teaching goal: understanding beats memorization.",
+            `Practical value: ${topic} responds to a concrete learner or user need.`,
+            `Mental model: one simple structure makes ${topic} easier to explain.`,
+            `Working understanding: a clear example makes ${topic} easier to retain.`,
           ],
           ["accent", "info", "success"],
         ),
@@ -124,7 +124,7 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
           {
             id: createId("callout"),
             label: "Teaching cue",
-            text: "Open with the learner's problem, not the system's architecture.",
+            text: `The first useful question is what changes for the learner once ${topic} is understood clearly.`,
             tone: "warning",
           },
         ],
@@ -149,9 +149,9 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
       title: `${topic} in three building blocks`,
       learningGoal: `Break ${topic} into simple components.`,
       keyPoints: [
-        "Input: what the system receives.",
-        "Processing: how understanding or transformation happens.",
-        "Output: what the user gets back.",
+        `An input provides ${topic} with concrete information, signals, or material to work on.`,
+        `Processing shows how ${topic} turns that input into something useful.`,
+        `An output provides the result that ${topic} delivers to the learner or user.`,
       ],
       requiredContext: [`The overall value of ${topic}.`],
       speakerNotes: [
@@ -186,7 +186,7 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
           {
             id: createId("callout"),
             label: "Design principle",
-            text: "Keep interfaces visible so the learner can swap one part mentally without losing the whole system.",
+            text: "Clear interfaces make it easier to inspect one part without losing the whole system.",
             tone: "neutral",
           },
         ],
@@ -218,9 +218,9 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
       title: `A concrete example of ${topic}`,
       learningGoal: `Ground the topic in a concrete scenario.`,
       keyPoints: [
-        "Start from a clear user scenario.",
-        "Follow the data or decisions through the flow.",
-        "Point out what the user notices about system quality.",
+        `A clear user scenario shows where ${topic} creates value or reduces risk.`,
+        `The flow of data or decisions shows how ${topic} behaves in practice.`,
+        `User-facing outcomes show whether the quality of ${topic} is visible and easier to test.`,
       ],
       requiredContext: [`The three building blocks of ${topic}.`],
       speakerNotes: [
@@ -261,7 +261,7 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
           {
             id: createId("callout"),
             label: "Learner check",
-            text: "Ask what would break first if the input became noisy or incomplete.",
+            text: "One useful question is what breaks first if the input becomes noisy or incomplete.",
             tone: "warning",
           },
         ],
@@ -290,12 +290,12 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
     {
       id: createId("slide"),
       order: 3,
-      title: `Summary and next steps`,
-      learningGoal: `Tie the topic together and give a clear path forward.`,
+      title: `${topic}: what to remember`,
+      learningGoal: `Synthesize the most important ideas behind ${topic}.`,
       keyPoints: [
-        "Return to the value of the topic.",
-        "Repeat the model and the example.",
-        "Give one concrete next step for continued learning.",
+        `${topic} is easiest to retain when its value, structure, and example are connected.`,
+        `The same mental model helps people explain ${topic} in new situations.`,
+        `One practical next step helps turn ${topic} from theory into usable understanding.`,
       ],
       requiredContext: [`The full introduction to ${topic}.`],
       speakerNotes: [
@@ -329,13 +329,13 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
           {
             id: createId("callout"),
             label: "Prompt",
-            text: "Can the learner restate the topic in one sentence and add their own example?",
+            text: "A useful recap question is whether the learner can restate the topic in one sentence and add their own example.",
             tone: "info",
           },
           {
             id: createId("callout"),
             label: "Next move",
-            text: `Try explaining ${topic} aloud using only the three most important ideas.`,
+            text: `One practical next step is to explain ${topic} aloud using only the three most important ideas.`,
             tone: "success",
           },
         ],
@@ -374,18 +374,18 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
               id: createId("slide"),
               order,
               title: `${topic}: focused teaching point ${extraIndex + 1}`,
-              learningGoal: `Expand ${topic} with one additional teaching step.`,
+              learningGoal: `Extend understanding of ${topic} with one additional concrete angle.`,
               keyPoints: [
-                `Extend the learner's mental model of ${topic}.`,
-                "Add one more concrete point without changing the main storyline.",
-                "Keep the presentation pacing smooth and coherent.",
+                `${topic} is still coherent when it is deepened without changing the main explanation path.`,
+                `One additional concrete angle helps make ${topic} easier to apply.`,
+                `${topic} stays coherent when each added point still serves the same core model.`,
               ],
               requiredContext: [`The earlier explanation of ${topic}.`],
               speakerNotes: [
                 "Use this slide only when the requested presentation length needs more depth or pacing.",
               ],
-              beginnerExplanation: `This extra slide adds one more teaching beat so the presentation matches the requested length without changing the main story.`,
-              advancedExplanation: `This slide exists to expand pacing and coverage while staying aligned with the same topic and structure.`,
+              beginnerExplanation: `This extra slide adds one more concrete angle so ${topic} becomes easier to understand without changing the main story.`,
+              advancedExplanation: `This slide extends coverage while staying aligned with the same subject, mental model, and explanatory structure.`,
               examples: [
                 `Use an extra example, comparison, or recap element to deepen understanding of ${topic}.`,
               ],
@@ -690,6 +690,10 @@ export class MockLLMProvider implements LLMProvider {
       /explain simpler|simpler|make it simpler|i don't get|i do not get|confused|i'm lost|im lost|too hard|not following|unclear/i.test(
         lowerText,
       );
+    const wantsSlideSummary =
+      /main point|main idea|key point|takeaway|what is this slide about|what's this slide about|point of this slide/i.test(
+        lowerText,
+      );
     const wantsExample =
       /give .*example|\bexample\b|show me an example|concrete example/i.test(
         lowerText,
@@ -705,7 +709,7 @@ export class MockLLMProvider implements LLMProvider {
       /\b(what|why|how|when|where|which|who)\b/i.test(lowerText) ||
       /\b(can you|could you|would you|help me understand)\b/i.test(lowerText);
 
-    if (wantsExample && !soundsLikeQuestion) {
+    if (wantsExample) {
       return plan({
         interruptionType: "example",
         inferredNeeds: ["example"],
@@ -716,7 +720,7 @@ export class MockLLMProvider implements LLMProvider {
       });
     }
 
-    if (wantsDepth && !soundsLikeQuestion) {
+    if (wantsDepth) {
       return plan({
         interruptionType: "deepen",
         inferredNeeds: ["deepen"],
@@ -753,10 +757,44 @@ export class MockLLMProvider implements LLMProvider {
       });
     }
 
+    if (wantsSlideSummary) {
+      return plan({
+        interruptionType: "question",
+        inferredNeeds: ["question"],
+        responseMode: "summarize_current_slide",
+        runtimeEffects: {},
+        confidence: 0.87,
+        rationale:
+          "The user is asking for the key takeaway of the current slide.",
+      });
+    }
+
+    if (
+      /\b(where|when|which|who|country|countries|located|location)\b/i.test(
+        lowerText,
+      )
+    ) {
+      return plan({
+        interruptionType: "question",
+        inferredNeeds: confusion ? ["confusion", "question"] : ["question"],
+        responseMode: "grounded_factual",
+        runtimeEffects: confusion
+          ? {
+              adaptDetailLevel: "light",
+              adaptPace: "slow",
+              restartCurrentSlide: true,
+            }
+          : {},
+        confidence: confusion ? 0.78 : 0.76,
+        rationale:
+          "The question sounds factual and likely depends on grounded information.",
+      });
+    }
+
     return plan({
       interruptionType: "question",
       inferredNeeds: confusion ? ["confusion", "question"] : ["question"],
-      responseMode: "question",
+      responseMode: "general_contextual",
       runtimeEffects: confusion
         ? {
             adaptDetailLevel: "light",
