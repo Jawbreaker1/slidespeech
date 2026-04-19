@@ -206,6 +206,18 @@ const scoreImageCandidateSemanticMatch = (
   return matches * 5;
 };
 
+const minimumAcceptedImageCandidateScore = (input: {
+  resultUrl: string;
+  preferredHosts: string[];
+}): number => {
+  const resultDomain = domainFromUrl(input.resultUrl);
+  const trustedSourcePage = input.preferredHosts.some(
+    (host) => host && resultDomain.includes(host),
+  );
+
+  return trustedSourcePage ? -10 : 8;
+};
+
 export const scoreExtractedImageCandidate = (
   candidate: ExtractedImageCandidate,
   preferredHosts: string[],
@@ -456,9 +468,9 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
       input.slide.visuals.imagePrompt ||
       `Create an educational illustration for ${input.slide.title}.`;
 
-    return {
-      slideId: input.slide.id,
-      slotId: slot?.id ?? `${input.slide.id}-image-fallback`,
+      return {
+        slideId: input.slide.id,
+        slotId: slot?.id ?? `${input.slide.id}-image-fallback`,
       mimeType: "image/svg+xml",
       dataUri: createSlideIllustrationDataUri({
         title,
@@ -490,6 +502,7 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
     result: WebSearchResult;
     fetched: { dataUri: string };
     candidate: ExtractedImageCandidate;
+    trustedSourcePage: boolean;
   }) {
     if (!this.visionProvider || this.visionProvider.name === "mock-vision") {
       return true;
@@ -509,12 +522,12 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
         sourcePageUrl: input.result.url,
       });
 
-      return insight.isRelevant && insight.relevanceScore >= 0.55;
+      return insight.isRelevant && insight.relevanceScore >= 0.4;
     } catch (error) {
       console.warn(
         `[slidespeech] vision validation failed for slide ${input.slide.id}: ${(error as Error).message}`,
       );
-      return false;
+      return input.trustedSourcePage;
     }
   }
 
@@ -534,6 +547,10 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
       domainFromUrl(value),
     );
     const desiredTokens = buildIllustrationSemanticTokens(input);
+    const minCandidateScore = minimumAcceptedImageCandidateScore({
+      resultUrl: result.url,
+      preferredHosts,
+    });
     const imageCandidates = extractImageCandidates(html, result.url).sort(
       (left, right) =>
         scoreExtractedImageCandidate(right, preferredHosts, desiredTokens) -
@@ -544,7 +561,8 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
 
     for (const candidate of imageCandidates) {
       if (
-        scoreExtractedImageCandidate(candidate, preferredHosts, desiredTokens) < 8
+        scoreExtractedImageCandidate(candidate, preferredHosts, desiredTokens) <
+        minCandidateScore
       ) {
         continue;
       }
@@ -559,6 +577,7 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
           result,
           fetched,
           candidate,
+          trustedSourcePage: preferredHosts.includes(resultDomain),
         });
 
         if (!passesVisionCheck) {

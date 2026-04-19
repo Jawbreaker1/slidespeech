@@ -336,6 +336,7 @@ const evaluateDeckCandidateForRetry = (
         check.code === "topic_alignment" ||
         check.code === "intro_slide_substance" ||
         check.code === "source_noise_contamination" ||
+        check.code === "cross_slide_distinctness" ||
         check.code === "language_quality") &&
       check.status === "fail",
   );
@@ -376,6 +377,7 @@ const CORE_DECK_QUALITY_FAILURE_CODES = new Set([
   "topic_alignment",
   "intro_slide_substance",
   "source_noise_contamination",
+  "cross_slide_distinctness",
   "language_quality",
   "prompt_contamination",
 ]);

@@ -468,3 +468,313 @@ test("hosted illustration provider falls back when vision rejects a source image
     globalThis.fetch = originalFetch;
   }
 });
+
+test("hosted illustration provider accepts a trusted source-page image with weak metadata when vision approves it", async () => {
+  const slide = SlideSchema.parse({
+    id: "slide_company_1",
+    order: 0,
+    title: "Who the company is",
+    learningGoal: "Orient a newcomer to the company itself.",
+    keyPoints: [
+      "System Verification is a quality assurance company.",
+      "The company supports software delivery with testing and QA services.",
+      "The company works with customers in regulated and complex environments.",
+    ],
+    beginnerExplanation: "This slide introduces the company and its role.",
+    advancedExplanation: "The slide frames the organization as a QA partner rather than an abstract concept.",
+    visuals: {
+      layoutTemplate: "hero-focus",
+      accentColor: "1C7C7D",
+      cards: [],
+      callouts: [],
+      diagramNodes: [],
+      diagramEdges: [],
+      imageSlots: [
+        {
+          id: "slot_1",
+          prompt: "Editorial image for a software quality company onboarding slide",
+          altText: "System Verification company introduction",
+          style: "editorial",
+          tone: "accent",
+        },
+      ],
+    },
+  });
+  const deck = DeckSchema.parse({
+    id: "deck_company_1",
+    title: "System Verification onboarding",
+    topic: "System Verification",
+    summary: "Company onboarding summary.",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "mixed",
+      topic: "System Verification",
+      sourceIds: ["https://example.com/"],
+    },
+    slides: [slide],
+    createdAt: "2026-04-19T12:00:00.000Z",
+    updatedAt: "2026-04-19T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const webResearchProvider: WebResearchProvider = {
+    name: "test-web-research",
+    async healthCheck() {
+      return {
+        provider: "test-web-research",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async search() {
+      return [];
+    },
+    async fetch() {
+      throw new Error("unused");
+    },
+    async summarizeFindings() {
+      return "unused";
+    },
+  };
+
+  const visionProvider: VisionProvider = {
+    name: "test-vision",
+    async healthCheck() {
+      return {
+        provider: "test-vision",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async analyzeSlideImage() {
+      return {
+        summary: "This is a relevant company/team image for an onboarding slide.",
+        isRelevant: true,
+        relevanceScore: 0.48,
+        visualIssues: [],
+        pedagogicalHints: [],
+      };
+    },
+    async analyzeDeckImages(input) {
+      return Promise.all(input.slides.map((slideInput) => this.analyzeSlideImage(slideInput)));
+    },
+    async describeVisualIssues() {
+      return [];
+    },
+    async extractPedagogicalVisualHints() {
+      return [];
+    },
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+
+    if (url === "https://example.com/") {
+      return new Response(
+        '<html><body><img src="/uploads/12345.webp" /></body></html>',
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/html",
+          },
+        },
+      );
+    }
+
+    if (url === "https://example.com/uploads/12345.webp") {
+      return new Response(Uint8Array.from([82, 73, 70, 70]), {
+        status: 200,
+        headers: {
+          "content-type": "image/webp",
+        },
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const provider = new HostedIllustrationProvider({
+      webResearchProvider,
+      visionProvider,
+      timeoutMs: 1000,
+    });
+
+    const asset = await provider.renderSlideIllustration({
+      deck,
+      slide,
+    });
+
+    assert.equal(asset.sourcePageUrl, "https://example.com/");
+    assert.equal(asset.sourceImageUrl, "https://example.com/uploads/12345.webp");
+    assert.match(asset.mimeType, /^image\/webp/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hosted illustration provider soft-accepts a trusted source-page image when vision transport fails", async () => {
+  const slide = SlideSchema.parse({
+    id: "slide_company_2",
+    order: 0,
+    title: "System Verification",
+    learningGoal: "Show the company visually.",
+    keyPoints: [
+      "System Verification supports software quality assurance teams.",
+      "The company works with delivery and verification workflows.",
+      "Customers use the service to reduce release risk.",
+    ],
+    beginnerExplanation: "Company intro.",
+    advancedExplanation: "Company detail.",
+    visuals: {
+      layoutTemplate: "hero-focus",
+      accentColor: "1C7C7D",
+      cards: [],
+      callouts: [],
+      diagramNodes: [],
+      diagramEdges: [],
+      imageSlots: [
+        {
+          id: "slot_company_2",
+          prompt: "Editorial image for a software quality company.",
+          style: "editorial",
+          tone: "accent",
+        },
+      ],
+    },
+  });
+
+  const deck = DeckSchema.parse({
+    id: "deck_company_2",
+    title: "System Verification",
+    topic: "System Verification",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "mixed",
+      topic: "System Verification",
+      sourceIds: ["https://example.com/"],
+    },
+    slides: [slide],
+    createdAt: "2026-04-19T12:00:00.000Z",
+    updatedAt: "2026-04-19T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const webResearchProvider: WebResearchProvider = {
+    name: "test-web-research",
+    async healthCheck() {
+      return {
+        provider: "test-web-research",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async search() {
+      return [];
+    },
+    async fetch() {
+      throw new Error("unused");
+    },
+    async summarizeFindings() {
+      return "unused";
+    },
+  };
+
+  const visionProvider: VisionProvider = {
+    name: "test-vision",
+    async healthCheck() {
+      return {
+        provider: "test-vision",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async analyzeSlideImage() {
+      throw new Error("lmstudio-vision returned an empty response.");
+    },
+    async analyzeDeckImages(input) {
+      return Promise.all(input.slides.map((slideInput) => this.analyzeSlideImage(slideInput)));
+    },
+    async describeVisualIssues() {
+      return [];
+    },
+    async extractPedagogicalVisualHints() {
+      return [];
+    },
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+
+    if (url === "https://example.com/") {
+      return new Response(
+        '<html><body><img src="/uploads/12345.webp" alt="Delivery team at work" /></body></html>',
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/html",
+          },
+        },
+      );
+    }
+
+    if (url === "https://example.com/uploads/12345.webp") {
+      return new Response(Uint8Array.from([82, 73, 70, 70]), {
+        status: 200,
+        headers: {
+          "content-type": "image/webp",
+        },
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const provider = new HostedIllustrationProvider({
+      webResearchProvider,
+      visionProvider,
+      timeoutMs: 1000,
+    });
+
+    const asset = await provider.renderSlideIllustration({
+      deck,
+      slide,
+    });
+
+    assert.equal(asset.sourcePageUrl, "https://example.com/");
+    assert.equal(asset.sourceImageUrl, "https://example.com/uploads/12345.webp");
+    assert.match(asset.mimeType, /^image\/webp/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -41,6 +41,22 @@ const DEFAULT_SCENARIOS: EvalScenario[] = [
     useWebResearch: false,
   },
   {
+    id: "spongebob-1999-premiere",
+    prompt:
+      "Create a presentation about Spongebob Squarepants first episode that was aired in 1999.",
+    useWebResearch: true,
+    coverageExpectations: [
+      {
+        label: "premiere episode",
+        anyOf: ["help wanted", "premiere", "first episode", "1999"],
+      },
+      {
+        label: "broadcast context",
+        anyOf: ["nickelodeon", "aired", "broadcast", "pilot"],
+      },
+    ],
+  },
+  {
     id: "salsa-dip",
     prompt: "Create a short presentation about how to make the perfect salsa dip.",
     useWebResearch: false,

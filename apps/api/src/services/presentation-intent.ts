@@ -21,6 +21,94 @@ const normalizeIntentSentence = (sentence: string): string => {
   return trimmed;
 };
 
+const GENERIC_COMPANY_REFERENCE_PATTERN =
+  /\b(?:our|my|the)\s+(?:company|organisation|organization|business|employer|client)\b/i;
+
+const COMPANY_FRAMING_HINT_PATTERN =
+  /\b(?:company|organisation|organization|business|employer|client|about us|company overview|onboarding)\b/i;
+
+export const subjectIsGenericEntityReference = (subject: string): boolean =>
+  /^(?:our|my|the)\s+(?:company|organisation|organization|business|employer|client)$/i.test(
+    subject.trim(),
+  ) ||
+  /^(?:company|organisation|organization|business|employer|client)$/i.test(subject.trim());
+
+const tokenizeIntentText = (value: string): string[] =>
+  (value.toLocaleLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}\p{M}-]*/gu) ?? [])
+    .map((token) => token.normalize("NFKC"))
+    .filter((token) => token.length >= 2 || /\p{N}/u.test(token));
+
+const overlapTokenCount = (left: string, right: string): number => {
+  const leftTokens = [...new Set(tokenizeIntentText(left))];
+  const rightTokens = new Set(tokenizeIntentText(right));
+  return leftTokens.filter((token) => rightTokens.has(token)).length;
+};
+
+const deriveFocusAnchor = (input: {
+  subject: string;
+  coverageRequirements: string[];
+  presentationFrame: PresentationIntent["presentationFrame"];
+  contentMode: NonNullable<PresentationIntent["contentMode"]>;
+  deliveryFormat: PresentationIntent["deliveryFormat"];
+}): string | undefined => {
+  if (
+    input.presentationFrame !== "subject" ||
+    input.contentMode !== "descriptive" ||
+    input.deliveryFormat !== "presentation"
+  ) {
+    return undefined;
+  }
+
+  const subjectTokens = new Set(tokenizeIntentText(input.subject));
+
+  for (const requirement of input.coverageRequirements) {
+    const normalized = normalizePresentationSubject(requirement)
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[.,;:!?]+$/g, "");
+    const tokens = [...new Set(tokenizeIntentText(normalized))];
+    const novelTokenCount = tokens.filter((token) => !subjectTokens.has(token)).length;
+
+    if (tokens.length >= 3 && novelTokenCount >= 2) {
+      return normalized;
+    }
+  }
+
+  return undefined;
+};
+
+const inferPresentationFrame = (input: {
+  topic: string;
+  brief: string;
+  subject: string;
+  explicitSourceUrls: string[];
+  organization?: string;
+}): PresentationIntent["presentationFrame"] => {
+  const framingText = `${input.topic} ${input.brief}`.replace(/\s+/g, " ").trim();
+  const mentionsOwnCompany = GENERIC_COMPANY_REFERENCE_PATTERN.test(framingText);
+  const companyFramingHint = COMPANY_FRAMING_HINT_PATTERN.test(framingText);
+  const organizationOverlap =
+    input.organization && input.subject
+      ? overlapTokenCount(input.organization, input.subject) >= 2
+      : false;
+  const sourceBackedCompanyFraming =
+    input.explicitSourceUrls.length > 0 && companyFramingHint;
+
+  if (mentionsOwnCompany || organizationOverlap) {
+    return "organization";
+  }
+
+  if (sourceBackedCompanyFraming) {
+    return input.organization ? "mixed" : "organization";
+  }
+
+  if (input.organization) {
+    return "mixed";
+  }
+
+  return "subject";
+};
+
 const capitalizeFirst = (value: string): string =>
   value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 
@@ -132,6 +220,29 @@ const normalizeExplicitSourceUrl = (value: string): string | null => {
     return url.toString();
   } catch {
     return null;
+  }
+};
+
+const deriveHostnameEntityAnchor = (url: string): string | undefined => {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./i, "");
+    const root = hostname.split(".")[0]?.trim() ?? "";
+    if (root.length < 3) {
+      return undefined;
+    }
+
+    const normalized = root
+      .replace(/[-_]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!normalized) {
+      return undefined;
+    }
+
+    return normalized.replace(/\b\p{L}/gu, (value) => value.toLocaleUpperCase());
+  } catch {
+    return undefined;
   }
 };
 
@@ -306,6 +417,11 @@ const extractOrganization = (brief: string): string | undefined => {
   }
 
   const start = atIndex + 4;
+  const leadingSegment = brief.slice(start).trimStart();
+  if (!/^[\p{Lu}\p{N}]/u.test(leadingSegment)) {
+    return undefined;
+  }
+
   const boundaries = [" that ", " which ", " who ", " about ", " on ", " using ", " with ", "."];
   const end =
     boundaries
@@ -410,13 +526,46 @@ const extractActivityRequirement = (
 export const derivePresentationIntent = (topic: string): PresentationIntent => {
   const explicitSourceUrls = extractExplicitSourceUrls(topic);
   const brief = extractPresentationBrief(topic);
-  const subject = extractPresentationSubject(topic) || brief || topic.trim();
+  const extractedSubject = extractPresentationSubject(topic) || brief || topic.trim();
   const coverageRequirements = extractCoverageRequirements(topic);
   const audienceCues = extractAudienceCues(brief);
-  const organization = extractOrganization(brief);
+  const explicitOrganization = extractOrganization(brief);
+  const presentationFrame = inferPresentationFrame({
+    topic,
+    brief,
+    subject: extractedSubject,
+    explicitSourceUrls,
+    ...(explicitOrganization ? { organization: explicitOrganization } : {}),
+  });
+  const organization =
+    explicitOrganization ??
+    (presentationFrame === "organization" &&
+    extractedSubject.length >= 2 &&
+    !subjectIsGenericEntityReference(extractedSubject)
+      ? extractedSubject
+      : explicitSourceUrls
+          .map((url) => deriveHostnameEntityAnchor(url))
+          .find(
+            (candidate): candidate is string =>
+              typeof candidate === "string" &&
+              !subjectIsGenericEntityReference(candidate),
+          ));
+  const subject =
+    presentationFrame === "organization" &&
+    subjectIsGenericEntityReference(extractedSubject) &&
+    organization
+      ? organization
+      : extractedSubject;
   const deliveryFormat = /\bworkshop\b/i.test(brief) ? "workshop" : "presentation";
   const activityRequirement = extractActivityRequirement(topic, coverageRequirements);
   const contentMode = inferContentMode(topic, brief, subject);
+  const focusAnchor = deriveFocusAnchor({
+    subject,
+    coverageRequirements,
+    presentationFrame,
+    contentMode,
+    deliveryFormat,
+  });
   const presentationGoal = extractPresentationGoal({
     topic,
     brief,
@@ -426,7 +575,9 @@ export const derivePresentationIntent = (topic: string): PresentationIntent => {
 
   return {
     subject,
+    ...(focusAnchor ? { focusAnchor } : {}),
     framing: brief,
+    presentationFrame,
     contentMode,
     explicitSourceUrls,
     coverageRequirements,

@@ -24,7 +24,9 @@ import type {
 
 export interface PresentationIntent {
   subject: string;
+  focusAnchor?: string;
   framing: string;
+  presentationFrame: "subject" | "organization" | "mixed";
   contentMode?: "descriptive" | "procedural";
   explicitSourceUrls: string[];
   coverageRequirements: string[];

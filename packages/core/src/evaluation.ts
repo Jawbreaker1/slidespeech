@@ -6,35 +6,6 @@ import type {
   SlideNarration,
 } from "@slidespeech/types";
 
-const STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "by",
-  "for",
-  "from",
-  "how",
-  "in",
-  "is",
-  "it",
-  "of",
-  "on",
-  "or",
-  "that",
-  "the",
-  "this",
-  "to",
-  "we",
-  "will",
-  "with",
-  "you",
-  "your",
-]);
-
 const META_PATTERNS = [
   /\bthis slide\b/i,
   /\bslides?\b/i,
@@ -89,13 +60,12 @@ const IMPERATIVE_KEY_POINT_PATTERNS = [
 const INFORMATIVE_VERB_PATTERN =
   /\b(is|are|was|were|helps?|support(?:s)?|show(?:s)?|mean(?:s)?|include(?:s)?|use(?:s|d)?|serve(?:s|d)?|function(?:s)?|operate(?:s)?|connect(?:s)?|explain(?:s|ed)?|confirm(?:s|ed)?|provide(?:s|d)?)\b/i;
 
+const WORD_LIKE_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}\p{M}-]*/gu;
+
 const tokenize = (value: string): string[] =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+  (value.toLocaleLowerCase().match(WORD_LIKE_TOKEN_PATTERN) ?? [])
+    .map((token) => token.normalize("NFKC").replace(/^-+|-+$/g, ""))
+    .filter((token) => token.length >= 2 || /\p{N}/u.test(token));
 
 const unique = <T>(values: T[]): T[] => [...new Set(values)];
 
@@ -348,6 +318,57 @@ export const evaluateDeckQuality = (
       templatedSlides.length === 0
         ? "Slides avoid generic repair-template language."
         : `${templatedSlides.length} slide(s) still read like generic template output rather than topic-specific explanation.`,
+    ),
+  );
+
+  const repetitiveSlidePairs = deck.slides.flatMap((slide, index) =>
+    deck.slides.slice(index + 1).flatMap((otherSlide) => {
+      const leftTokens = unique(
+        tokenize(
+          [
+            slide.learningGoal,
+            slide.beginnerExplanation,
+            ...slide.keyPoints,
+          ].join(" "),
+        ),
+      );
+      const rightTokens = unique(
+        tokenize(
+          [
+            otherSlide.learningGoal,
+            otherSlide.beginnerExplanation,
+            ...otherSlide.keyPoints,
+          ].join(" "),
+        ),
+      );
+
+      if (leftTokens.length < 8 || rightTokens.length < 8) {
+        return [];
+      }
+
+      const overlap = overlapRatio(leftTokens, rightTokens);
+      return overlap >= 0.72 ? [{ left: slide, right: otherSlide, overlap }] : [];
+    }),
+  );
+  const maxRepetitiveOverlap = repetitiveSlidePairs.reduce(
+    (max, pair) => Math.max(max, pair.overlap),
+    0,
+  );
+  const repetitiveDistinctnessStatus =
+    repetitiveSlidePairs.length === 0
+      ? "pass"
+      : repetitiveSlidePairs.length === 1 && maxRepetitiveOverlap < 0.82
+        ? "warning"
+        : "fail";
+  checks.push(
+    buildCheck(
+      "cross_slide_distinctness",
+      repetitiveDistinctnessStatus,
+      repetitiveSlidePairs.length === 0
+        ? "Slides stay distinct instead of repeating the same explanation across the deck."
+        : repetitiveDistinctnessStatus === "warning"
+          ? `${repetitiveSlidePairs.length} slide pair(s) still overlap noticeably, but the deck does not look globally repetitive.`
+          : `${repetitiveSlidePairs.length} slide pair(s) reuse nearly the same explanation instead of advancing the story.`,
     ),
   );
 

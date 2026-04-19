@@ -7,6 +7,7 @@ export {
   extractExplicitSourceUrls,
   extractPresentationBrief,
   extractPresentationSubject,
+  subjectIsGenericEntityReference,
   stripExplicitSourceUrls,
 } from "./presentation-intent";
 import {
@@ -14,12 +15,9 @@ import {
   extractExplicitSourceUrls,
   extractPresentationBrief,
   extractPresentationSubject,
+  subjectIsGenericEntityReference,
   stripExplicitSourceUrls,
 } from "./presentation-intent";
-
-export const subjectIsGenericEntityReference = (subject: string): boolean =>
-  /^(?:our|my)\s+(?:company|organisation|organization|business|employer|client)$/i.test(subject.trim()) ||
-  /^(?:company|organisation|organization|business|employer|client)$/i.test(subject.trim());
 
 export const topicLooksTimeSensitive = (topic: string): boolean => {
   const normalized = topic.trim().toLowerCase();
@@ -175,6 +173,53 @@ const normalizeCoverageGoal = (value: string): string | null => {
   }
 
   return normalized;
+};
+
+const normalizeSubjectKey = (value: string): string =>
+  value
+    .toLocaleLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+
+const deriveHostnameResearchAnchor = (url: string): string | null => {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./i, "");
+    const root = hostname.split(".")[0]?.trim() ?? "";
+    if (root.length < 3) {
+      return null;
+    }
+
+    const normalized = root.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      return null;
+    }
+
+    return normalized.replace(/\b\p{L}/gu, (value) => value.toLocaleUpperCase());
+  } catch {
+    return null;
+  }
+};
+
+const resolveResearchSubject = (input: {
+  subject: string;
+  explicitSourceUrls: string[];
+  intent: PresentationIntent;
+}): string => {
+  if (
+    input.intent.presentationFrame !== "organization" ||
+    !subjectIsGenericEntityReference(input.subject)
+  ) {
+    return input.subject;
+  }
+
+  for (const url of input.explicitSourceUrls) {
+    const anchor = deriveHostnameResearchAnchor(url);
+    if (anchor && !subjectIsGenericEntityReference(anchor)) {
+      return anchor;
+    }
+  }
+
+  return input.subject;
 };
 
 const queryLooksRelevantToTopic = (
@@ -447,6 +492,13 @@ const buildHeuristicCoverageGoals = (input: {
               ...input.requestedCoverageGoals,
               input.specializedCoverageGoal ?? null,
             ]
+        : input.intent?.presentationFrame === "organization"
+          ? [
+              `What ${input.subject} does and why it matters`,
+              `The main services, capabilities, or focus areas connected to ${input.subject}`,
+              `How ${input.subject} works in practice for customers, teams, or delivery`,
+              input.specializedCoverageGoal ?? null,
+            ]
         : input.intent?.contentMode === "procedural"
           ? [
               "Essential ingredients",
@@ -482,6 +534,14 @@ const compactAudienceCoverageSubject = (subject: string): string =>
 
 const buildIntentCoverageGoals = (intent: PresentationIntent, subject: string): string[] => {
   const compactSubject = compactAudienceCoverageSubject(subject) || subject;
+  const organizationCoverageGoals =
+    intent.presentationFrame === "organization"
+      ? [
+          `What ${compactSubject} does and where it creates value`,
+          `The main services, capabilities, or focus areas connected to ${compactSubject}`,
+          `How ${compactSubject} works in practice for customers, teams, or delivery`,
+        ]
+      : [];
   const audienceGoal =
     intent.audienceCues.length > 0
       ? `${compactSubject.charAt(0).toUpperCase() + compactSubject.slice(1)} for ${intent.audienceCues.join(", ")}`
@@ -492,6 +552,7 @@ const buildIntentCoverageGoals = (intent: PresentationIntent, subject: string): 
 
   return uniqueStrings(
     [
+      ...organizationCoverageGoals,
       intent.presentationGoal ?? null,
       ...intent.coverageRequirements,
       audienceGoal,
@@ -526,9 +587,15 @@ export const buildResearchPlan = (input: {
   const intent = input.intent ?? derivePresentationIntent(input.topic);
   const explicitSourceUrls = intent.explicitSourceUrls;
   const strippedTopic = stripExplicitSourceUrls(input.topic) || input.topic.trim();
-  const subject = intent.subject || extractPresentationSubject(strippedTopic) || strippedTopic;
+  const extractedSubject = intent.subject || extractPresentationSubject(strippedTopic) || strippedTopic;
+  const subject = resolveResearchSubject({
+    subject: extractedSubject,
+    explicitSourceUrls,
+    intent,
+  });
   const freshnessSensitive = topicLooksTimeSensitive(strippedTopic);
-  const entitySpecific = topicLooksEntitySpecific(strippedTopic);
+  const entitySpecific =
+    intent.presentationFrame === "organization" || topicLooksEntitySpecific(strippedTopic);
   const researchSpecific = topicLooksResearchSpecific(strippedTopic);
   const requiresGroundedFacts =
     explicitSourceUrls.length > 0 || topicRequiresGroundedFacts(strippedTopic);
@@ -537,6 +604,14 @@ export const buildResearchPlan = (input: {
 
   if (explicitSourceUrls.length > 0) {
     rationale.push("Prompt included explicit source URLs.");
+  }
+
+  if (
+    subject !== extractedSubject &&
+    subjectIsGenericEntityReference(extractedSubject) &&
+    !subjectIsGenericEntityReference(subject)
+  ) {
+    rationale.push("Derived a provisional entity subject from the explicit source URL.");
   }
 
   if (freshnessSensitive) {
@@ -631,10 +706,19 @@ export const mergeResearchPlanWithSuggestion = (input: {
   const normalizedSuggestedSubject = input.suggestion.subject
     ? normalizeResearchSubjectCandidate(input.suggestion.subject)
     : null;
+  const suggestedSubjectMatchesProvisionalAnchor =
+    normalizedSuggestedSubject &&
+    normalizedSuggestedSubject !== input.basePlan.subject &&
+    normalizeSubjectKey(normalizedSuggestedSubject) ===
+      normalizeSubjectKey(input.basePlan.subject) &&
+    input.basePlan.rationale.includes(
+      "Derived a provisional entity subject from the explicit source URL.",
+    );
   const subject =
     normalizedSuggestedSubject &&
     !subjectIsGenericEntityReference(normalizedSuggestedSubject) &&
-    subjectIsGenericEntityReference(input.basePlan.subject)
+    (subjectIsGenericEntityReference(input.basePlan.subject) ||
+      suggestedSubjectMatchesProvisionalAnchor)
       ? normalizedSuggestedSubject
       : input.basePlan.subject;
   const upgradedGenericSubject =

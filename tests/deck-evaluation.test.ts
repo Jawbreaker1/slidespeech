@@ -186,6 +186,351 @@ test("deck evaluation flags generic template language left by repair-like phrasi
   );
 });
 
+test("deck evaluation flags slides that repeat nearly the same explanation across the deck", () => {
+  const repeated = [
+    "Wherever you are in your quality journey, our solutions help you strengthen software testing, align your strategy with business goals, and move forward more safely.",
+    "Whether you need expert support, project-specific QA, or strategic insight, we help you improve software quality and long-term outcomes.",
+    "Flexible QA services help teams reduce risk and improve reliability across industries.",
+  ];
+
+  const deck = DeckSchema.parse({
+    id: "deck_eval_repetition",
+    title: "System Verification",
+    topic: "System Verification",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "System Verification",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "repeat_1",
+        order: 0,
+        title: "System Verification",
+        learningGoal: "See what System Verification is and why it matters.",
+        keyPoints: repeated,
+        beginnerExplanation: repeated.slice(0, 2).join(" "),
+        advancedExplanation: repeated[2] ?? "",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "repeat_2",
+        order: 1,
+        title: "Core systems and focus areas",
+        learningGoal: "See the core components and focus areas of System Verification.",
+        keyPoints: repeated,
+        beginnerExplanation: repeated.slice(0, 2).join(" "),
+        advancedExplanation: repeated[2] ?? "",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "repeat_3",
+        order: 2,
+        title: "Real-world applications",
+        learningGoal: "See how System Verification appears in practice.",
+        keyPoints: [
+          "Verification catches risky data changes before they spread into production.",
+          "Automated checks provide repeatable evidence instead of one-off judgement.",
+          "Teams can spot drift earlier when checks run continuously.",
+        ],
+        beginnerExplanation:
+          "This slide should move from general framing into a concrete operational example.",
+        advancedExplanation:
+          "Distinct application examples make the story advance instead of repeating itself.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-19T10:00:00.000Z",
+    updatedAt: "2026-04-19T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    evaluation.checks.some(
+      (check) =>
+        check.code === "cross_slide_distinctness" && check.status !== "pass",
+    ),
+  );
+});
+
+test("deck evaluation does not automatically fail a deck for one moderately repetitive pair", () => {
+  const firstSlidePoints = [
+    "AI tools help teams summarize dense material into shorter working notes.",
+    "The same assistant can draft first-pass artifacts that still need human review.",
+    "A careful review step keeps the result grounded in the team's own judgement.",
+  ];
+  const secondSlidePoints = [
+    "AI tools can summarize dense project material into shorter working notes for daily follow-up.",
+    "First-pass drafts still need human review before they become part of official project work.",
+    "A structured review step keeps the output grounded in the team's own judgement.",
+  ];
+
+  const deck = DeckSchema.parse({
+    id: "deck_eval_repetition_warning",
+    title: "AI tools in daily work",
+    topic: "AI tools in daily work",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "AI tools in daily work",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "warning_1",
+        order: 0,
+        title: "Why AI helps",
+        learningGoal: "See why AI tools help with dense everyday work.",
+        keyPoints: firstSlidePoints,
+        beginnerExplanation: firstSlidePoints.slice(0, 2).join(" "),
+        advancedExplanation: firstSlidePoints[2] ?? "",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "warning_2",
+        order: 1,
+        title: "Daily use cases",
+        learningGoal: "See which recurring tasks benefit from AI support.",
+        keyPoints: secondSlidePoints,
+        beginnerExplanation: secondSlidePoints.slice(0, 2).join(" "),
+        advancedExplanation: secondSlidePoints[2] ?? "",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "warning_3",
+        order: 2,
+        title: "Constraints and review",
+        learningGoal: "See which checks keep AI-supported work trustworthy.",
+        keyPoints: [
+          "Sensitive project or personal data must stay out of public AI systems.",
+          "Human review is required before AI-supported output is shared or acted on.",
+          "Approved tools and documented review steps keep the workflow accountable.",
+        ],
+        beginnerExplanation:
+          "Constraint and review are part of the workflow, not an afterthought.",
+        advancedExplanation:
+          "Safe use depends on approved tools, review steps, and clear accountability.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "warning_4",
+        order: 3,
+        title: "Practical exercise",
+        learningGoal: "Practice one concrete AI-assisted workflow.",
+        keyPoints: [
+          "Use one current project artifact as the starting material for the exercise.",
+          "Apply one prompt, one review step, and one safety check before keeping the result.",
+          "Compare the AI-supported draft with the original version and decide what to keep.",
+        ],
+        beginnerExplanation:
+          "The exercise should produce a concrete result that can be reviewed together.",
+        advancedExplanation:
+          "Applied practice makes the workflow more memorable than another summary slide.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-19T10:00:00.000Z",
+    updatedAt: "2026-04-19T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.notEqual(
+    evaluation.checks.find((check) => check.code === "cross_slide_distinctness")?.status,
+    "fail",
+  );
+});
+
+test("deck evaluation flags repeated explanations in Swedish too", () => {
+  const repeated = [
+    "Systemverifiering hjälper team att minska risk genom att stoppa fel innan de når produktion.",
+    "Automatiska kontroller ger repeterbara bevis i stället för engångsbedömningar.",
+    "Samma verifieringsmönster gör drift och förändringar mer förutsägbara över tid.",
+  ];
+
+  const deck = DeckSchema.parse({
+    id: "deck_eval_repetition_sv",
+    title: "Systemverifiering",
+    topic: "Systemverifiering",
+    summary: "Sammanfattning",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Systemverifiering",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "repeat_sv_1",
+        order: 0,
+        title: "Varför systemverifiering behövs",
+        learningGoal: "Se varför systemverifiering minskar risk i praktiken.",
+        keyPoints: repeated,
+        beginnerExplanation: repeated.slice(0, 2).join(" "),
+        advancedExplanation: repeated[2] ?? "",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "repeat_sv_2",
+        order: 1,
+        title: "Hur verifieringen fungerar i vardagen",
+        learningGoal: "Förstå hur verifiering skapar tryggare förändringar.",
+        keyPoints: repeated,
+        beginnerExplanation: repeated.slice(0, 2).join(" "),
+        advancedExplanation: repeated[2] ?? "",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "repeat_sv_3",
+        order: 2,
+        title: "Ett konkret exempel",
+        learningGoal: "Se ett separat exempel där verifiering stoppar felaktig data.",
+        keyPoints: [
+          "En integrationskedja kan avvisa felaktiga order innan de påverkar fakturering.",
+          "Spårbar loggning visar exakt var avvikelsen uppstod.",
+          "Teamet kan rätta felet utan att sprida det vidare till andra system.",
+        ],
+        beginnerExplanation:
+          "Det här exemplet visar hur verifiering stoppar fel innan de påverkar fler delar av verksamheten.",
+        advancedExplanation:
+          "Loggning och valideringsregler gör det möjligt att isolera avvikelsen tidigt.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-19T12:00:00.000Z",
+    updatedAt: "2026-04-19T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "sv",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    evaluation.checks.some(
+      (check) =>
+        check.code === "cross_slide_distinctness" && check.status !== "pass",
+    ),
+  );
+});
+
 test("deck evaluation accepts a concise intro when the opening still has strong slide intent", () => {
   const deck = DeckSchema.parse({
     id: "deck_eval_intro_concise",

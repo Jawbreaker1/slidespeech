@@ -528,19 +528,25 @@ const normalizePedagogicalProfile = (value: unknown) => {
   };
 };
 
-const sanitizePromptShapingText = (value: string, topic: string): string =>
-  value
-    .replace(/\bcreate (?:an?|the)?\s*(?:onboarding\s+)?presentation\b/gi, " ")
-    .replace(/\bmake (?:an?|the)?\s*(?:onboarding\s+)?presentation\b/gi, " ")
+const sanitizePromptShapingText = (value: string, topic: string): string => {
+  const normalized = value
     .replace(/\bmore information is available at\b.*$/i, " ")
     .replace(/\buse google\b.*$/i, " ")
     .replace(
       /\b(?:our|my|the)\s+(?:company|organisation|organization|business|employer)\b/gi,
       topic,
     )
+    .replace(
+      /\b(?:create|make|build|generate|write|prepare)\s+(?:an?|the)?\s*(onboarding|orientation|overview|introduction)\s+presentation\b/gi,
+      "$1",
+    )
+    .replace(/\b(?:create|make|build|generate|write|prepare)\s+(?:an?|the)?\s*presentation\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[.,;:!?]+$/g, "");
+
+  return normalized;
+};
 
 const compactGroundingSummary = (value: string): string => {
   const lines = value
@@ -565,7 +571,15 @@ const compactGroundingSummary = (value: string): string => {
 
 const normalizePresentationPlan = (
   value: unknown,
-  overrides?: { targetSlideCount?: number | undefined; topic?: string | undefined },
+  overrides?: {
+    targetSlideCount?: number | undefined;
+    topic?: string | undefined;
+    subject?: string | undefined;
+    intent?: ArcPolicyInput["intent"];
+    groundingHighlights?: string[] | undefined;
+    groundingCoverageGoals?: string[] | undefined;
+    groundingSourceIds?: string[] | undefined;
+  },
 ): unknown => {
   if (!value || typeof value !== "object") {
     return value;
@@ -573,6 +587,74 @@ const normalizePresentationPlan = (
 
   const candidate = value as Record<string, unknown>;
   const topic = overrides?.topic ?? "the topic";
+  const subject = overrides?.subject ?? topic;
+  const recommendedSlideCount =
+    typeof candidate.recommendedSlideCount === "number"
+      ? candidate.recommendedSlideCount
+      : overrides?.targetSlideCount ?? 4;
+  const arcInput: ArcPolicyInput = {
+    intent: overrides?.intent,
+    groundingHighlights: overrides?.groundingHighlights,
+    groundingCoverageGoals: overrides?.groundingCoverageGoals,
+    groundingSourceIds: overrides?.groundingSourceIds,
+  };
+  const workshop = isWorkshopPresentation(arcInput as Pick<GenerateDeckInput, "intent">);
+  const focusAnchor = arcInput.intent?.focusAnchor?.trim();
+  const defaultStorylineForArc = (() => {
+    switch (deriveSlideArcPolicy(arcInput)) {
+      case "procedural":
+        return [
+          `What ${subject} depends on`,
+          `How ${subject} comes together`,
+          `What changes the final quality`,
+          `How to recognize the finished result`,
+        ];
+      case "organization-overview":
+        return [
+          `Who ${subject} is`,
+          `What ${subject} offers`,
+          `How ${subject} works`,
+          workshop
+            ? `Practical exercise using ${subject}`
+            : `One concrete outcome from ${subject}`,
+        ];
+      case "source-backed-subject":
+        return [
+          `What ${subject} is`,
+          focusAnchor || `One concrete detail or event`,
+          workshop
+            ? `Practical exercise using the case`
+            : `Why the detail matters`,
+          workshop ? `Applied takeaway` : `What it teaches`,
+        ];
+      default:
+        return [
+          `What ${subject} is`,
+          `One concrete detail`,
+          workshop ? `Practical exercise` : `Why it matters`,
+          workshop ? `Applied takeaway` : `Key takeaway`,
+        ];
+    }
+  })().slice(0, Math.max(4, recommendedSlideCount));
+  const normalizedStoryline = toStringArray(candidate.storyline).map((step) =>
+    sanitizePromptShapingText(step, topic),
+  );
+  const storyline = normalizedStoryline.length > 0
+    ? normalizedStoryline.map((step, index) => {
+        const previousAccepted = normalizedStoryline.slice(0, index);
+        const tooMeta =
+          DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(step)) ||
+          DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(step));
+        const tooAbstract = looksAbstractForIntro(step) && index > 0;
+        const tooSimilar = previousAccepted.some(
+          (previousStep) =>
+            contractTextSimilarity(step, previousStep) >= 0.72,
+        );
+        return tooMeta || tooAbstract || tooSimilar
+          ? defaultStorylineForArc[index] ?? step
+          : step;
+      })
+    : defaultStorylineForArc;
 
   return {
     ...candidate,
@@ -593,17 +675,11 @@ const normalizePresentationPlan = (
           ];
     })(),
     storyline: (() => {
-      const storyline = toStringArray(candidate.storyline).map((step) =>
-        sanitizePromptShapingText(step, topic),
-      );
       return storyline.length > 0
         ? storyline
-        : ["motivation", "structure", "example", "recap"];
+        : defaultStorylineForArc;
     })(),
-    recommendedSlideCount:
-      typeof candidate.recommendedSlideCount === "number"
-        ? candidate.recommendedSlideCount
-        : overrides?.targetSlideCount ?? 4,
+    recommendedSlideCount,
     audienceLevel: normalizeAudienceLevel(candidate.audienceLevel),
   };
 };
@@ -1028,20 +1104,131 @@ type SlideContract = {
     | "coverage"
     | "development"
     | "synthesis"
+    | "subject-detail"
+    | "subject-implication"
+    | "subject-takeaway"
+    | "entity-capabilities"
+    | "entity-operations"
+    | "entity-value"
+    | "workshop-practice"
     | "procedural-ingredients"
     | "procedural-steps"
     | "procedural-quality";
   focus: string;
   objective?: string;
+  evidence?: string;
+  distinctFrom?: string[];
+};
+
+type ContractSeedSource =
+  | "focusAnchor"
+  | "presentationGoal"
+  | "coverageRequirement"
+  | "coverageGoal"
+  | "learningObjective"
+  | "storyline"
+  | "groundingHighlight"
+  | "activityRequirement";
+
+type ContractSeed = {
+  id: string;
+  text: string;
+  source: ContractSeedSource;
+  order: number;
+};
+
+type SlideArcPolicy =
+  | "procedural"
+  | "organization-overview"
+  | "source-backed-subject"
+  | "subject-explainer";
+
+type ArcPolicyInput = {
+  intent?: Pick<
+    NonNullable<GenerateDeckInput["intent"]>,
+    | "contentMode"
+    | "presentationFrame"
+    | "organization"
+    | "explicitSourceUrls"
+    | "focusAnchor"
+    | "deliveryFormat"
+    | "activityRequirement"
+  > | undefined;
+  groundingHighlights?: string[] | undefined;
+  groundingCoverageGoals?: string[] | undefined;
+  groundingSourceIds?: string[] | undefined;
 };
 
 const resolveIntentSubject = (
   input: Pick<GenerateDeckInput, "topic" | "intent">,
 ): string => input.intent?.subject?.trim() || input.topic;
 
+const resolveIntentFocusAnchor = (
+  input: Pick<GenerateDeckInput, "intent">,
+): string | undefined => {
+  const focusAnchor = input.intent?.focusAnchor?.trim();
+  return focusAnchor && focusAnchor.length > 0 ? focusAnchor : undefined;
+};
+
+const hasSourceBackedGrounding = (input: ArcPolicyInput): boolean =>
+  Boolean(
+    input.intent?.explicitSourceUrls?.length ||
+      input.groundingSourceIds?.length ||
+      input.groundingCoverageGoals?.length ||
+      (input.groundingHighlights?.length ?? 0) >= 2,
+  );
+
+const deriveSlideArcPolicy = (input: ArcPolicyInput): SlideArcPolicy => {
+  if (input.intent?.contentMode === "procedural") {
+    return "procedural";
+  }
+
+  if (
+    input.intent?.presentationFrame === "organization" ||
+    (input.intent?.presentationFrame === "mixed" && Boolean(input.intent.organization))
+  ) {
+    return "organization-overview";
+  }
+
+  if (hasSourceBackedGrounding(input)) {
+    return "source-backed-subject";
+  }
+
+  return "subject-explainer";
+};
+
+const buildArcPolicyPromptLines = (input: ArcPolicyInput): string[] => {
+  const focusAnchor = input.intent?.focusAnchor?.trim();
+
+  switch (deriveSlideArcPolicy(input)) {
+    case "organization-overview":
+      return [
+        isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">)
+          ? "Use an organization-grounded workshop arc: why this matters for the audience's daily work, where it helps, which constraints shape safe use, and one practical exercise."
+          : "Use an organization overview arc: who the organization is, what it offers, how it works, and one concrete outcome or customer example.",
+        "Do not drift into mission, vision, or broad slogans unless that material is explicitly grounded and central to the request.",
+      ];
+    case "source-backed-subject":
+      return [
+        "Use a sourced teaching arc that separates the concrete detail or case, why it matters, and the takeaway.",
+        focusAnchor
+          ? `Treat ${JSON.stringify(focusAnchor)} as the concrete case anchor for the detail slide and keep later slides building on it rather than collapsing back to the broad subject alone.`
+          : null,
+        "Later slides must not restate the same description; each one needs a different explanatory role.",
+      ].filter((line): line is string => Boolean(line));
+    case "subject-explainer":
+      return [
+        "Use a teaching arc that separates the concrete detail, the implication, and the takeaway.",
+        "Later slides must not restate the same description; each one needs a different explanatory role.",
+      ];
+    default:
+      return [];
+  }
+};
+
 const splitContractCandidateClauses = (value: string): string[] =>
   value
-    .split(/[,:;]+/)
+    .split(/[:;]+/)
     .map((part) => part.trim())
     .filter(Boolean);
 
@@ -1061,6 +1248,7 @@ const compressContractCandidate = (
 
   const anchors = uniqueNonEmptyStrings([
     subject,
+    resolveIntentFocusAnchor(input) ?? "",
     ...(input.intent?.coverageRequirements ?? []),
   ]);
   const clauses = splitContractCandidateClauses(normalized);
@@ -1073,6 +1261,14 @@ const compressContractCandidate = (
   }
 
   if (hasMeaningfulAnchorOverlap(normalized, subject)) {
+    const subjectTokens = new Set(tokenizeDeckShapeText(subject));
+    const candidateTokens = [...new Set(tokenizeDeckShapeText(normalized))];
+    const novelTokenCount = candidateTokens.filter((token) => !subjectTokens.has(token)).length;
+
+    if (novelTokenCount >= 2) {
+      return shortenTitlePhrase(normalized, 84);
+    }
+
     return subject;
   }
 
@@ -1098,6 +1294,7 @@ const buildSlideEnrichmentPromptLines = (input: {
   priorAssessment?: SlideDraftAssessment | null;
 }): string[] => {
   const subject = resolveIntentSubject(input.generationInput);
+  const focusAnchor = resolveIntentFocusAnchor(input.generationInput);
   const groundingSummaryCandidates = compactGroundingSummary(
     input.generationInput.groundingSummary ?? "",
   )
@@ -1106,13 +1303,25 @@ const buildSlideEnrichmentPromptLines = (input: {
     .filter((value) => value.length >= 28);
   const previousSlide = input.deck.slides[input.slide.order - 1];
   const nextSlide = input.deck.slides[input.slide.order + 1];
+  const organizationArc = deriveSlideArcPolicy(input.generationInput) === "organization-overview";
+  const earlierSlideDigest = input.deck.slides
+    .slice(0, input.slide.order)
+    .map((priorSlide) =>
+      [priorSlide.title, priorSlide.learningGoal].filter(Boolean).join(": "),
+    )
+    .filter(Boolean)
+    .slice(-3);
   const relevanceAnchor = uniqueNonEmptyStrings([
     subject,
-    input.slide.title,
-    input.slide.learningGoal,
+    focusAnchor ?? "",
     input.contract.focus,
     input.contract.objective ?? "",
-    ...(input.generationInput.groundingCoverageGoals ?? []),
+    input.contract.evidence ?? "",
+    input.generationInput.intent?.presentationGoal ?? "",
+    input.generationInput.plan?.learningObjectives?.[input.slide.order] ?? "",
+    input.generationInput.plan?.storyline?.[input.slide.order] ?? "",
+    input.slide.title,
+    input.slide.learningGoal,
   ]).join(" ");
   const contextCandidates = uniqueNonEmptyStrings([
     ...groundingSummaryCandidates,
@@ -1145,12 +1354,26 @@ const buildSlideEnrichmentPromptLines = (input: {
     switch (input.contract.kind) {
       case "orientation":
         return `State concrete subject-facing claims about ${subject}. Name what it is, what changes because of it, or what makes it recognizable. Do not describe the presentation or the presenter.`;
+      case "subject-detail":
+        return `Keep this slide concrete. Explain one defining detail, event, mechanism, or subarea within ${subject} itself. Do not jump ahead to summary or broad significance language.`;
+      case "subject-implication":
+        return `Explain why the earlier detail matters. Focus on consequence, significance, lesson, or interpretation instead of re-describing the same detail.`;
+      case "subject-takeaway":
+        return `Synthesize the strongest takeaway from ${subject}. Connect the earlier concrete detail and implication without introducing a brand-new subtopic.`;
       case "procedural-ingredients":
         return `Explain what the main inputs contribute to the final result in ${subject.toLowerCase()}. Phrase each point as a descriptive claim about balance, texture, flavor, or another visible effect. Do not give recipe-like or step-by-step instructions, and do not address the audience directly.`;
       case "procedural-steps":
         return `Explain what each main step changes in ${subject.toLowerCase()} and why that change matters. Treat the steps as explanatory topics, not commands for the audience to follow. Avoid second-person phrasing and avoid telling someone what to do.`;
       case "procedural-quality":
         return `Explain how balance, texture, or final adjustments change the quality of ${subject.toLowerCase()}. Keep the points observational and evaluative, not imperative. Every key point should describe a cue, effect, or relationship, not an action for the cook or audience.`;
+      case "entity-capabilities":
+        return `Explain what ${subject} does through concrete capabilities, services, responsibilities, or focus areas. Keep the language factual and organization-facing rather than abstract or promotional.`;
+      case "entity-operations":
+        return `Explain how ${subject} works in practice through delivery, customer work, operating methods, or concrete processes. Prefer operational detail over slogans.`;
+      case "entity-value":
+        return `Explain one concrete outcome, customer example, or practical consequence that shows why ${subject} matters. Tie the slide to one recognizable evidence anchor and avoid broad value or mission language.`;
+      case "workshop-practice":
+        return `Design this slide around one practical task, exercise, or applied scenario. The audience should use the slide to apply the ideas, not just hear them restated. Include a concrete task, one starting material or scenario, one constraint or review check, and one expected output or decision.`;
       case "synthesis":
         return `State what should be remembered about ${subject}. Connect the strongest ideas, consequences, or examples without turning the slide into facilitation or wrap-up meta language.`;
       default:
@@ -1160,8 +1383,17 @@ const buildSlideEnrichmentPromptLines = (input: {
 
   return [
     `Subject: ${subject}`,
+    focusAnchor ? `Concrete focus anchor: ${focusAnchor}` : null,
     input.generationInput.intent?.organization
       ? `Organization context: ${input.generationInput.intent.organization}`
+      : null,
+    input.generationInput.intent?.framing
+      ? `Framing context: ${input.generationInput.intent.framing}`
+      : input.generationInput.presentationBrief
+        ? `Framing context: ${input.generationInput.presentationBrief}`
+        : null,
+    input.generationInput.intent?.presentationFrame
+      ? `Presentation frame: ${input.generationInput.intent.presentationFrame}`
       : null,
     input.generationInput.intent?.audienceCues?.length
       ? `Audience: ${input.generationInput.intent.audienceCues.join("; ")}`
@@ -1172,6 +1404,7 @@ const buildSlideEnrichmentPromptLines = (input: {
     input.generationInput.intent?.deliveryFormat
       ? `Format: ${input.generationInput.intent.deliveryFormat}`
       : null,
+    ...buildArcPolicyPromptLines(input.generationInput),
     input.generationInput.intent?.activityRequirement
       ? `Participant activity requirement: ${input.generationInput.intent.activityRequirement}`
       : null,
@@ -1180,14 +1413,34 @@ const buildSlideEnrichmentPromptLines = (input: {
     `Slide kind: ${input.contract.kind}`,
     `Slide focus: ${input.contract.focus}`,
     input.contract.objective ? `Slide objective: ${input.contract.objective}` : null,
+    input.contract.evidence ? `Slide evidence anchor: ${input.contract.evidence}` : null,
+    input.contract.evidence
+      ? "Use the evidence anchor concretely. Do not replace it with broader abstract company messaging, history, or mission language unless the slide explicitly requires that."
+      : null,
     `Claim style guidance: ${claimStyleGuidance}`,
     `Draft title: ${input.slide.title}`,
     `Draft learning goal: ${input.slide.learningGoal}`,
     previousSlide ? `Previous slide title: ${previousSlide.title}` : "Previous slide title: none",
     nextSlide ? `Next slide title: ${nextSlide.title}` : "Next slide title: none",
+    earlierSlideDigest.length > 0
+      ? `Earlier slides already cover:\n${earlierSlideDigest.map((value) => `- ${value}`).join("\n")}`
+      : null,
+    input.contract.distinctFrom?.length
+      ? `Do not reuse these earlier slide anchors:\n${input.contract.distinctFrom
+          .map((value) => `- ${value}`)
+          .join("\n")}`
+      : null,
     relevantContext.length > 0
       ? `Relevant grounding:\n${relevantContext.map((value) => `- ${value}`).join("\n")}`
       : "Relevant grounding: none",
+    "This slide must add a distinct explanatory center. Do not restate the same explanation, role, or takeaway used on earlier slides.",
+    organizationArc
+      ? "Teach the organization/entity itself, not the abstract generic concept behind its name."
+      : null,
+    organizationArc &&
+    (input.generationInput.intent?.framing || input.generationInput.presentationBrief)
+      ? "Keep the slide inside the framing scope. If the framing implies onboarding, orientation, introduction, or overview, orient a newcomer to the organization itself rather than broadening into a generic guide to the wider field."
+      : null,
     input.priorAssessment
       ? `Local quality feedback from earlier draft: ${input.priorAssessment.reasons.join(" ")}`
       : null,
@@ -1328,6 +1581,29 @@ const compactGroundingHighlight = (value: string, topic: string): string => {
   return clauses[0] ?? normalized.slice(0, 96).replace(/\s+\S*$/, "").trim();
 };
 
+const looksGenericEntityReference = (value: string): boolean =>
+  /^(?:our|my|the)\s+(?:company|organisation|organization|business|employer|client)$/i.test(
+    value.trim(),
+  ) ||
+  /^(?:company|organisation|organization|business|employer|client)$/i.test(
+    value.trim(),
+  );
+
+const resolveOrganizationEntityName = (
+  input: Pick<GenerateDeckInput, "topic" | "intent" | "plan">,
+): string => {
+  if (input.intent?.organization?.trim()) {
+    return input.intent.organization.trim();
+  }
+
+  const subject = resolveIntentSubject(input);
+  if (!looksGenericEntityReference(subject)) {
+    return subject;
+  }
+
+  return subject;
+};
+
 const pickContractText = (
   input: Pick<GenerateDeckInput, "topic" | "intent">,
   candidates: Array<string | undefined>,
@@ -1374,6 +1650,106 @@ const pickContractText = (
   }
 
   return sanitized[0]!;
+};
+
+const shouldLeadWithGroundingHighlight = (
+  subject: string,
+  highlight: string | undefined,
+  anchors: Array<string | undefined>,
+): boolean => {
+  if (!highlight) {
+    return false;
+  }
+
+  const anchorContext = uniqueNonEmptyStrings([
+    subject,
+    ...anchors.filter((anchor): anchor is string => Boolean(anchor)),
+  ]).join(" ");
+  return (
+    hasMeaningfulAnchorOverlap(highlight, anchorContext) ||
+    countAnchorOverlap(highlight, anchorContext) >= 2
+  );
+};
+
+const resolveSourceBackedCaseAnchor = (
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+    | "groundingSourceIds"
+  >,
+): string | undefined => {
+  const explicitFocusAnchor = resolveIntentFocusAnchor(input);
+  if (explicitFocusAnchor) {
+    return explicitFocusAnchor;
+  }
+
+  if (deriveSlideArcPolicy(input) !== "source-backed-subject") {
+    return undefined;
+  }
+
+  const subject = resolveIntentSubject(input);
+  const subjectTokens = new Set(tokenizeDeckShapeText(subject));
+  const contextAnchor = uniqueNonEmptyStrings([
+    subject,
+    ...(input.groundingCoverageGoals ?? []),
+  ]).join(" ");
+  const candidates = [
+    ...(input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? ""))
+      .map((value) => ({
+        source: "coverageRequirement" as const,
+        text: sanitizeContractText(value, subject),
+      })),
+    ...(input.groundingCoverageGoals ?? []).map((value) => ({
+      source: "coverageGoal" as const,
+      text: sanitizeContractText(value, subject),
+    })),
+    ...(input.groundingHighlights ?? []).map((value) => ({
+      source: "groundingHighlight" as const,
+      text: compactGroundingHighlight(value, subject),
+    })),
+  ].filter((candidate) => candidate.text.length > 0);
+
+  const ranked = uniqueNonEmptyStrings(candidates.map((candidate) => candidate.text))
+    .map((candidate) => {
+      const source =
+        candidates.find((entry) => normalizeComparableText(entry.text) === normalizeComparableText(candidate))
+          ?.source ?? "coverageGoal";
+      const candidateTokens = [...new Set(tokenizeDeckShapeText(candidate))];
+      const novelTokenCount = candidateTokens.filter((token) => !subjectTokens.has(token)).length;
+      const overlapScore = countAnchorOverlap(candidate, contextAnchor);
+      const meaningfulOverlap = hasMeaningfulAnchorOverlap(candidate, contextAnchor) ? 3 : 0;
+      const summaryPenalty = isGenericOpeningFocus(subject, candidate) ? -4 : 0;
+      const specificityScore = Math.min(4, candidateTokens.length);
+      const sourceBonus =
+        source === "groundingHighlight" ? 4 : source === "coverageRequirement" ? 3 : 1;
+      return {
+        candidate,
+        source,
+        score:
+          sourceBonus +
+          overlapScore * 2 +
+          meaningfulOverlap +
+          novelTokenCount * 2 +
+          specificityScore +
+          (/\p{N}/u.test(candidate) ? 1 : 0) +
+          summaryPenalty,
+      };
+    })
+    .sort((left, right) => {
+      const sourceRank = (source: "coverageRequirement" | "coverageGoal" | "groundingHighlight") =>
+        source === "coverageRequirement" ? 0 : source === "groundingHighlight" ? 1 : 2;
+      if (sourceRank(left.source) !== sourceRank(right.source)) {
+        return sourceRank(left.source) - sourceRank(right.source);
+      }
+      return right.score - left.score;
+    });
+
+  const selected = ranked[0]?.candidate;
+  return selected ? compressContractCandidate(input, selected) : undefined;
 };
 
 const shortenTitlePhrase = (value: string, maxLength = 72): string => {
@@ -1433,6 +1809,12 @@ const pickOpeningFocus = (
   openingHighlight?: string,
 ): string => {
   const subject = resolveIntentSubject(input);
+  const focusAnchor = resolveSourceBackedCaseAnchor(input);
+  const arcPolicy = deriveSlideArcPolicy(input);
+  const entityName =
+    input.intent?.presentationFrame === "organization"
+      ? input.intent.organization ?? subject
+      : subject;
   const explicitCoverageRequirements = uniqueNonEmptyStrings(
     (input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? ""))
       .map((requirement) => sanitizeContractText(requirement, subject)),
@@ -1448,18 +1830,84 @@ const pickOpeningFocus = (
   const presentationGoal = input.intent?.presentationGoal
     ? sanitizeContractText(input.intent.presentationGoal, subject)
     : "";
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
+  const organizationArc =
+    deriveSlideArcPolicy(input as ArcPolicyInput) === "organization-overview";
+  const audienceLabel = uniqueNonEmptyStrings(input.intent?.audienceCues ?? [])
+    .slice(0, 3)
+    .join(", ");
   const highlight = openingHighlight ? compactGroundingHighlight(openingHighlight, subject) : "";
+  const openingAnchors = [explicitCoverageRequirements[0], coverageGoals[0], learningObjectives[0]];
+  const leadingHighlight = shouldLeadWithGroundingHighlight(subject, highlight, openingAnchors)
+    ? highlight
+    : undefined;
+  const workshopOpeningAnchor = workshop
+    ? pickContractText(
+        input,
+        [
+          input.plan?.learningObjectives?.[0],
+          input.intent?.presentationGoal,
+          input.plan?.storyline?.[0],
+          audienceLabel
+            ? `How ${audienceLabel} use ${subject} in daily work`
+            : `How ${subject} supports daily work`,
+          subject,
+        ],
+        { preferConcrete: true },
+      )
+    : undefined;
   const candidate = pickContractText(
     input,
-    [
-      presentationGoal,
-      explicitCoverageRequirements[0],
-      coverageGoals[0],
-      learningObjectives[0],
-      highlight,
-      subject,
-      `What ${subject} is and why it matters`,
-    ],
+    arcPolicy === "source-backed-subject"
+      ? [
+          focusAnchor,
+          explicitCoverageRequirements[0],
+          coverageGoals[0],
+          leadingHighlight,
+          highlight,
+          learningObjectives[0],
+          input.plan?.storyline?.[0],
+          presentationGoal,
+          subject,
+        ]
+      : arcPolicy === "organization-overview"
+        ? workshop
+          ? [
+              learningObjectives[0],
+              presentationGoal,
+              input.plan?.storyline?.[0],
+              workshopOpeningAnchor,
+              audienceLabel
+                ? `How ${audienceLabel} use ${subject} in daily work`
+                : `How ${subject} supports daily work`,
+              subject,
+              explicitCoverageRequirements[0],
+              leadingHighlight,
+            ]
+          : [
+              `Who ${entityName} is`,
+              input.plan?.learningObjectives?.[0],
+              input.plan?.storyline?.[0],
+              presentationGoal,
+              subject,
+              explicitCoverageRequirements[0],
+              coverageGoals[0],
+              leadingHighlight,
+              highlight,
+            ]
+      : [
+          leadingHighlight,
+          explicitCoverageRequirements[0],
+          coverageGoals[0],
+          learningObjectives[0],
+          presentationGoal,
+          input.intent?.presentationFrame === "organization"
+            ? `What ${entityName} does and why it matters`
+            : undefined,
+          highlight,
+          subject,
+          `What ${subject} is and why it matters`,
+        ],
     { preferConcrete: true },
   );
 
@@ -1479,21 +1927,693 @@ const pickOpeningObjective = (
   openingHighlight?: string,
 ): string | undefined => {
   const subject = resolveIntentSubject(input);
+  const arcPolicy = deriveSlideArcPolicy(input);
+  const focusAnchor = resolveSourceBackedCaseAnchor(input);
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
   const candidate = pickContractText(
     input,
-    [
-      input.intent?.presentationGoal,
-      input.intent?.activityRequirement,
-      input.plan?.learningObjectives?.[0],
-      openingHighlight,
-      ...(input.intent?.coverageRequirements ?? []),
-      ...(input.groundingCoverageGoals ?? []),
-    ],
+    arcPolicy === "source-backed-subject"
+      ? [
+          focusAnchor,
+          input.groundingCoverageGoals?.[0],
+          input.plan?.learningObjectives?.[0],
+          input.plan?.storyline?.[0],
+          openingHighlight,
+          input.intent?.presentationGoal,
+        ]
+      : arcPolicy === "organization-overview" && workshop
+        ? [
+            input.plan?.learningObjectives?.[0],
+            input.intent?.presentationGoal,
+            input.plan?.storyline?.[0],
+            input.intent?.coverageRequirements?.[0],
+          ]
+        : arcPolicy === "organization-overview"
+          ? [
+              input.plan?.learningObjectives?.[0],
+              input.plan?.storyline?.[0],
+              input.intent?.presentationGoal,
+              input.intent?.coverageRequirements?.[0],
+              input.groundingCoverageGoals?.[0],
+            ]
+      : [
+          input.intent?.presentationGoal,
+          input.intent?.activityRequirement,
+          input.plan?.learningObjectives?.[0],
+          openingHighlight,
+          ...(input.intent?.coverageRequirements ?? []),
+          ...(input.groundingCoverageGoals ?? []),
+        ],
     { preferConcrete: true },
   );
 
   const normalized = candidate ? sanitizeContractText(candidate, subject) : "";
   return normalized || undefined;
+};
+
+const buildContractSeeds = (
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "plan"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+  >,
+): ContractSeed[] => {
+  const subject = resolveIntentSubject(input);
+  const seeds: ContractSeed[] = [];
+  const seen = new Set<string>();
+  const derivedFocusAnchor = resolveSourceBackedCaseAnchor(input);
+
+  const addSeeds = (
+    source: ContractSeedSource,
+    values: string[],
+    normalize: (value: string) => string = (value) => sanitizeContractText(value, subject),
+  ) => {
+    values.forEach((value, order) => {
+      const normalized = normalize(value);
+      if (
+        !normalized ||
+        isOrientationCoverageAnchor(subject, normalized) ||
+        NON_SLIDEABLE_COVERAGE_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+        DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+        DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+        PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(normalized))
+      ) {
+        return;
+      }
+
+      const key = normalizeComparableText(normalized);
+      if (!normalized || seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      seeds.push({
+        id: `${source}:${order}:${key}`,
+        text: normalized,
+        source,
+        order,
+      });
+    });
+  };
+
+  if (derivedFocusAnchor) {
+    addSeeds("focusAnchor", [derivedFocusAnchor]);
+  }
+  if (input.intent?.presentationGoal) {
+    addSeeds("presentationGoal", [input.intent.presentationGoal]);
+  }
+  addSeeds(
+    "coverageRequirement",
+    input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? ""),
+  );
+  addSeeds("coverageGoal", input.groundingCoverageGoals ?? []);
+  addSeeds("learningObjective", input.plan?.learningObjectives ?? []);
+  addSeeds("storyline", input.plan?.storyline ?? []);
+  addSeeds(
+    "groundingHighlight",
+    (input.groundingHighlights ?? []).map((highlight) =>
+      compactGroundingHighlight(highlight, subject),
+    ),
+    (value) => value,
+  );
+  if (input.intent?.activityRequirement) {
+    addSeeds("activityRequirement", [input.intent.activityRequirement]);
+  }
+
+  return seeds;
+};
+
+const contractTextSimilarity = (left: string, right: string): number => {
+  const leftTokens = [...new Set(tokenizeDeckShapeText(left))];
+  const rightTokens = new Set(tokenizeDeckShapeText(right));
+
+  if (leftTokens.length === 0 || rightTokens.size === 0) {
+    return 0;
+  }
+
+  const overlap = leftTokens.filter((token) => rightTokens.has(token)).length;
+  return overlap / Math.min(leftTokens.length, rightTokens.size);
+};
+
+const selectDistinctContractSeed = (options: {
+  seeds: ContractSeed[];
+  usedSeedIds: Set<string>;
+  usedTexts: string[];
+  preferredSources: ContractSeedSource[];
+  fallbackSources?: ContractSeedSource[];
+}): ContractSeed | undefined => {
+  const fallbackSources = options.fallbackSources ?? options.preferredSources;
+  const allowedSources = new Set([...options.preferredSources, ...fallbackSources]);
+  const sourceRank = new Map<ContractSeedSource, number>();
+
+  options.preferredSources.forEach((source, index) => {
+    if (!sourceRank.has(source)) {
+      sourceRank.set(source, index);
+    }
+  });
+  fallbackSources.forEach((source, index) => {
+    if (!sourceRank.has(source)) {
+      sourceRank.set(source, options.preferredSources.length + index);
+    }
+  });
+
+  const ranked = options.seeds
+    .filter((seed) => !options.usedSeedIds.has(seed.id) && allowedSources.has(seed.source))
+    .map((seed) => {
+      const similarity = options.usedTexts.reduce(
+        (max, usedText) => Math.max(max, contractTextSimilarity(seed.text, usedText)),
+        0,
+      );
+      const distinctnessBucket =
+        seed.source === "focusAnchor"
+          ? 0
+          : similarity >= 0.72
+            ? 2
+            : similarity >= 0.58
+              ? 1
+              : 0;
+      const specificity = tokenizeDeckShapeText(seed.text).length;
+      return {
+        seed,
+        distinctnessBucket,
+        sourceOrder: sourceRank.get(seed.source) ?? Number.MAX_SAFE_INTEGER,
+        specificity,
+        similarity,
+      };
+    })
+    .sort((left, right) => {
+      if (left.distinctnessBucket !== right.distinctnessBucket) {
+        return left.distinctnessBucket - right.distinctnessBucket;
+      }
+      if (left.sourceOrder !== right.sourceOrder) {
+        return left.sourceOrder - right.sourceOrder;
+      }
+      if (left.specificity !== right.specificity) {
+        return right.specificity - left.specificity;
+      }
+      if (left.similarity !== right.similarity) {
+        return left.similarity - right.similarity;
+      }
+      return left.seed.order - right.seed.order;
+    });
+
+  return ranked[0]?.seed;
+};
+
+const selectAlignedContractSeed = (options: {
+  seeds: ContractSeed[];
+  usedSeedIds: Set<string>;
+  preferredSources: ContractSeedSource[];
+  referenceTexts: string[];
+}): ContractSeed | undefined => {
+  const allowedSources = new Set(options.preferredSources);
+  const sourceRank = new Map<ContractSeedSource, number>();
+  options.preferredSources.forEach((source, index) => {
+    if (!sourceRank.has(source)) {
+      sourceRank.set(source, index);
+    }
+  });
+
+  const ranked = options.seeds
+    .filter((seed) => !options.usedSeedIds.has(seed.id) && allowedSources.has(seed.source))
+    .map((seed) => {
+      const alignment = options.referenceTexts.reduce(
+        (max, reference) =>
+          Math.max(
+            max,
+            countAnchorOverlap(seed.text, reference) * 2 +
+              (hasMeaningfulAnchorOverlap(seed.text, reference) ? 3 : 0),
+          ),
+        0,
+      );
+      const specificity = tokenizeDeckShapeText(seed.text).length;
+      return {
+        seed,
+        alignment,
+        specificity,
+        sourceOrder: sourceRank.get(seed.source) ?? Number.MAX_SAFE_INTEGER,
+      };
+    })
+    .sort((left, right) => {
+      if (left.alignment !== right.alignment) {
+        return right.alignment - left.alignment;
+      }
+      if (left.sourceOrder !== right.sourceOrder) {
+        return left.sourceOrder - right.sourceOrder;
+      }
+      return right.specificity - left.specificity;
+    });
+
+  return ranked[0]?.seed;
+};
+
+const isWorkshopPresentation = (
+  input: Pick<GenerateDeckInput, "intent">,
+): boolean =>
+  input.intent?.deliveryFormat === "workshop" ||
+  Boolean(input.intent?.activityRequirement);
+
+const buildSlideContractKinds = (
+  input: Pick<
+    GenerateDeckInput,
+    "intent" | "groundingHighlights" | "groundingCoverageGoals" | "groundingSourceIds"
+  >,
+  slideCount: number,
+): SlideContract["kind"][] => {
+  if (slideCount <= 0) {
+    return [];
+  }
+
+  const remainingSlideCount = Math.max(0, slideCount - 1);
+  const workshop = isWorkshopPresentation(input);
+  const arcPolicy = deriveSlideArcPolicy(input);
+
+  if (remainingSlideCount === 0) {
+    return ["orientation"];
+  }
+
+  if (arcPolicy === "procedural") {
+    return [
+      "orientation",
+      ...Array.from({ length: remainingSlideCount }, (_, index) =>
+        index === 0
+          ? "procedural-ingredients"
+          : index === 1
+            ? "procedural-steps"
+            : "procedural-quality",
+      ),
+    ];
+  }
+
+  if (arcPolicy === "organization-overview") {
+    if (workshop) {
+      if (remainingSlideCount === 1) {
+        return ["orientation", "workshop-practice"];
+      }
+      if (remainingSlideCount === 2) {
+        return ["orientation", "entity-capabilities", "workshop-practice"];
+      }
+      return [
+        "orientation",
+        "entity-capabilities",
+        ...Array.from({ length: remainingSlideCount - 1 }, (_, index) =>
+          index === remainingSlideCount - 2 ? "workshop-practice" : "entity-operations",
+        ),
+      ];
+    }
+
+    if (remainingSlideCount === 1) {
+      return ["orientation", "entity-value"];
+    }
+    if (remainingSlideCount === 2) {
+      return ["orientation", "entity-capabilities", "entity-value"];
+    }
+
+    return [
+      "orientation",
+      "entity-capabilities",
+      ...Array.from({ length: remainingSlideCount - 1 }, (_, index) =>
+        index === remainingSlideCount - 2 ? "entity-value" : "entity-operations",
+      ),
+    ];
+  }
+
+  if (workshop) {
+    if (remainingSlideCount === 1) {
+      return ["orientation", "workshop-practice"];
+    }
+    if (remainingSlideCount === 2) {
+      return ["orientation", "subject-detail", "workshop-practice"];
+    }
+    return [
+      "orientation",
+      "subject-detail",
+      ...Array.from({ length: remainingSlideCount - 1 }, (_, index) =>
+        index === remainingSlideCount - 2 ? "workshop-practice" : "subject-implication",
+      ),
+    ];
+  }
+
+  if (remainingSlideCount === 1) {
+    return ["orientation", "subject-takeaway"];
+  }
+  if (remainingSlideCount === 2) {
+    return ["orientation", "subject-detail", "subject-takeaway"];
+  }
+
+  return [
+    "orientation",
+    "subject-detail",
+    ...Array.from({ length: remainingSlideCount - 1 }, (_, index) =>
+      index === remainingSlideCount - 2 ? "subject-takeaway" : "subject-implication",
+    ),
+  ];
+};
+
+const buildContractFallbackFocus = (
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+    | "groundingSourceIds"
+  >,
+  kind: SlideContract["kind"],
+): string => {
+  const subject = resolveIntentSubject(input);
+  const focusAnchor = resolveSourceBackedCaseAnchor(input);
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
+  const entityName =
+    input.intent?.presentationFrame === "organization"
+      ? input.intent.organization ?? subject
+      : subject;
+
+  switch (kind) {
+    case "subject-detail":
+      return focusAnchor ?? `One concrete detail, event, mechanism, or defining part of ${subject}`;
+    case "subject-implication":
+      return `One consequence, interpretation, or lesson revealed by ${subject}`;
+    case "subject-takeaway":
+      return `The strongest takeaway from ${subject}`;
+    case "entity-capabilities":
+      return workshop
+        ? `Where ${subject} helps in daily work`
+        : `What ${entityName} does and where it creates value`;
+    case "entity-operations":
+      return workshop
+        ? `Which guardrails and review steps keep ${subject} safe in practice`
+        : `How ${entityName} works in practice`;
+    case "entity-value":
+      return `One concrete example or outcome showing how ${entityName} creates value`;
+    case "workshop-practice":
+      return input.intent?.activityRequirement
+        ? sanitizeContractText(input.intent.activityRequirement, subject)
+        : `One practical exercise that applies ${subject}`;
+    case "coverage":
+      return `One concrete part of ${subject}`;
+    case "development":
+      return `The next meaningful part of ${subject}`;
+    case "synthesis":
+      return `The most important lessons about ${subject}`;
+    default:
+      return subject;
+  }
+};
+
+const buildContractFallbackObjective = (
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+    | "groundingSourceIds"
+  >,
+  kind: SlideContract["kind"],
+): string | undefined => {
+  const subject = resolveIntentSubject(input);
+  const focusAnchor = resolveSourceBackedCaseAnchor(input);
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
+
+  switch (kind) {
+    case "subject-detail":
+      return focusAnchor
+        ? `How ${focusAnchor} makes ${subject} concrete`
+        : `A concrete detail or defining part that keeps ${subject} specific`;
+    case "subject-implication":
+      return `Why that concrete detail matters, what it changes, or what it reveals`;
+    case "subject-takeaway":
+      return `The clearest lesson or takeaway the audience should retain`;
+    case "entity-capabilities":
+      return workshop
+        ? `Which daily tasks and role-based use cases benefit most from ${subject}`
+        : `What ${subject} offers through concrete capabilities, services, or responsibilities`;
+    case "entity-operations":
+      return workshop
+        ? `Which review steps, approved tools, and policy boundaries keep ${subject} safe in daily work`
+        : `How ${subject} operates through delivery, teamwork, or concrete processes`;
+    case "entity-value":
+      return `Which customer outcome, example, or consequence makes ${subject} matter in practice`;
+    case "workshop-practice":
+      return input.intent?.activityRequirement
+        ? sanitizeContractText(input.intent.activityRequirement, subject)
+        : `One practical exercise that helps people apply ${subject}`;
+    case "coverage":
+      return `A required coverage area that keeps the deck specific`;
+    case "development":
+      return `A distinct mechanism, role, or consequence that advances the story`;
+    case "synthesis":
+      return `The strongest takeaway the audience should remember`;
+    default:
+      return undefined;
+  }
+};
+
+const contractSeedPriorities = (
+  kind: SlideContract["kind"],
+  input?: ArcPolicyInput,
+): {
+  focus: ContractSeedSource[];
+  objective: ContractSeedSource[];
+  evidence: ContractSeedSource[];
+} => {
+  const sourceBackedSubject = input
+    ? deriveSlideArcPolicy(input) === "source-backed-subject"
+    : false;
+
+  switch (kind) {
+    case "subject-detail":
+      if (sourceBackedSubject) {
+        return {
+          focus: [
+            "focusAnchor",
+            "coverageRequirement",
+            "coverageGoal",
+            "learningObjective",
+            "storyline",
+            "groundingHighlight",
+            "presentationGoal",
+          ],
+          objective: [
+            "learningObjective",
+            "storyline",
+            "coverageGoal",
+            "groundingHighlight",
+            "presentationGoal",
+            "focusAnchor",
+          ],
+          evidence: [
+            "groundingHighlight",
+            "coverageGoal",
+            "focusAnchor",
+            "learningObjective",
+            "storyline",
+          ],
+        };
+      }
+      return {
+        focus: ["focusAnchor", "coverageRequirement", "groundingHighlight", "coverageGoal", "storyline", "learningObjective", "presentationGoal"],
+        objective: ["coverageGoal", "learningObjective", "storyline", "groundingHighlight", "presentationGoal", "focusAnchor"],
+        evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline", "focusAnchor"],
+      };
+    case "subject-implication":
+      if (sourceBackedSubject) {
+        return {
+          focus: [
+            "learningObjective",
+            "storyline",
+            "coverageGoal",
+            "groundingHighlight",
+            "coverageRequirement",
+            "presentationGoal",
+          ],
+          objective: [
+            "learningObjective",
+            "storyline",
+            "coverageGoal",
+            "groundingHighlight",
+            "presentationGoal",
+          ],
+          evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+        };
+      }
+      return {
+        focus: ["coverageGoal", "learningObjective", "storyline", "groundingHighlight", "coverageRequirement", "presentationGoal"],
+        objective: ["learningObjective", "coverageGoal", "storyline", "groundingHighlight", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+      };
+    case "subject-takeaway":
+      if (sourceBackedSubject) {
+        return {
+          focus: [
+            "learningObjective",
+            "storyline",
+            "coverageGoal",
+            "groundingHighlight",
+            "coverageRequirement",
+            "presentationGoal",
+          ],
+          objective: [
+            "learningObjective",
+            "storyline",
+            "coverageGoal",
+            "groundingHighlight",
+            "presentationGoal",
+          ],
+          evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+        };
+      }
+      return {
+        focus: ["learningObjective", "storyline", "groundingHighlight", "coverageGoal", "coverageRequirement", "presentationGoal"],
+        objective: ["learningObjective", "storyline", "coverageGoal", "groundingHighlight", "presentationGoal"],
+        evidence: ["groundingHighlight", "learningObjective", "storyline", "coverageGoal"],
+      };
+    case "entity-capabilities":
+      return {
+        focus: ["coverageRequirement", "coverageGoal", "groundingHighlight", "learningObjective", "storyline", "presentationGoal"],
+        objective: ["learningObjective", "storyline", "coverageGoal", "groundingHighlight", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+      };
+    case "entity-operations":
+      return {
+        focus: ["storyline", "learningObjective", "coverageGoal", "groundingHighlight", "coverageRequirement", "presentationGoal"],
+        objective: ["coverageGoal", "learningObjective", "storyline", "groundingHighlight", "coverageRequirement", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "storyline", "learningObjective"],
+      };
+    case "entity-value":
+      return {
+        focus: ["coverageGoal", "learningObjective", "storyline", "groundingHighlight", "coverageRequirement", "presentationGoal"],
+        objective: ["learningObjective", "coverageGoal", "storyline", "groundingHighlight", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+      };
+    case "workshop-practice":
+      return {
+        focus: ["activityRequirement", "learningObjective", "coverageGoal", "groundingHighlight", "storyline", "coverageRequirement", "presentationGoal"],
+        objective: ["activityRequirement", "learningObjective", "coverageGoal", "storyline", "groundingHighlight", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "activityRequirement", "learningObjective", "storyline"],
+      };
+    case "coverage":
+      return {
+        focus: ["coverageRequirement", "coverageGoal", "learningObjective", "storyline", "groundingHighlight", "presentationGoal"],
+        objective: ["learningObjective", "coverageGoal", "storyline", "groundingHighlight", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+      };
+    case "development":
+      return {
+        focus: ["learningObjective", "storyline", "groundingHighlight", "coverageGoal", "coverageRequirement", "presentationGoal"],
+        objective: ["storyline", "learningObjective", "groundingHighlight", "coverageGoal", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+      };
+    case "synthesis":
+      return {
+        focus: ["groundingHighlight", "learningObjective", "storyline", "coverageGoal", "coverageRequirement", "presentationGoal"],
+        objective: ["learningObjective", "storyline", "groundingHighlight", "coverageGoal", "presentationGoal"],
+        evidence: ["groundingHighlight", "learningObjective", "storyline", "coverageGoal"],
+      };
+    default:
+      return {
+        focus: ["learningObjective", "storyline", "coverageGoal", "groundingHighlight", "coverageRequirement", "presentationGoal"],
+        objective: ["learningObjective", "storyline", "coverageGoal", "groundingHighlight", "presentationGoal"],
+        evidence: ["groundingHighlight", "coverageGoal", "learningObjective", "storyline"],
+      };
+  }
+};
+
+const buildSlideContractLabel = (
+  kind: SlideContract["kind"],
+  storylineValue: string | undefined,
+): string => {
+  switch (kind) {
+    case "orientation":
+      return "orientation";
+    case "subject-detail":
+      return storylineValue ?? "concrete detail";
+    case "subject-implication":
+      return storylineValue ?? "why it matters";
+    case "subject-takeaway":
+      return "takeaway";
+    case "entity-capabilities":
+      return "core capabilities";
+    case "entity-operations":
+      return storylineValue ?? "how it works";
+    case "entity-value":
+      return "practical value";
+    case "workshop-practice":
+      return "practical exercise";
+    case "coverage":
+      return storylineValue ?? "required coverage";
+    case "development":
+      return storylineValue ?? "development";
+    case "synthesis":
+      return "synthesis";
+    case "procedural-ingredients":
+      return "ingredients";
+    case "procedural-steps":
+      return "steps";
+    case "procedural-quality":
+      return "quality";
+  }
+};
+
+const contractRequiresEvidence = (kind: SlideContract["kind"]): boolean =>
+  kind === "entity-value" ||
+  kind === "workshop-practice" ||
+  kind === "subject-detail" ||
+  kind === "subject-implication";
+
+const openingSeedPriorities = (
+  input: Pick<
+    GenerateDeckInput,
+    "intent" | "groundingHighlights" | "groundingCoverageGoals" | "groundingSourceIds"
+  >,
+): ContractSeedSource[] => {
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
+  switch (deriveSlideArcPolicy(input)) {
+    case "source-backed-subject":
+      return [
+        "focusAnchor",
+        "coverageRequirement",
+        "coverageGoal",
+        "groundingHighlight",
+        "learningObjective",
+        "storyline",
+        "presentationGoal",
+      ];
+    case "organization-overview":
+      return workshop
+        ? [
+            "learningObjective",
+            "storyline",
+            "presentationGoal",
+            "coverageRequirement",
+            "coverageGoal",
+            "groundingHighlight",
+          ]
+        : [
+            "learningObjective",
+            "storyline",
+            "presentationGoal",
+            "coverageRequirement",
+            "coverageGoal",
+            "groundingHighlight",
+          ];
+    default:
+      return [
+        "coverageRequirement",
+        "coverageGoal",
+        "groundingHighlight",
+        "learningObjective",
+        "storyline",
+        "presentationGoal",
+      ];
+  }
 };
 
 const buildSlideContracts = (
@@ -1509,62 +2629,24 @@ const buildSlideContracts = (
   slideCount: number,
 ): SlideContract[] => {
   const subject = resolveIntentSubject(input);
-  const contentMode = input.intent?.contentMode ?? "descriptive";
-  const explicitCoverageRequirements = uniqueNonEmptyStrings(
-    (input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? ""))
-      .map((requirement) => sanitizeContractText(requirement, subject)),
-  );
-  const coverageRequirements = uniqueNonEmptyStrings(
-    [
-      ...(input.intent?.presentationGoal
-        ? [sanitizeContractText(input.intent.presentationGoal, subject)]
-        : []),
-      ...explicitCoverageRequirements,
-    ],
-  );
-  const coverageGoals = uniqueNonEmptyStrings(
-    (input.groundingCoverageGoals ?? []).map((goal) =>
-      sanitizeContractText(goal, subject),
-    ),
-  ).filter(
-    (goal) =>
-      goal.length > 0 &&
-      !NON_SLIDEABLE_COVERAGE_PATTERNS.some((pattern) => pattern.test(goal)) &&
-      !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(goal)) &&
-      !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(goal)),
-  );
-  const coverageAnchors = uniqueNonEmptyStrings(
-    coverageRequirements.length > 0
-      ? [...coverageRequirements, ...coverageGoals]
-      : coverageGoals,
-  ).filter((anchor) => !isOrientationCoverageAnchor(subject, anchor));
   const storyline = uniqueNonEmptyStrings(input.plan?.storyline ?? []);
   const learningObjectives = uniqueNonEmptyStrings(input.plan?.learningObjectives ?? []);
-  const groundingHighlights = uniqueNonEmptyStrings(
-    (input.groundingHighlights ?? []).map((highlight) =>
-      compactGroundingHighlight(highlight, subject),
-    ),
-  ).filter(
-    (highlight) =>
-      highlight.length > 16 &&
-      !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(highlight)) &&
-      !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(highlight)),
-  );
+  const seeds = buildContractSeeds(input);
+  const contractKinds = buildSlideContractKinds(input, slideCount);
+  const arcPolicy = deriveSlideArcPolicy(input);
   const contracts: SlideContract[] = [];
-  let highlightIndex = 0;
-
-  const takeNextHighlight = () => {
-    const next = groundingHighlights[highlightIndex];
-    if (next) {
-      highlightIndex += 1;
-    }
-
-    return next;
-  };
+  const usedSeedIds = new Set<string>();
+  const usedTexts: string[] = [];
 
   for (let index = 0; index < slideCount; index += 1) {
     if (index === 0) {
-      const openingHighlight = takeNextHighlight();
+      const openingPriority = openingSeedPriorities(input);
+      const openingHighlight = selectDistinctContractSeed({
+        seeds,
+        usedSeedIds,
+        usedTexts,
+        preferredSources: openingPriority,
+      })?.text;
       const focus = pickOpeningFocus(input, openingHighlight);
       const openingObjective = pickOpeningObjective(input, openingHighlight);
       contracts.push({
@@ -1576,150 +2658,132 @@ const buildSlideContracts = (
           ? { objective: openingObjective }
           : {}),
       });
+      if (openingHighlight) {
+        const openingSeed = seeds.find((seed) => seed.text === openingHighlight);
+        if (openingSeed && openingSeed.source !== "focusAnchor") {
+          usedSeedIds.add(openingSeed.id);
+        }
+      }
+      usedTexts.push(focus);
+      if (openingObjective && openingObjective !== focus) {
+        usedTexts.push(openingObjective);
+      }
       continue;
     }
 
-    if (contentMode === "procedural") {
-      const proceduralKinds: SlideContract["kind"][] = [
-        "procedural-ingredients",
-        "procedural-steps",
-        "procedural-quality",
-      ];
-      const proceduralKind =
-        proceduralKinds[Math.min(index - 1, proceduralKinds.length - 1)] ?? "development";
-      const proceduralFocus = pickContractText(
-        input,
-        [
-          coverageAnchors[index - 1],
-          learningObjectives[index],
-          storyline[index],
-          takeNextHighlight(),
-        ],
-        { preferConcrete: true },
-      );
-      const proceduralObjective = pickContractText(
-        input,
-        [learningObjectives[index], storyline[index], coverageAnchors[index - 1]],
-        { preferConcrete: true },
-      );
-      contracts.push({
-        index,
-        label:
-          proceduralKind === "procedural-ingredients"
-            ? "ingredients"
-            : proceduralKind === "procedural-steps"
-              ? "steps"
-              : "quality",
-        kind: proceduralKind,
-        focus: proceduralFocus,
-        ...((proceduralObjective || coverageAnchors[index - 1]) &&
-        proceduralObjective !== proceduralFocus
-          ? {
-              objective: sanitizeContractText(
-                proceduralObjective ?? coverageAnchors[index - 1]!,
-                subject,
-              ),
-            }
-          : {}),
-      });
-      continue;
+    const kind = contractKinds[index] ?? "subject-implication";
+    const priorities = contractSeedPriorities(kind, input);
+    const distinctFrom = uniqueNonEmptyStrings(usedTexts.slice(-4));
+    const focusSeed = selectDistinctContractSeed({
+      seeds,
+      usedSeedIds,
+      usedTexts,
+      preferredSources: priorities.focus,
+    });
+    if (focusSeed) {
+      usedSeedIds.add(focusSeed.id);
     }
-
-    if (coverageAnchors[index - 1]) {
-      const coverageAnchor = coverageAnchors[index - 1]!;
-      const groundingHighlight = takeNextHighlight();
-      const focus = pickContractText(
-        input,
-        [
-          coverageAnchor,
-          groundingHighlight,
-          learningObjectives[index],
-          storyline[index],
-        ],
-        { preferConcrete: true },
-      );
-      const objective = pickContractText(
-        input,
-        [
-          learningObjectives[index],
-          storyline[index],
-          coverageAnchor,
-        ],
-      );
-      contracts.push({
-        index,
-        label: "required coverage",
-        kind: "coverage",
-        focus,
-        ...(objective && objective !== focus
-          ? { objective: sanitizeContractText(objective, subject) }
-          : {}),
-      });
-      continue;
-    }
-
-    if (index === slideCount - 1) {
-      const groundingHighlight = takeNextHighlight();
-      const focus = pickContractText(
-        input,
-        [
-          learningObjectives.at(-1),
-          storyline.at(-1),
-          groundingHighlight,
-          `The most important lessons about ${subject}`,
-        ],
-        { preferConcrete: true },
-      );
-      contracts.push({
-        index,
-        label: "synthesis",
-        kind: "synthesis",
-        focus,
-        ...((groundingHighlight || learningObjectives.at(-1))
-          ? {
-              objective: sanitizeContractText(
-                groundingHighlight ?? learningObjectives.at(-1)!,
-                subject,
-              ),
-            }
-          : {}),
-      });
-      continue;
-    }
-
-    const groundingHighlight = takeNextHighlight();
     const focus = pickContractText(
       input,
-      [
-        learningObjectives[index],
-        storyline[index],
-        groundingHighlight,
-        `The next meaningful part of ${subject}`,
-      ],
+      arcPolicy === "source-backed-subject"
+        ? [
+            learningObjectives[index],
+            storyline[index],
+            focusSeed?.text,
+            buildContractFallbackFocus(input, kind),
+          ]
+        : [
+            focusSeed?.text,
+            learningObjectives[index],
+            storyline[index],
+            buildContractFallbackFocus(input, kind),
+          ],
       { preferConcrete: true },
     );
+    const objectiveSeed = selectDistinctContractSeed({
+      seeds,
+      usedSeedIds,
+      usedTexts: [...usedTexts, focus],
+      preferredSources: priorities.objective,
+      fallbackSources: priorities.focus,
+    });
+    if (objectiveSeed) {
+      usedSeedIds.add(objectiveSeed.id);
+    }
     const objective = pickContractText(
       input,
-      [
-        learningObjectives[index],
-        storyline[index],
-        groundingHighlight,
-      ],
+      (
+        arcPolicy === "source-backed-subject"
+          ? [
+              storyline[index],
+              learningObjectives[index],
+              objectiveSeed?.text,
+              buildContractFallbackObjective(input, kind),
+            ]
+          : [
+              objectiveSeed?.text,
+              buildContractFallbackObjective(input, kind),
+            ]
+      ).filter(
+        (candidate) => candidate && normalizeComparableText(candidate) !== normalizeComparableText(focus),
+      ),
+      { preferConcrete: true },
     );
+    const evidenceSeed = contractRequiresEvidence(kind)
+      ? arcPolicy === "source-backed-subject"
+        ? selectAlignedContractSeed({
+            seeds,
+            usedSeedIds,
+            preferredSources: priorities.evidence,
+            referenceTexts: [focus, objective].filter((value): value is string => Boolean(value)),
+          }) ??
+          selectDistinctContractSeed({
+            seeds,
+            usedSeedIds,
+            usedTexts: [...usedTexts, focus, objective].filter(
+              (value): value is string => Boolean(value),
+            ),
+            preferredSources: priorities.evidence,
+            fallbackSources: priorities.focus,
+          })
+        : selectDistinctContractSeed({
+            seeds,
+            usedSeedIds,
+            usedTexts: [...usedTexts, focus, objective].filter(
+              (value): value is string => Boolean(value),
+            ),
+            preferredSources: priorities.evidence,
+            fallbackSources: priorities.focus,
+          })
+      : undefined;
+    if (evidenceSeed) {
+      usedSeedIds.add(evidenceSeed.id);
+    }
+    const evidence =
+      evidenceSeed &&
+      normalizeComparableText(evidenceSeed.text) !== normalizeComparableText(focus) &&
+      normalizeComparableText(evidenceSeed.text) !== normalizeComparableText(objective)
+        ? evidenceSeed.text
+        : undefined;
+
     contracts.push({
       index,
-      label: storyline[index] ?? `development ${index + 1}`,
-      kind: "development",
+      label: buildSlideContractLabel(kind, storyline[index]),
+      kind,
       focus,
-      ...((groundingHighlight || objective) && objective !== focus
-        ? {
-            objective: sanitizeContractText(
-              groundingHighlight ?? objective!,
-              subject,
-            ),
-          }
+      ...(objective && objective !== focus
+        ? { objective: sanitizeContractText(objective, subject) }
         : {}),
+      ...(evidence ? { evidence } : {}),
+      ...(distinctFrom.length > 0 ? { distinctFrom } : {}),
     });
+    usedTexts.push(focus);
+    if (objective && objective !== focus) {
+      usedTexts.push(objective);
+    }
+    if (evidence) {
+      usedTexts.push(evidence);
+    }
   }
 
   return contracts;
@@ -1745,15 +2809,53 @@ const buildSlideContractPromptLines = (
   return buildSlideContracts(input, slideCount).map((contract) =>
     `Slide ${contract.index + 1}: ${contract.label}. Focus on ${contract.focus}${
       contract.objective ? ` Objective anchor: ${contract.objective}.` : "."
-    }`,
+    }${contract.evidence ? ` Evidence anchor: ${contract.evidence}.` : ""}`,
   );
 };
 
 const buildContractTitle = (
-  input: Pick<GenerateDeckInput, "topic" | "intent">,
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+    | "groundingSourceIds"
+  >,
   contract: SlideContract,
 ): string => {
   const subject = resolveIntentSubject(input);
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
+  const focusAnchor = resolveSourceBackedCaseAnchor(input);
+  const arcPolicy = deriveSlideArcPolicy(input);
+  const fallbackTitle = (() => {
+    switch (contract.kind) {
+      case "procedural-ingredients":
+        return "Essential ingredients";
+      case "procedural-steps":
+        return "Key preparation steps";
+      case "procedural-quality":
+        return "Taste, texture, and adjustment";
+      case "subject-detail":
+        return "Concrete detail";
+      case "subject-implication":
+        return "Why it matters";
+      case "subject-takeaway":
+        return "Key takeaway";
+      case "entity-capabilities":
+        return workshop ? "Role-based AI use cases" : "Core capabilities and focus areas";
+      case "entity-operations":
+        return workshop ? "Constraints and safe use" : "How it works in practice";
+      case "entity-value":
+        return "Where it creates value";
+      case "workshop-practice":
+        return "Practical exercise";
+      default:
+        return "";
+    }
+  })();
+
   if (contract.kind === "procedural-ingredients") {
     return "Essential ingredients";
   }
@@ -1764,7 +2866,11 @@ const buildContractTitle = (
     return "Taste, texture, and adjustment";
   }
   if (contract.index === 0) {
-    const focus = sanitizeContractText(contract.focus, subject);
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus, focusAnchor],
+      { preferConcrete: true },
+    );
     if (
       focus &&
       !isGenericOpeningFocus(subject, focus) &&
@@ -1772,6 +2878,13 @@ const buildContractTitle = (
       !/[.?!]/.test(focus)
     ) {
       return shortenTitlePhrase(focus, 72);
+    }
+
+    if (arcPolicy === "source-backed-subject" && focusAnchor) {
+      const fallbackFocus = shortenTitlePhrase(focusAnchor, 72);
+      if (fallbackFocus && !/[.?!]/.test(fallbackFocus)) {
+        return fallbackFocus;
+      }
     }
 
     return shortenTitlePhrase(subject, 72);
@@ -1796,7 +2909,7 @@ const buildContractTitle = (
 
   const trimmed = shortenTitlePhrase(preferredSource);
   if (!trimmed) {
-    return `Slide ${contract.index + 1}`;
+    return fallbackTitle || `Slide ${contract.index + 1}`;
   }
 
   const topicPrefixPattern = new RegExp(
@@ -1811,8 +2924,168 @@ const buildContractTitle = (
     return normalized;
   }
 
-  return shortenTitlePhrase(normalized, 72);
+  return fallbackTitle || shortenTitlePhrase(normalized, 72);
 };
+
+const scoreContractConcretePoint = (
+  input: Pick<GenerateDeckInput, "topic" | "intent">,
+  contract: SlideContract,
+  point: string,
+): number => {
+  const subject = resolveIntentSubject(input);
+  const focusAnchor = resolveIntentFocusAnchor(input);
+  const anchors = uniqueNonEmptyStrings([
+    contract.focus,
+    contract.objective ?? "",
+    contract.evidence ?? "",
+    contract.kind === "subject-detail" ||
+    contract.kind === "subject-implication" ||
+    contract.kind === "subject-takeaway"
+      ? focusAnchor ?? ""
+      : "",
+    subject,
+  ]);
+  const pointTokens = [...new Set(tokenizeDeckShapeText(point))];
+  const contractEchoPenalty = [contract.focus, contract.objective ?? "", contract.evidence ?? ""]
+    .filter((anchor) => anchor.length > 0)
+    .reduce((penalty, anchor) => {
+      const anchorTokens = new Set(tokenizeDeckShapeText(anchor));
+      if (anchorTokens.size === 0 || pointTokens.length === 0) {
+        return penalty;
+      }
+
+      const similarity = contractTextSimilarity(point, anchor);
+      const novelTokenCount = pointTokens.filter((token) => !anchorTokens.has(token)).length;
+      return similarity >= 0.82 && novelTokenCount <= 1 ? Math.min(penalty, -8) : penalty;
+    }, 0);
+
+  const focusOverlap = countAnchorOverlap(point, contract.focus);
+  const objectiveOverlap = contract.objective
+    ? countAnchorOverlap(point, contract.objective)
+    : 0;
+  const evidenceOverlap = contract.evidence
+    ? countAnchorOverlap(point, contract.evidence)
+    : 0;
+  const totalOverlap = anchors.reduce(
+    (sum, anchor) => sum + countAnchorOverlap(point, anchor),
+    0,
+  );
+  const meaningfulOverlap = anchors.some((anchor) =>
+    hasMeaningfulAnchorOverlap(point, anchor),
+  )
+    ? 3
+    : 0;
+  const lengthScore = point.length >= 52 ? 2 : point.length >= 36 ? 1 : 0;
+  const summaryPenalty = DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(point))
+    ? -4
+    : 0;
+  const promoPenalty = PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(point))
+    ? -6
+    : 0;
+
+  switch (contract.kind) {
+    case "entity-value":
+      return (
+        evidenceOverlap * 6 +
+        objectiveOverlap * 3 +
+        focusOverlap * 2 +
+        totalOverlap +
+        meaningfulOverlap +
+        lengthScore +
+        contractEchoPenalty +
+        summaryPenalty +
+        promoPenalty
+      );
+    case "workshop-practice":
+      return (
+        objectiveOverlap * 5 +
+        evidenceOverlap * 4 +
+        focusOverlap * 3 +
+        totalOverlap +
+        meaningfulOverlap +
+        lengthScore +
+        contractEchoPenalty +
+        summaryPenalty +
+        promoPenalty
+      );
+    case "entity-operations":
+      return (
+        objectiveOverlap * 4 +
+        focusOverlap * 3 +
+        evidenceOverlap * 2 +
+        totalOverlap +
+        meaningfulOverlap +
+        lengthScore +
+        contractEchoPenalty +
+        summaryPenalty +
+        promoPenalty
+      );
+    default:
+      return (
+        focusOverlap * 3 +
+        objectiveOverlap * 2 +
+        evidenceOverlap * 2 +
+        totalOverlap +
+        meaningfulOverlap +
+        lengthScore +
+        contractEchoPenalty +
+        summaryPenalty +
+        promoPenalty
+      );
+  }
+};
+
+const isWeakContractEchoPoint = (
+  contract: SlideContract,
+  point: string,
+): boolean => {
+  const pointTokens = [...new Set(tokenizeDeckShapeText(point))];
+  if (pointTokens.length === 0) {
+    return false;
+  }
+
+  return [contract.focus, contract.objective ?? "", contract.evidence ?? ""]
+    .filter((anchor) => anchor.length > 0)
+    .some((anchor) => {
+      const anchorTokens = new Set(tokenizeDeckShapeText(anchor));
+      if (anchorTokens.size === 0) {
+        return false;
+      }
+
+      const similarity = contractTextSimilarity(point, anchor);
+      const novelTokenCount = pointTokens.filter((token) => !anchorTokens.has(token)).length;
+      return similarity >= 0.82 && novelTokenCount <= 1;
+    });
+};
+
+const rankContractConcretePoints = (
+  input: Pick<GenerateDeckInput, "topic" | "intent">,
+  contract: SlideContract,
+  concretePointPool: string[],
+): string[] =>
+  uniqueNonEmptyStrings(concretePointPool)
+    .filter(
+      (point) =>
+        !looksFragmentarySlidePoint(point) &&
+        !(contract.kind === "orientation" && isWeakContractEchoPoint(contract, point)) &&
+        !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)) &&
+        !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(point)),
+    )
+    .map((point, index) => ({
+      point,
+      index,
+      score: scoreContractConcretePoint(input, contract, point),
+    }))
+    .sort((left, right) => {
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+      if (left.point.length !== right.point.length) {
+        return right.point.length - left.point.length;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.point);
 
 const buildContractAnchoredKeyPoints = (
   input: Pick<GenerateDeckInput, "topic" | "intent">,
@@ -1820,20 +3093,55 @@ const buildContractAnchoredKeyPoints = (
   concretePointPool: string[],
 ): string[] => {
   const subject = resolveIntentSubject(input);
+  const focusAnchor = resolveIntentFocusAnchor(input);
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
+  const organizationArc =
+    deriveSlideArcPolicy(input as ArcPolicyInput) === "organization-overview";
   const focus = sanitizeContractText(contract.focus, subject);
   const objective = contract.objective
     ? sanitizeContractText(contract.objective, subject)
+    : "";
+  const evidence = contract.evidence
+    ? sanitizeContractText(contract.evidence, subject)
     : "";
   const lowerFocus = lowerCaseFirstCharacter(focus);
   const anchorStatements = (() => {
     switch (contract.kind) {
       case "orientation":
+        return [];
+      case "subject-detail":
         return [
-          objective
-            ? `${objective} is one of the clearest ways to see why ${subject} matters.`
+          focus
+            ? `${focus} is one concrete detail that makes ${subject} specific.`
+            : focusAnchor
+              ? `${focusAnchor} is one concrete detail that makes ${subject} specific.`
+              : "",
+          objective && objective !== focus
+            ? `${objective} becomes clearer when that concrete detail is examined closely.`
             : "",
-          focus && !isGenericOpeningFocus(subject, focus)
-            ? `${focus} helps define what people should recognize about ${subject}.`
+        ];
+      case "subject-implication":
+        return [
+          focus
+            ? `${focus} explains what the earlier detail changes, reveals, or means within ${subject}.`
+            : "",
+          objective && objective !== focus
+            ? `${objective} should interpret the detail rather than restate it.`
+            : "",
+          focusAnchor
+            ? `The explanation should build on ${focusAnchor} instead of reopening the broad subject from scratch.`
+            : "",
+        ];
+      case "subject-takeaway":
+        return [
+          focus
+            ? `${focus} ties the strongest lesson from ${subject} to the earlier concrete detail.`
+            : "",
+          objective && objective !== focus
+            ? `${objective} becomes clearer when the main detail and implication are brought together.`
+            : "",
+          focusAnchor
+            ? `The main takeaway should grow out of ${focusAnchor} rather than introducing a different case.`
             : "",
         ];
       case "coverage":
@@ -1878,6 +3186,54 @@ const buildContractAnchoredKeyPoints = (
             ? `${objective} is easier to remember when the main ideas are tied together clearly.`
             : "",
         ];
+      case "entity-capabilities":
+        return [
+          workshop
+            ? focus
+              ? `${focus} show where ${subject} fits into real day-to-day work rather than abstract tool talk.`
+              : ""
+            : focus
+              ? `${focus} show what ${subject} offers through concrete capabilities, services, or responsibilities.`
+              : "",
+          objective && objective !== focus
+            ? workshop
+              ? `${objective} becomes clearer when the slide stays close to role-based tasks and outputs.`
+              : `${objective} becomes clearer when those capabilities are made explicit.`
+            : "",
+        ];
+      case "entity-operations":
+        return [
+          workshop
+            ? focus
+              ? `${focus} reveal how ${subject} stays safe, reviewable, and policy-aware in day-to-day use.`
+              : ""
+            : focus
+              ? `${focus} reveal how ${subject} works through delivery, teamwork, or day-to-day operating methods.`
+              : "",
+          objective && objective !== focus
+            ? workshop
+              ? `${objective} depends on concrete guardrails, review steps, or approved-tool boundaries rather than broad benefits.`
+              : `${objective} depends on concrete operating detail rather than broad slogans.`
+            : "",
+        ];
+      case "entity-value":
+        return [
+          focus
+            ? `${focus} show the practical value or outcome created by ${subject}.`
+            : "",
+          objective && objective !== focus
+            ? `${objective} becomes clearer when the slide stays close to one concrete example or consequence.`
+            : "",
+        ];
+      case "workshop-practice":
+        return [
+          focus
+            ? `${focus} gives the audience one concrete way to apply the ideas from ${subject}.`
+            : "",
+          objective && objective !== focus
+            ? `${objective} should turn the slide into applied practice rather than summary.`
+            : "",
+        ];
       default:
         return [];
     }
@@ -1885,10 +3241,40 @@ const buildContractAnchoredKeyPoints = (
   const fallbackStatements = (() => {
     switch (contract.kind) {
       case "orientation":
+        return organizationArc
+          ? workshop
+            ? [
+                `Role-based daily work becomes easier to understand when the opening names where ${subject} fits and what it helps people produce.`,
+                `A concrete workflow example shows how ${subject} connects to planning, coordination, analysis, or testing work.`,
+                `The opening becomes clearer when it ties the organization context to one recognizable use case instead of jumping straight to policy.`,
+              ]
+            : [
+                `${subject} becomes easier to understand when the opening names what the organization is, what it offers, and one recognizable example.`,
+                `Concrete services and customer-facing outcomes show where ${subject} creates value more clearly than broad company language does.`,
+                `An onboarding opening works best when it identifies the organization before it expands into capabilities or outcomes.`,
+              ]
+          : [
+              `${subject} is easier to understand when its purpose, structure, and one concrete example are visible together.`,
+              `A concrete consequence, responsibility, or example shows why ${subject} matters.`,
+              `${subject} becomes clearer when people can name what it is and what it changes.`,
+            ];
+      case "subject-detail":
         return [
-          `${subject} is easier to understand when its purpose, structure, and one concrete example are visible together.`,
-          `A concrete consequence, responsibility, or example shows why ${subject} matters.`,
-          `${subject} becomes clearer when people can name what it is and what it changes.`,
+          `A strong detail slide stays close to one concrete part, event, or mechanism instead of trying to summarize everything at once.`,
+          `Specific evidence makes ${subject} easier to understand than broad restatement does.`,
+          `One recognizable detail gives the rest of the explanation something concrete to build on.`,
+        ];
+      case "subject-implication":
+        return [
+          `An implication slide should explain what the earlier detail changes, reveals, or teaches.`,
+          `Consequence and significance make the subject clearer than repeating the same description.`,
+          `A strong explanatory slide interprets the concrete detail instead of naming it again.`,
+        ];
+      case "subject-takeaway":
+        return [
+          `The clearest takeaway ties the concrete detail to the larger lesson the audience should retain.`,
+          `A strong final subject slide should connect earlier evidence and implication instead of reopening the same description.`,
+          `The takeaway is easier to remember when it names what the subject teaches, not just what happened.`,
         ];
       case "procedural-ingredients":
         return [
@@ -1914,6 +3300,42 @@ const buildContractAnchoredKeyPoints = (
           `The key ideas from ${subject} reinforce one another instead of standing alone.`,
           `A strong summary of ${subject} connects value, structure, and example.`,
         ];
+      case "entity-capabilities":
+        return [
+          workshop
+            ? `A strong workshop use-case slide names real daily tasks, role situations, or outputs instead of broad tool claims.`
+            : `Specific capabilities and service areas explain what ${subject} actually does.`,
+          workshop
+            ? `Role-based examples make ${subject} easier to apply than abstract tool language does.`
+            : `Concrete responsibilities make ${subject} easier to recognize than broad company language does.`,
+          workshop
+            ? `The clearest use-case slide stays close to planning, documentation, analysis, prioritization, or testing work.`
+            : `A strong capability slide names real areas of work instead of repeating general value claims.`,
+        ];
+      case "entity-operations":
+        return [
+          workshop
+            ? `Guardrails, review steps, and approved-tool boundaries show how ${subject} can be used safely in practice.`
+            : `Operational detail shows how ${subject} works beyond slogans or broad claims.`,
+          workshop
+            ? `A practical constraint slide should show what must be checked before an AI-assisted result is trusted or shared.`
+            : `Delivery methods, customer collaboration, or internal process make the operating model visible.`,
+          workshop
+            ? `Safe day-to-day use becomes clearer when policy, privacy, and review are treated as part of the workflow.`
+            : `A practical operating slide should show how the work is carried out, not only why it matters.`,
+        ];
+      case "entity-value":
+        return [
+          `A concrete customer outcome or example shows why ${subject} matters in practice.`,
+          `Specific consequences make the value of ${subject} clearer than broad marketing language does.`,
+          `The strongest value slide ties the organization to one recognizable result or scenario.`,
+        ];
+      case "workshop-practice":
+        return [
+          `A practical task helps the audience apply the central ideas from ${subject}.`,
+          `The exercise should produce a concrete output, decision, or discussion rather than another summary.`,
+          `Applied practice makes it easier to retain the main ideas from the presentation.`,
+        ];
       default:
         return [
           focus
@@ -1928,20 +3350,33 @@ const buildContractAnchoredKeyPoints = (
         ];
     }
   })();
+  const rankedConcretePoints = rankContractConcretePoints(
+    input,
+    contract,
+    concretePointPool,
+  );
+  const orientationConcretePoints =
+    contract.kind === "orientation"
+      ? rankedConcretePoints.filter(
+          (point) =>
+            ![focus, objective]
+              .filter((anchor) => anchor.length > 0)
+              .some((anchor) => contractTextSimilarity(point, anchor) >= 0.6),
+        )
+      : rankedConcretePoints;
 
   return uniqueNonEmptyStrings(
     [
-      ...concretePointPool
-        .filter(
-          (point) =>
-            !looksFragmentarySlidePoint(point) &&
-            !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)) &&
-            !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(point)),
-        )
-        .map((point) => toAudienceFacingSentence(point)),
+      ...(orientationConcretePoints.length > 0
+        ? orientationConcretePoints
+        : rankedConcretePoints
+      ).map((point) => toAudienceFacingSentence(point)),
       ...anchorStatements
         .filter((statement) => statement.length > 0)
         .map((statement) => toAudienceFacingSentence(statement)),
+      evidence && !looksFragmentarySlidePoint(evidence)
+        ? toAudienceFacingSentence(evidence)
+        : null,
       objective && !looksFragmentarySlidePoint(objective)
         ? toAudienceFacingSentence(objective)
         : null,
@@ -1952,10 +3387,21 @@ const buildContractAnchoredKeyPoints = (
 };
 
 const buildContractLearningGoal = (
-  input: Pick<GenerateDeckInput, "topic" | "intent">,
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+    | "groundingSourceIds"
+  >,
   contract: SlideContract,
 ): string => {
   const subject = resolveIntentSubject(input);
+  const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
+  const focusAnchor = resolveSourceBackedCaseAnchor(input);
+  const arcPolicy = deriveSlideArcPolicy(input);
   if (input.intent?.contentMode === "procedural" && contract.index === 0) {
     return `See which ingredients, steps, and final adjustments define ${subject.toLowerCase()}.`;
   }
@@ -1968,6 +3414,84 @@ const buildContractLearningGoal = (
   if (contract.kind === "procedural-quality") {
     return `See which cues show whether ${subject.toLowerCase()} is balanced and finished.`;
   }
+  if (contract.kind === "subject-detail") {
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus],
+      { preferConcrete: true },
+    );
+    return normalizeComparableText(focus) === normalizeComparableText(subject)
+      ? `See one concrete detail that defines ${subject}.`
+      : `See how ${lowerCaseFirstCharacter(focus)} makes ${subject} concrete.`;
+  }
+  if (contract.kind === "subject-implication") {
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus],
+      { preferConcrete: true },
+    );
+    return normalizeComparableText(focus) === normalizeComparableText(subject)
+      ? `See why ${subject} matters and what it reveals.`
+      : `See why ${lowerCaseFirstCharacter(focus)} matters within ${subject}.`;
+  }
+  if (contract.kind === "subject-takeaway") {
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus],
+      { preferConcrete: true },
+    );
+    return normalizeComparableText(focus) === normalizeComparableText(subject)
+      ? `See the strongest takeaway from ${subject}.`
+      : `See what ${lowerCaseFirstCharacter(focus)} teaches about ${subject}.`;
+  }
+  if (contract.kind === "entity-capabilities") {
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus],
+      { preferConcrete: true },
+    );
+    return normalizeComparableText(focus) === normalizeComparableText(subject)
+      ? workshop
+        ? `See where ${subject} helps in daily work for different roles.`
+        : `See what ${subject} does and which capabilities define it.`
+      : workshop
+        ? `See where ${lowerCaseFirstCharacter(focus)} helps in daily work.`
+        : `See how ${lowerCaseFirstCharacter(focus)} shows what ${subject} offers.`;
+  }
+  if (contract.kind === "entity-operations") {
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus],
+      { preferConcrete: true },
+    );
+    return normalizeComparableText(focus) === normalizeComparableText(subject)
+      ? workshop
+        ? `See which constraints and review steps keep ${subject} safe in daily work.`
+        : `See how ${subject} works in practice.`
+      : workshop
+        ? `See how ${lowerCaseFirstCharacter(focus)} keeps ${subject} safe in daily work.`
+        : `See how ${lowerCaseFirstCharacter(focus)} shows how ${subject} works in practice.`;
+  }
+  if (contract.kind === "entity-value") {
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus],
+      { preferConcrete: true },
+    );
+    return normalizeComparableText(focus) === normalizeComparableText(subject)
+      ? `See one concrete example of how ${subject} creates value.`
+      : `See how ${lowerCaseFirstCharacter(focus)} shows where ${subject} creates value.`;
+  }
+  if (contract.kind === "workshop-practice") {
+    const focus = pickContractText(
+      input,
+      [contract.objective, contract.focus],
+      { preferConcrete: true },
+    );
+    return normalizeComparableText(focus) === normalizeComparableText(subject)
+      ? `Practice one concrete way to apply ${subject}.`
+      : `Practice ${lowerCaseFirstCharacter(focus)}.`;
+  }
   const focus = pickContractText(
     input,
     [contract.objective, contract.focus],
@@ -1975,19 +3499,26 @@ const buildContractLearningGoal = (
   );
   if (contract.index === 0) {
     if (focus && !isGenericOpeningFocus(subject, focus)) {
+      if (arcPolicy === "source-backed-subject") {
+        return normalizeComparableText(focus) === normalizeComparableText(subject)
+          ? focusAnchor
+            ? `See how ${lowerCaseFirstCharacter(focusAnchor)} frames the concrete case within ${subject}.`
+            : `See the concrete setup that anchors ${subject}.`
+          : `See how ${lowerCaseFirstCharacter(focus)} frames the concrete case within ${subject}.`;
+      }
       return hasMeaningfulAnchorOverlap(focus, subject)
         ? `See ${lowerCaseFirstCharacter(focus)} and why it matters.`
         : `See how ${lowerCaseFirstCharacter(focus)} matters within ${subject}.`;
+    }
+
+    if (arcPolicy === "source-backed-subject" && focusAnchor) {
+      return `See how ${lowerCaseFirstCharacter(focusAnchor)} anchors the story of ${subject}.`;
     }
 
     return `See what ${subject} is, why it matters, and one concrete way to recognize it.`;
   }
   if (!focus) {
     return `See one concrete part of ${subject}.`;
-  }
-
-  if (/\b(exercise|assignment|task|activity|workshop)\b/i.test(focus)) {
-    return `Practice ${focus.charAt(0).toLowerCase() + focus.slice(1)}.`;
   }
 
   if (
@@ -2047,19 +3578,19 @@ const buildOrientationSlideFromContext = (
   const title = buildContractTitle(input, contract);
   if (input.intent?.contentMode === "procedural") {
     const keyPoints = buildProceduralOrientationKeyPoints(subject);
-    return {
-      ...(slide as unknown as Record<string, unknown>),
-      title,
-      learningGoal: buildContractLearningGoal(input, contract),
-      keyPoints,
-      speakerNotes: [],
-      examples: [],
-      likelyQuestions: [`What usually makes ${subject.toLowerCase()} go wrong?`],
-      beginnerExplanation: keyPoints.slice(0, 2).join(" "),
-      advancedExplanation: keyPoints[2] ?? "",
-      id: slide.id,
-      order: slide.order,
-    };
+  return {
+    ...(slide as unknown as Record<string, unknown>),
+    title,
+    learningGoal: buildContractLearningGoal(input, contract),
+    keyPoints,
+    speakerNotes: [],
+    examples: [],
+    likelyQuestions: [],
+    beginnerExplanation: keyPoints.slice(0, 2).join(" "),
+    advancedExplanation: keyPoints[2] ?? "",
+    id: slide.id,
+    order: slide.order,
+  };
   }
   const coverageAnchors = uniqueNonEmptyStrings([
     ...(input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? "")),
@@ -2075,8 +3606,25 @@ const buildOrientationSlideFromContext = (
         !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(value)),
     )
     .slice(0, 2);
+  const laterSlideSupport = uniqueNonEmptyStrings(
+    deck.slides
+      .slice(1)
+      .flatMap((candidateSlide) => [
+        ...candidateSlide.keyPoints,
+        ...candidateSlide.examples,
+        candidateSlide.beginnerExplanation,
+      ])
+      .filter(
+        (value) =>
+          value.length >= 28 &&
+          !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(value)) &&
+          !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(value)) &&
+          !PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(value)),
+      ),
+  ).slice(0, 2);
   const keyPoints = uniqueNonEmptyStrings(
     [
+      ...laterSlideSupport,
       ...coverageAnchors.map((anchor) => buildOrientationCoveragePoint(subject, anchor)),
       input.plan?.learningObjectives?.[0]
         ? toAudienceFacingSentence(input.plan.learningObjectives[0])
@@ -2101,7 +3649,7 @@ const buildOrientationSlideFromContext = (
     keyPoints,
     speakerNotes: [],
     examples: [],
-    likelyQuestions: [`Why does ${subject} matter in practice?`],
+    likelyQuestions: [],
     beginnerExplanation,
     advancedExplanation,
     id: slide.id,
@@ -2109,38 +3657,46 @@ const buildOrientationSlideFromContext = (
   };
 };
 
-const OVERVIEW_SLIDE_TITLE_PATTERN = /^what .+ is and why it matters$/i;
-const DETERMINISTIC_CONTRACT_TITLE_PATTERNS = [
-  /^core systems and focus areas$/i,
-  /^real-world applications$/i,
-  /^key takeaways$/i,
-];
-
 const shouldUseDeterministicSubjectOverviewSlide = (
   input: GenerateDeckInput,
   slide: Slide,
   contract: SlideContract,
 ): boolean => {
-  const subject = resolveIntentSubject(input);
-  const title = slide.title.trim();
-  if (
-    DETERMINISTIC_CONTRACT_TITLE_PATTERNS.some((pattern) => pattern.test(title)) ||
-    DETERMINISTIC_CONTRACT_TITLE_PATTERNS.some((pattern) => pattern.test(contract.focus))
-  ) {
-    return true;
+  if (input.intent?.presentationFrame === "organization") {
+    return false;
   }
 
   if (slide.order !== 1) {
     return false;
   }
 
-  return (
-    OVERVIEW_SLIDE_TITLE_PATTERN.test(title) ||
-    OVERVIEW_SLIDE_TITLE_PATTERN.test(contract.focus) ||
-    /^overview$/i.test(title) ||
-    /^overview$/i.test(contract.focus) ||
-    hasMeaningfulAnchorOverlap(title, `${subject} what ${subject} is`)
+  if (deriveSlideArcPolicy(input) === "source-backed-subject") {
+    return false;
+  }
+
+  if (
+    resolveIntentFocusAnchor(input) ||
+    (input.groundingHighlights?.length ?? 0) > 0 ||
+    (input.groundingCoverageGoals?.length ?? 0) > 0
+  ) {
+    return false;
+  }
+
+  const subject = resolveIntentSubject(input);
+  const contractAnchor = [subject, contract.focus, contract.objective ?? ""].join(" ");
+  const title = slide.title.trim();
+  const learningGoal = slide.learningGoal.trim();
+  const titleLooksGeneric =
+    tokenizeDeckShapeText(title).length <= 3 &&
+    !hasMeaningfulAnchorOverlap(title, contractAnchor);
+  const goalLooksGeneric =
+    tokenizeDeckShapeText(learningGoal).length <= 6 &&
+    !hasMeaningfulAnchorOverlap(learningGoal, contractAnchor);
+  const anchoredKeyPoints = slide.keyPoints.filter((point) =>
+    hasMeaningfulAnchorOverlap(point, contractAnchor),
   );
+
+  return titleLooksGeneric && goalLooksGeneric && anchoredKeyPoints.length < 2;
 };
 
 const buildSubjectOverviewSlideFromContext = (
@@ -2151,10 +3707,13 @@ const buildSubjectOverviewSlideFromContext = (
 ): Record<string, unknown> => {
   const subject = resolveIntentSubject(input);
   const normalizedContractTitle = buildContractTitle(input, contract);
-  const title = OVERVIEW_SLIDE_TITLE_PATTERN.test(slide.title.trim())
+  const title = hasMeaningfulAnchorOverlap(
+    slide.title,
+    `${subject} ${contract.focus} ${contract.objective ?? ""}`,
+  )
     ? slide.title.trim()
     : normalizedContractTitle;
-  const isOverviewSlide = OVERVIEW_SLIDE_TITLE_PATTERN.test(title);
+  const isOverviewSlide = slide.order === 1;
   const pointPool = uniqueNonEmptyStrings([
     ...(input.groundingHighlights ?? []),
     ...(input.groundingCoverageGoals ?? []),
@@ -2191,10 +3750,107 @@ const buildSubjectOverviewSlideFromContext = (
     keyPoints,
     speakerNotes: [],
     examples: [],
-    likelyQuestions: [
-      `What makes ${subject} recognizable in practice?`,
-      `Why do people still study or discuss ${subject}?`,
-    ],
+    likelyQuestions: [],
+    beginnerExplanation,
+    advancedExplanation,
+    id: slide.id,
+    order: slide.order,
+  };
+};
+
+const buildRoleSpecificSlideRecoveryFromContext = (
+  input: GenerateDeckInput,
+  deck: Deck,
+  slide: Slide,
+  contract: SlideContract,
+): Record<string, unknown> | null => {
+  if (
+    contract.kind !== "entity-capabilities" &&
+    contract.kind !== "entity-operations" &&
+    contract.kind !== "entity-value" &&
+    contract.kind !== "subject-detail" &&
+    contract.kind !== "workshop-practice" &&
+    contract.kind !== "subject-implication" &&
+    contract.kind !== "subject-takeaway"
+  ) {
+    return null;
+  }
+
+  const subject = resolveIntentSubject(input);
+  const roleAnchor = [contract.focus, contract.objective ?? "", contract.evidence ?? ""].join(" ");
+  const pointPool = uniqueNonEmptyStrings(
+    [
+      contract.evidence,
+      contract.objective,
+      contract.focus,
+      ...(input.groundingHighlights ?? []),
+      ...(input.groundingCoverageGoals ?? []),
+      ...(input.plan?.learningObjectives ?? []),
+      ...(input.plan?.storyline ?? []),
+      ...deck.slides
+        .slice(0, slide.order)
+        .flatMap((candidateSlide) => [
+          ...candidateSlide.examples,
+          ...candidateSlide.keyPoints,
+        ]),
+    ].filter((value): value is string => Boolean(value)),
+  ).filter(
+    (value) =>
+      value.length >= 24 &&
+      !PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(value)) &&
+      !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(value)) &&
+      !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(value)) &&
+      hasMeaningfulAnchorOverlap(value, `${subject} ${roleAnchor}`),
+  );
+
+  const anchoredPoints = buildContractAnchoredKeyPoints(
+    input,
+    contract,
+    pointPool,
+  );
+
+  if (anchoredPoints.length < 3) {
+    return null;
+  }
+
+  const examplePool = pointPool.filter((value) => value.length >= 40);
+  const examples =
+    contract.kind === "workshop-practice"
+      ? uniqueNonEmptyStrings([
+          contract.evidence ?? "",
+          ...examplePool,
+        ]).slice(0, 3)
+      : uniqueNonEmptyStrings([
+          contract.evidence ?? "",
+          ...examplePool,
+        ]).slice(0, 2);
+  const beginnerExplanation = toAudienceFacingSentence(
+    `${anchoredPoints[0]} ${anchoredPoints[1]}`,
+  );
+  const advancedExplanation = toAudienceFacingSentence(
+    contract.kind === "workshop-practice"
+      ? `${anchoredPoints[2]} This keeps the slide focused on one applied task rather than another summary.`
+      : contract.kind === "entity-capabilities"
+        ? `${anchoredPoints[2]} This keeps the slide focused on concrete capabilities instead of broad organization messaging.`
+      : contract.kind === "entity-operations"
+        ? `${anchoredPoints[2]} This keeps the slide focused on operating detail instead of repeating a general value claim.`
+      : contract.kind === "subject-detail"
+        ? `${anchoredPoints[2]} This keeps the slide focused on one concrete detail instead of jumping straight to interpretation.`
+      : contract.kind === "subject-implication"
+        ? `${anchoredPoints[2]} This keeps the slide focused on grounded consequence or significance instead of repeating the same detail or expanding into unsupported broader claims.`
+      : contract.kind === "subject-takeaway"
+        ? `${anchoredPoints[2]} This keeps the slide focused on the lesson the audience should retain without drifting beyond the grounded case.`
+      : `${anchoredPoints[2]} This keeps the slide grounded in one concrete outcome instead of broad organization messaging.`,
+  );
+
+  return {
+    ...(slide as unknown as Record<string, unknown>),
+    title: buildContractTitle(input, contract),
+    learningGoal: buildContractLearningGoal(input, contract),
+    keyPoints: anchoredPoints,
+    speakerNotes: [],
+    examples,
+    likelyQuestions: [],
     beginnerExplanation,
     advancedExplanation,
     id: slide.id,
@@ -2215,6 +3871,7 @@ const buildGroundedSlideRecoveryFromContext = (
       ...(input.groundingCoverageGoals ?? []),
       contract.objective,
       contract.focus,
+      contract.evidence,
       ...slide.keyPoints,
       slide.beginnerExplanation,
       slide.advancedExplanation,
@@ -2254,9 +3911,7 @@ const buildGroundedSlideRecoveryFromContext = (
     keyPoints: anchoredPoints,
     speakerNotes: [],
     examples: [toAudienceFacingSentence(example)],
-    likelyQuestions: [
-      `Why does ${slide.title.charAt(0).toLowerCase() + slide.title.slice(1)} matter in ${subject}?`,
-    ],
+    likelyQuestions: [],
     beginnerExplanation: toAudienceFacingSentence(`${anchoredPoints[0]} ${anchoredPoints[1]}`),
     advancedExplanation: toAudienceFacingSentence(
       `${anchoredPoints[2]} This detail shows why the slide matters within ${subject}.`,
@@ -2276,6 +3931,7 @@ const buildSlideDraftLocalAnchors = (
     typeof slide.learningGoal === "string" ? slide.learningGoal.trim() : "",
     contract.focus,
     contract.objective ?? "",
+    contract.evidence ?? "",
     resolveIntentSubject(input),
   ]);
 
@@ -2285,8 +3941,106 @@ const matchesAnySlideAnchor = (value: string, anchors: string[]): boolean =>
       countAnchorOverlap(value, anchor) >= 2 || hasMeaningfulAnchorOverlap(value, anchor),
   );
 
-const assessGeneratedSlideDraft = (
+const buildContractRoleAnchors = (
   input: Pick<GenerateDeckInput, "topic" | "intent">,
+  contract: SlideContract,
+): string[] => {
+  const subject = resolveIntentSubject(input);
+  const focusAnchor = resolveIntentFocusAnchor(input);
+  const organizationArc =
+    deriveSlideArcPolicy(input as ArcPolicyInput) === "organization-overview";
+  return uniqueNonEmptyStrings([
+    contract.focus,
+    contract.objective ?? "",
+    contract.evidence ?? "",
+    organizationArc && contract.kind === "orientation"
+      ? input.intent?.presentationGoal ?? ""
+      : "",
+    ...(organizationArc && contract.kind === "orientation"
+      ? input.intent?.audienceCues ?? []
+      : []),
+    contract.kind === "subject-detail" ||
+    contract.kind === "subject-implication" ||
+    contract.kind === "subject-takeaway"
+      ? focusAnchor ?? ""
+      : "",
+  ]).filter((anchor) => normalizeComparableText(anchor) !== normalizeComparableText(subject));
+};
+
+const buildSourceBackedGroundingAnchors = (
+  input: Pick<
+    GenerateDeckInput,
+    "topic" | "intent" | "groundingHighlights" | "groundingCoverageGoals"
+  >,
+  contract: SlideContract,
+): string[] => {
+  if (deriveSlideArcPolicy(input) !== "source-backed-subject") {
+    return [];
+  }
+
+  return uniqueNonEmptyStrings([
+    contract.evidence ?? "",
+    resolveIntentFocusAnchor(input) ?? "",
+    ...(input.groundingCoverageGoals ?? []),
+    ...(input.groundingHighlights ?? []).slice(0, 5),
+  ]).filter(
+    (anchor) =>
+      normalizeComparableText(anchor) !== normalizeComparableText(resolveIntentSubject(input)),
+  );
+};
+
+const countSalientAnchorOverlap = (value: string, anchor: string): number => {
+  const left = [...new Set(tokenizeDeckShapeText(value))].filter(
+    (token) => token.length >= 4 || /\p{N}/u.test(token),
+  );
+  const right = new Set(
+    tokenizeDeckShapeText(anchor).filter(
+      (token) => token.length >= 4 || /\p{N}/u.test(token),
+    ),
+  );
+
+  if (left.length === 0 || right.size === 0) {
+    return 0;
+  }
+
+  return left.filter((token) => right.has(token)).length;
+};
+
+const matchesStrictGroundedAnchor = (value: string, anchors: string[]): boolean =>
+  anchors.some((anchor) => countSalientAnchorOverlap(value, anchor) >= 2);
+
+const slideDraftDistinctnessText = (slide: Record<string, unknown> | Slide): string =>
+  [
+    typeof slide.title === "string" ? slide.title : "",
+    typeof slide.learningGoal === "string" ? slide.learningGoal : "",
+    ...toStringArray(slide.keyPoints),
+    typeof slide.beginnerExplanation === "string" ? slide.beginnerExplanation : "",
+    typeof slide.advancedExplanation === "string" ? slide.advancedExplanation : "",
+    ...toStringArray(slide.examples),
+  ].join(" ");
+
+const slideDistinctnessOverlapRatio = (
+  leftSlide: Record<string, unknown> | Slide,
+  rightSlide: Record<string, unknown> | Slide,
+): number => {
+  const leftTokens = [...new Set(tokenizeDeckShapeText(slideDraftDistinctnessText(leftSlide)))];
+  const rightTokens = [...new Set(tokenizeDeckShapeText(slideDraftDistinctnessText(rightSlide)))];
+
+  if (leftTokens.length === 0 || rightTokens.length === 0) {
+    return 0;
+  }
+
+  const rightSet = new Set(rightTokens);
+  const overlap = leftTokens.filter((token) => rightSet.has(token)).length;
+  return overlap / Math.min(leftTokens.length, rightTokens.length);
+};
+
+const assessGeneratedSlideDraft = (
+  input: Pick<
+    GenerateDeckInput,
+    "topic" | "intent" | "groundingHighlights" | "groundingCoverageGoals"
+  >,
+  deck: Deck,
   contract: SlideContract,
   slide: Record<string, unknown>,
 ): SlideDraftAssessment => {
@@ -2306,6 +4060,8 @@ const assessGeneratedSlideDraft = (
   ].filter(Boolean);
   const allText = [title, learningGoal, ...keyPoints, ...explanations].join(" ");
   const localAnchors = buildSlideDraftLocalAnchors(input, contract, slide);
+  const roleAnchors = buildContractRoleAnchors(input, contract);
+  const sourceBackedGroundingAnchors = buildSourceBackedGroundingAnchors(input, contract);
   const activeInstructionalPatterns = getActiveInstructionalPatterns(input);
   const instructionalKeyPoints = keyPoints.filter((point) =>
     activeInstructionalPatterns.some((pattern) => pattern.test(point)),
@@ -2316,6 +4072,74 @@ const assessGeneratedSlideDraft = (
   const weaklyAnchoredKeyPoints = keyPoints.filter(
     (point) => !matchesAnySlideAnchor(point, localAnchors),
   );
+  const earlierSlides = deck.slides.slice(0, contract.index);
+  const repetitiveEarlierSlides = earlierSlides.filter(
+    (previousSlide) => slideDistinctnessOverlapRatio(slide, previousSlide) >= 0.72,
+  );
+  const roleAlignedKeyPointCount = keyPoints.filter((point) =>
+    matchesAnySlideAnchor(point, roleAnchors),
+  ).length;
+  const examples = toStringArray(slide.examples);
+  const roleAlignedExampleCount = examples.filter((example) =>
+    matchesAnySlideAnchor(example, roleAnchors),
+  ).length;
+  const enforceOrientationRoleAlignment =
+    contract.kind === "orientation" &&
+    deriveSlideArcPolicy(input as ArcPolicyInput) === "organization-overview";
+  const workshopOrientationAudienceAnchors =
+    enforceOrientationRoleAlignment &&
+    isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">)
+      ? uniqueNonEmptyStrings(input.intent?.audienceCues ?? [])
+      : [];
+  const matchesAudienceAnchor = (value: string): boolean =>
+    workshopOrientationAudienceAnchors.some((anchor) => {
+      const anchorTokenCount = new Set(
+        tokenizeDeckShapeText(anchor).filter(
+          (token) => token.length >= 4 || /\p{N}/u.test(token),
+        ),
+      ).size;
+      if (anchorTokenCount === 0) {
+        return false;
+      }
+
+      return countSalientAnchorOverlap(value, anchor) >= Math.min(2, anchorTokenCount);
+    });
+  const audienceAlignedKeyPointCount = workshopOrientationAudienceAnchors.length
+    ? keyPoints.filter((point) =>
+        matchesAudienceAnchor(point),
+      ).length
+    : 0;
+  const audienceAlignedExampleCount = workshopOrientationAudienceAnchors.length
+    ? examples.filter((example) =>
+        matchesAudienceAnchor(example),
+      ).length
+    : 0;
+  const titleOrGoalMatchesRole =
+    matchesAnySlideAnchor(title, roleAnchors) ||
+    matchesAnySlideAnchor(learningGoal, roleAnchors);
+  const evidenceAnchorMatched =
+    !contract.evidence ||
+    matchesAnySlideAnchor(title, [contract.evidence]) ||
+    matchesAnySlideAnchor(learningGoal, [contract.evidence]) ||
+    keyPoints.some((point) => matchesAnySlideAnchor(point, [contract.evidence!])) ||
+    examples.some((example) =>
+      matchesAnySlideAnchor(example, [contract.evidence!]),
+    );
+  const evidenceAlignedExampleCount = contract.evidence
+    ? examples.filter((example) => matchesAnySlideAnchor(example, [contract.evidence!])).length
+    : 0;
+  const evidenceAlignedKeyPointCount = contract.evidence
+    ? keyPoints.filter((point) => matchesAnySlideAnchor(point, [contract.evidence!])).length
+    : 0;
+  const sourceGroundedKeyPointCount = keyPoints.filter((point) =>
+    matchesStrictGroundedAnchor(point, sourceBackedGroundingAnchors),
+  ).length;
+  const sourceGroundedExampleCount = examples.filter((example) =>
+    matchesStrictGroundedAnchor(example, sourceBackedGroundingAnchors),
+  ).length;
+  const titleOrGoalMatchesGrounding =
+    matchesStrictGroundedAnchor(title, sourceBackedGroundingAnchors) ||
+    matchesStrictGroundedAnchor(learningGoal, sourceBackedGroundingAnchors);
   const reasons: string[] = [];
 
   if (PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(allText))) {
@@ -2400,6 +4224,106 @@ const assessGeneratedSlideDraft = (
     );
   }
 
+  if (
+    (contract.kind !== "orientation" || enforceOrientationRoleAlignment) &&
+    roleAnchors.length > 0 &&
+    !titleOrGoalMatchesRole
+  ) {
+    reasons.push(
+      "The title and learning goal drift away from the slide's assigned role. Keep them anchored to the contract focus and objective for this slide.",
+    );
+  }
+
+  if (
+    (contract.kind !== "orientation" || enforceOrientationRoleAlignment) &&
+    roleAnchors.length > 0 &&
+    roleAlignedKeyPointCount < Math.min(2, keyPoints.length)
+  ) {
+    reasons.push(
+      "The key points do not stay close enough to the slide's assigned role. Keep at least two of them anchored to this slide's focus, objective, or evidence.",
+    );
+  }
+
+  if (
+    workshopOrientationAudienceAnchors.length > 0 &&
+    audienceAlignedKeyPointCount + audienceAlignedExampleCount === 0
+  ) {
+    reasons.push(
+      "The workshop opening needs at least one role-based example or audience-specific task so the audience can recognize where the topic fits into their daily work.",
+    );
+  }
+
+  if (!evidenceAnchorMatched) {
+    reasons.push(
+      "The slide lost the concrete evidence anchor that should make this role specific. Rebuild it around the assigned evidence rather than broad restatement.",
+    );
+  }
+
+  if (
+    contract.kind === "entity-value" &&
+    contract.evidence &&
+    evidenceAlignedKeyPointCount + evidenceAlignedExampleCount < 2
+  ) {
+    reasons.push(
+      "A value slide must stay centered on one concrete example or outcome. Tie at least two visible elements to the assigned evidence anchor.",
+    );
+  }
+
+  if (
+    contract.kind === "entity-value" &&
+    contract.evidence &&
+    !matchesAnySlideAnchor(title, [contract.evidence, contract.objective ?? "", contract.focus]) &&
+    !matchesAnySlideAnchor(learningGoal, [contract.evidence, contract.objective ?? "", contract.focus])
+  ) {
+    reasons.push(
+      "The value slide heading drifts away from the concrete example. Keep the title or learning goal anchored to the example or outcome, not a general value claim.",
+    );
+  }
+
+  if (contract.kind === "workshop-practice" && roleAlignedExampleCount === 0) {
+    reasons.push(
+      "A workshop practice slide needs one concrete exercise prompt, scenario, or sample artifact in the example slot so the audience can actually perform the task.",
+    );
+  }
+
+  if (
+    contract.kind === "workshop-practice" &&
+    contract.evidence &&
+    evidenceAlignedKeyPointCount + evidenceAlignedExampleCount === 0
+  ) {
+    reasons.push(
+      "The workshop practice slide lost its practical scenario anchor. Rebuild it around the assigned evidence so it feels like an exercise, not another summary slide.",
+    );
+  }
+
+  if (
+    sourceBackedGroundingAnchors.length > 0 &&
+    (contract.kind === "orientation" || contract.kind === "subject-detail") &&
+    (!titleOrGoalMatchesGrounding ||
+      sourceGroundedKeyPointCount + sourceGroundedExampleCount < 1)
+  ) {
+    reasons.push(
+      "Keep the setup anchored to supported source details. The title, goal, and visible points should establish the concrete grounded case instead of broad subject generalities.",
+    );
+  }
+
+  if (
+    sourceBackedGroundingAnchors.length > 0 &&
+    (contract.kind === "subject-implication" || contract.kind === "subject-takeaway") &&
+    !titleOrGoalMatchesGrounding &&
+    sourceGroundedKeyPointCount + sourceGroundedExampleCount < 2
+  ) {
+    reasons.push(
+      "This slide drifts beyond the grounded case. Keep the implication or takeaway anchored to supported source details instead of expanding into broader unsupported claims.",
+    );
+  }
+
+  if (repetitiveEarlierSlides.length > 0) {
+    reasons.push(
+      "This slide repeats earlier slides too closely. Advance the story with a distinct mechanism, example, responsibility, or consequence.",
+    );
+  }
+
   return {
     retryable: reasons.length > 0,
     reasons: uniqueNonEmptyStrings(reasons),
@@ -2427,6 +4351,7 @@ const buildOutlineDeckSummary = (
     input,
     [
       input.intent?.presentationGoal,
+      input.intent?.focusAnchor,
       explicitCoverageRequirements[0],
       input.groundingCoverageGoals?.[0],
       input.groundingHighlights?.[0],
@@ -2478,12 +4403,14 @@ const applyPlanDrivenDeckShape = (
     GenerateDeckInput,
     | "topic"
     | "presentationBrief"
+    | "intent"
     | "plan"
     | "groundingHighlights"
     | "groundingCoverageGoals"
   >,
 ): Record<string, unknown>[] => {
   const contracts = buildSlideContracts(input, slides.length);
+  const subject = resolveIntentSubject(input);
 
   return slides.map((slide, index) => {
     const contract = contracts[index];
@@ -2492,16 +4419,27 @@ const applyPlanDrivenDeckShape = (
     }
 
     const title = typeof slide.title === "string" ? slide.title.trim() : "";
-    const contractAnchor = [input.topic, contract.focus, contract.objective ?? ""].join(
+    const contractAnchor = [subject, contract.focus, contract.objective ?? "", contract.evidence ?? ""].join(
       " ",
     );
+    const roleAnchors = buildContractRoleAnchors(input, contract);
     const keyPoints = toStringArray(slide.keyPoints);
+    const examples = toStringArray(slide.examples);
+    const roleAlignedExampleCount = examples.filter((example) =>
+      matchesAnySlideAnchor(example, roleAnchors),
+    ).length;
+    const evidenceAlignedKeyPointCount = contract.evidence
+      ? keyPoints.filter((point) => matchesAnySlideAnchor(point, [contract.evidence!])).length
+      : 0;
+    const evidenceAlignedExampleCount = contract.evidence
+      ? examples.filter((example) => matchesAnySlideAnchor(example, [contract.evidence!])).length
+      : 0;
     const concretePointPool = uniqueNonEmptyStrings(
       [
         ...keyPoints,
         typeof slide.beginnerExplanation === "string" ? slide.beginnerExplanation : "",
         typeof slide.advancedExplanation === "string" ? slide.advancedExplanation : "",
-        ...toStringArray(slide.examples),
+        ...examples,
         ...toStringArray(slide.speakerNotes),
       ].filter(
         (value) =>
@@ -2534,6 +4472,14 @@ const applyPlanDrivenDeckShape = (
       DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(title)) ||
       DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(title)) ||
       DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(title)) ||
+      (contract.kind === "entity-value" &&
+        contract.evidence &&
+        !matchesAnySlideAnchor(title, [contract.evidence, contract.objective ?? "", contract.focus])) ||
+      (contract.kind === "workshop-practice" &&
+        !matchesAnySlideAnchor(title, [contract.objective ?? contract.focus, contract.evidence ?? ""])) ||
+      (index > 0 &&
+        roleAnchors.length > 0 &&
+        !matchesAnySlideAnchor(title, roleAnchors)) ||
       !hasMeaningfulAnchorOverlap(title, contractAnchor);
 
     const learningGoalText =
@@ -2543,6 +4489,14 @@ const applyPlanDrivenDeckShape = (
       DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(learningGoalText)) ||
       DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(learningGoalText)) ||
       DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(learningGoalText)) ||
+      (contract.kind === "entity-value" &&
+        contract.evidence &&
+        !matchesAnySlideAnchor(learningGoalText, [contract.evidence, contract.objective ?? "", contract.focus])) ||
+      (contract.kind === "workshop-practice" &&
+        !matchesAnySlideAnchor(learningGoalText, [contract.objective ?? contract.focus, contract.evidence ?? ""])) ||
+      (index > 0 &&
+        roleAnchors.length > 0 &&
+        !matchesAnySlideAnchor(learningGoalText, roleAnchors)) ||
       !hasMeaningfulAnchorOverlap(learningGoalText, contractAnchor);
 
     const alignedKeyPoints = keyPoints.filter(
@@ -2550,9 +4504,21 @@ const applyPlanDrivenDeckShape = (
         !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(point)) &&
         !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(point)) &&
         !DECK_SHAPE_SUMMARY_PATTERNS.some((pattern) => pattern.test(point)) &&
-        hasMeaningfulAnchorOverlap(point, `${contractAnchor} ${title}`),
+        hasMeaningfulAnchorOverlap(
+          point,
+          `${roleAnchors.join(" ")} ${contractAnchor} ${title}`,
+        ),
     );
-    const keyPointsNeedRepair = keyPoints.length < 3 || alignedKeyPoints.length < 2;
+    const keyPointsNeedRepair =
+      keyPoints.length < 3 ||
+      alignedKeyPoints.length < 2 ||
+      (contract.kind === "entity-value" &&
+        contract.evidence &&
+        evidenceAlignedKeyPointCount + evidenceAlignedExampleCount < 2) ||
+      (contract.kind === "workshop-practice" &&
+        (roleAlignedExampleCount === 0 ||
+          (contract.evidence &&
+            evidenceAlignedKeyPointCount + evidenceAlignedExampleCount === 0)));
 
     const nextTitle = titleNeedsRepair ? buildContractTitle(input, contract) : title;
     const learningGoal = learningGoalNeedsRepair
@@ -2589,51 +4555,104 @@ const applyPlanDrivenDeckShape = (
     const heroStatementNeedsRepair =
       index === 0 &&
       (!heroStatementText || !hasMeaningfulAnchorOverlap(heroStatementText, contractAnchor));
+    const nextKeyPoints = keyPointsNeedRepair ? replacementPoints : keyPoints.slice(0, 4);
+    const nextBeginnerExplanation = beginnerExplanationNeedsRepair
+      ? replacementPoints.join(" ")
+      : beginnerExplanationText;
+    const nextAdvancedExplanation = advancedExplanationNeedsRepair
+      ? toAudienceFacingSentence(
+          `${contract.focus} matters because it changes how ${input.topic} behaves, is understood, or is judged in practice`,
+        )
+      : advancedExplanationText;
+    const nextExamples =
+      contract.kind === "entity-value"
+        ? uniqueNonEmptyStrings([contract.evidence ?? "", ...examples]).slice(0, 3)
+        : contract.kind === "workshop-practice"
+          ? uniqueNonEmptyStrings([contract.evidence ?? "", contract.objective ?? "", ...examples]).slice(0, 3)
+          : examples;
+    const contentNeedsVisualRefresh =
+      titleNeedsRepair ||
+      learningGoalNeedsRepair ||
+      keyPointsNeedRepair ||
+      beginnerExplanationNeedsRepair ||
+      advancedExplanationNeedsRepair ||
+      heroStatementNeedsRepair;
+    const nextVisuals = contentNeedsVisualRefresh
+      ? deriveVisuals(
+          {
+            ...slide,
+            title: nextTitle || buildContractTitle(input, contract),
+            learningGoal,
+            keyPoints: nextKeyPoints,
+            examples: nextExamples,
+            beginnerExplanation: nextBeginnerExplanation,
+            advancedExplanation: nextAdvancedExplanation,
+            visuals: {
+              ...(typeof visuals.layoutTemplate === "string"
+                ? { layoutTemplate: visuals.layoutTemplate }
+                : {}),
+              ...(typeof visuals.accentColor === "string"
+                ? { accentColor: visuals.accentColor }
+                : {}),
+              ...(typeof visuals.imagePrompt === "string"
+                ? { imagePrompt: visuals.imagePrompt }
+                : {}),
+              ...(Array.isArray(visuals.imageSlots)
+                ? { imageSlots: visuals.imageSlots }
+                : {}),
+            },
+          },
+          {
+            keyPoints: nextKeyPoints,
+            examples: nextExamples,
+            likelyQuestions: toStringArray(slide.likelyQuestions),
+            order: index,
+            totalSlides: slides.length,
+            learningGoal,
+            title: nextTitle || buildContractTitle(input, contract),
+          },
+        )
+      : {
+          ...visuals,
+          ...(heroStatementNeedsRepair ? { heroStatement: replacementPoints[0] } : {}),
+          imagePrompt:
+            typeof visuals.imagePrompt === "string" && visuals.imagePrompt.trim().length > 0
+              ? visuals.imagePrompt
+              : imagePrompt,
+          imageSlots:
+            imageSlots.length > 0
+              ? imageSlots.map((slot, imageIndex) => ({
+                  ...slot,
+                  id:
+                    typeof slot.id === "string" && slot.id.trim().length > 0
+                      ? slot.id
+                      : `${String(slide.id ?? "slide")}-image-${imageIndex + 1}`,
+                  prompt:
+                    typeof slot.prompt === "string" && slot.prompt.trim().length > 0
+                      ? slot.prompt
+                      : imagePrompt,
+                }))
+              : [
+                  {
+                    id: `${String(slide.id ?? "slide")}-image-1`,
+                    prompt: imagePrompt,
+                    caption: contract.focus,
+                    altText: `${input.topic} visual`,
+                    style: "editorial",
+                    tone: index === 0 ? "accent" : "neutral",
+                  },
+                ],
+        };
 
     return {
       ...slide,
       title: nextTitle || buildContractTitle(input, contract),
       learningGoal,
-      keyPoints: keyPointsNeedRepair ? replacementPoints : keyPoints.slice(0, 4),
-      beginnerExplanation: beginnerExplanationNeedsRepair
-        ? replacementPoints.join(" ")
-        : beginnerExplanationText,
-      advancedExplanation: advancedExplanationNeedsRepair
-        ? toAudienceFacingSentence(
-            `${contract.focus} matters because it changes how ${input.topic} behaves, is understood, or is judged in practice`,
-          )
-        : advancedExplanationText,
-      visuals: {
-        ...visuals,
-        ...(heroStatementNeedsRepair ? { heroStatement: replacementPoints[0] } : {}),
-        imagePrompt:
-          typeof visuals.imagePrompt === "string" && visuals.imagePrompt.trim().length > 0
-            ? visuals.imagePrompt
-            : imagePrompt,
-        imageSlots:
-          imageSlots.length > 0
-            ? imageSlots.map((slot, imageIndex) => ({
-                ...slot,
-                id:
-                  typeof slot.id === "string" && slot.id.trim().length > 0
-                    ? slot.id
-                    : `${String(slide.id ?? "slide")}-image-${imageIndex + 1}`,
-                prompt:
-                  typeof slot.prompt === "string" && slot.prompt.trim().length > 0
-                    ? slot.prompt
-                    : imagePrompt,
-              }))
-            : [
-                {
-                  id: `${String(slide.id ?? "slide")}-image-1`,
-                  prompt: imagePrompt,
-                  caption: contract.focus,
-                  altText: `${input.topic} visual`,
-                  style: "editorial",
-                  tone: index === 0 ? "accent" : "neutral",
-                },
-              ],
-      },
+      keyPoints: nextKeyPoints,
+      examples: nextExamples,
+      beginnerExplanation: nextBeginnerExplanation,
+      advancedExplanation: nextAdvancedExplanation,
+      visuals: nextVisuals,
     };
   });
 };
@@ -2735,13 +4754,7 @@ const normalizeDeck = (
         examples.length > 0
           ? examples
           : inferredKeyPoints.slice(0, 1),
-      likelyQuestions:
-        likelyQuestions.length > 0
-          ? likelyQuestions
-          : [
-              `What should the audience understand about ${title.toLowerCase()}?`,
-              `How does ${title.toLowerCase()} connect to ${topic}?`,
-            ],
+      likelyQuestions: likelyQuestions,
       canSkip:
         typeof slideCandidate.canSkip === "boolean"
           ? slideCandidate.canSkip
@@ -2755,11 +4768,7 @@ const normalizeDeck = (
         keyPoints: inferredKeyPoints,
         examples: examples.length > 0 ? examples : inferredKeyPoints.slice(0, 1),
         likelyQuestions:
-          likelyQuestions.length > 0
-            ? likelyQuestions
-            : [
-                `How does ${title.toLowerCase()} connect to the main topic?`,
-              ],
+          likelyQuestions,
         order: index,
         totalSlides: slides.length || fallbackSlideCount,
         learningGoal,
@@ -3480,7 +5489,14 @@ const buildIntentPromptLines = (input: {
 
   return [
     `Core subject: ${coreSubject}`,
+    input.intent?.focusAnchor
+      ? `Concrete focus anchor: ${input.intent.focusAnchor}`
+      : null,
     framing ? `Framing context: ${framing}` : "No additional framing context was provided.",
+    input.intent?.presentationFrame
+      ? `Presentation frame: ${input.intent.presentationFrame}`
+      : null,
+    ...buildArcPolicyPromptLines(input),
     input.intent?.organization
       ? `Organization context: ${input.intent.organization}`
       : null,
@@ -3503,11 +5519,18 @@ const buildIntentPromptLines = (input: {
 };
 
 export const __testables = {
+  assessGeneratedSlideDraft,
+  applyPlanDrivenDeckShape,
   buildSlideFromPlainText,
+  buildSlideContracts,
+  resolveSourceBackedCaseAnchor,
   buildContractAnchoredKeyPoints,
   buildContractLearningGoal,
   buildOutlineDeckSummary,
   buildProceduralOrientationKeyPoints,
+  buildRoleSpecificSlideRecoveryFromContext,
+  normalizePresentationPlan,
+  shouldUseDeterministicSubjectOverviewSlide,
 };
 
 export class OpenAICompatibleLLMProvider implements LLMProvider {
@@ -3708,6 +5731,11 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         : "No explicit target slide count was provided.",
       "The plan should form one coherent teaching arc, not a list of disconnected subtopics.",
       "Use the core subject as the thing the audience is learning about. The presentation brief and intent fields only describe the intended angle, audience, or delivery context.",
+      ...buildArcPolicyPromptLines(input),
+      input.intent?.presentationFrame === "organization" &&
+      (input.intent?.framing || input.presentationBrief)
+        ? "Treat the framing context as binding scope for the organization plan. If it implies onboarding, orientation, introduction, or overview, keep the title and storyline focused on helping a newcomer understand the organization itself."
+        : null,
       "Do not repeat instruction fragments like 'create a presentation' or 'more information is available at' in the plan title or storyline.",
       "For beginner audiences, prefer a storyline like: motivation, mental model, structure, concrete example, recap.",
       "Keep the plan close to the requested duration and slide count when they are provided.",
@@ -3765,6 +5793,10 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
             normalizePresentationPlan(value, {
               targetSlideCount: input.targetSlideCount,
               topic: input.topic,
+              subject: input.intent?.subject ?? input.topic,
+              intent: input.intent,
+              groundingHighlights: input.groundingHighlights,
+              groundingCoverageGoals: undefined,
             }),
           ),
       });
@@ -3795,6 +5827,11 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           : "No explicit target slide count was provided.",
         "The plan should form one coherent teaching arc, not a list of disconnected subtopics.",
         "Use the core subject as the thing the audience is learning about. The presentation brief and intent fields only describe the intended angle, audience, or delivery context.",
+        ...buildArcPolicyPromptLines(input),
+        input.intent?.presentationFrame === "organization" &&
+        (input.intent?.framing || input.presentationBrief)
+          ? "Treat the framing context as binding scope for the organization plan. If it implies onboarding, orientation, introduction, or overview, keep the title and storyline focused on helping a newcomer understand the organization itself."
+          : null,
         "Do not repeat instruction fragments like 'create a presentation' or 'more information is available at' in the plan title or storyline.",
         "For beginner audiences, prefer a storyline like: motivation, mental model, structure, concrete example, recap.",
         "Keep the plan close to the requested duration and slide count when they are provided.",
@@ -3806,6 +5843,10 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           normalizePresentationPlan(value, {
             targetSlideCount: input.targetSlideCount,
             topic: input.topic,
+            subject: input.intent?.subject ?? input.topic,
+            intent: input.intent,
+            groundingHighlights: input.groundingHighlights,
+            groundingCoverageGoals: undefined,
           }),
         ),
     });
@@ -3862,28 +5903,48 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
   private async generateDeckFromOutline(input: GenerateDeckInput): Promise<Deck> {
     const outlineDeck = buildOutlineScaffoldDeck(input);
     const contracts = buildSlideContracts(input, outlineDeck.slides.length);
-    const enrichedSlides: Record<string, unknown>[] = [];
+    const workingSlides = [...outlineDeck.slides];
+    const generationOrder = [
+      ...outlineDeck.slides
+        .map((_, index) => index)
+        .filter((index) => index !== 0),
+      0,
+    ];
 
-    for (const [index, slide] of outlineDeck.slides.entries()) {
+    for (const index of generationOrder) {
+      const slide = outlineDeck.slides[index];
+      if (!slide) {
+        throw new Error(`Missing outline slide ${index + 1}.`);
+      }
+
       const contract = contracts[index];
       if (!contract) {
         throw new Error(`Missing slide contract for outline slide ${index + 1}.`);
       }
 
+      const currentDeck = DeckSchema.parse({
+        ...outlineDeck,
+        slides: workingSlides,
+      });
       const enrichedSlide = await this.generateSlideFromOutline(
         input,
-        outlineDeck,
-        slide,
+        currentDeck,
+        currentDeck.slides[index] ?? slide,
         contract,
       );
-      enrichedSlides.push(enrichedSlide);
+      workingSlides[index] = {
+        ...(currentDeck.slides[index] ?? slide),
+        ...(enrichedSlide as Record<string, unknown>),
+        id: slide.id,
+        order: slide.order,
+      } as Slide;
     }
 
     return DeckSchema.parse(
       normalizeDeck(
         {
           ...outlineDeck,
-          slides: enrichedSlides,
+          slides: workingSlides,
         },
         input,
       ),
@@ -3960,9 +6021,10 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
             "Return fields: title, learningGoal, keyPoints, speakerNotes, examples, likelyQuestions, beginnerExplanation, advancedExplanation.",
             "Use exactly 3 key points and make each one a complete audience-facing sentence.",
             "Keep the slide concrete and topic-specific. Prefer mechanisms, roles, examples, consequences, or factual subareas.",
-            "Never use presenter instructions or facilitator language such as 'begin by', 'discuss', 'explain', 'emphasize', 'to wrap up', 'this session', or 'next steps'.",
+            "Keep one consistent content language. Match the language already implied by the prompt and grounding instead of switching languages mid-deck.",
+            "Avoid facilitator, presenter, or session-management language.",
             "Do not tell the presenter what to do. Do not describe how the slide should be delivered.",
-            "If the framing lens implies onboarding, keep the language beginner-friendly without addressing the audience as new hires or participants.",
+            "If the framing lens implies onboarding, orientation, introduction, or overview, keep the language beginner-friendly and organization-facing. It may orient a newcomer to the organization, but it must not turn into facilitator talk or direct second-person instructions.",
           ]
             .filter((line): line is string => Boolean(line))
             .join("\n"),
@@ -4014,7 +6076,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           priorAssessment,
         );
 
-        const assessment = assessGeneratedSlideDraft(input, contract, enrichedSlide);
+        const assessment = assessGeneratedSlideDraft(input, deck, contract, enrichedSlide);
         if (!assessment.retryable) {
           return enrichedSlide;
         }
@@ -4085,7 +6147,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           throw new Error("Plain-text slide enrichment could not be parsed into a full slide.");
         }
 
-        const assessment = assessGeneratedSlideDraft(input, contract, enrichedSlide);
+        const assessment = assessGeneratedSlideDraft(input, deck, contract, enrichedSlide);
         if (!assessment.retryable) {
           return enrichedSlide;
         }
@@ -4102,6 +6164,19 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           `[slidespeech] ${this.name} plain-text slide enrichment attempt ${attemptIndex + 1} failed for "${slide.title}": ${lastError.message}`,
         );
       }
+    }
+
+    const roleSpecificRecovery = buildRoleSpecificSlideRecoveryFromContext(
+      input,
+      deck,
+      slide,
+      contract,
+    );
+    if (roleSpecificRecovery) {
+      console.warn(
+        `[slidespeech] ${this.name} recovered slide "${slide.title}" from role-specific context after enrichment failures.`,
+      );
+      return roleSpecificRecovery;
     }
 
     const groundedRecovery = buildGroundedSlideRecoveryFromContext(
@@ -5079,7 +7154,17 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         : null,
       "The core subject is what the audience is learning about. The presentation brief only defines framing or context.",
       "Use the framing context as a lens, not as a canned presentation template.",
-      "Do not address the audience as participants, new hires, or attendees. Explain the subject itself.",
+      input.intent?.presentationFrame === "organization"
+        ? "This prompt is about an organization/entity, not about the generic abstract concept behind its name."
+        : null,
+      input.intent?.presentationFrame === "organization"
+        ? "Teach who the organization is, what it does, how it works, and where it creates value."
+        : null,
+      input.intent?.presentationFrame === "organization" &&
+      (input.intent?.framing || input.presentationBrief)
+        ? "If the framing implies onboarding, orientation, introduction, or overview, keep that scope visible. Orient a newcomer to the organization itself without switching into facilitator talk or second-person audience management."
+        : null,
+      "Do not use facilitator talk or audience-management language. Explain the subject itself.",
       "Do not leak instruction fragments like 'create a presentation', 'more information is available at', or 'use google' into slide titles, learning goals, or key points.",
       "This is not a talk about slide design or how to present. Never give advice about slides, screenshots, clutter, decks, key points, or presentation technique unless the core subject itself is presentation design.",
       "Avoid facilitator framing that talks about running the session instead of teaching the subject, unless the subject itself is session facilitation.",
@@ -5100,8 +7185,9 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         "Use 3 to 4 key points per slide.",
         "Slide 1 must name the subject directly and explain why the topic matters without using welcome/session language.",
         "Final slide must close the teaching arc with one more concrete subject insight or implication, not a generic recap or checklist.",
-        "Use English and keep the language spoken, concrete, and audience-facing.",
+        "Use one consistent language across the whole deck. Match the language implied by the topic, title direction, brief, and grounding.",
         "Each slide should contain at least two concrete, subject-facing claims. Avoid filler phrasing.",
+        "Each slide must advance the story with a distinct explanatory center. Do not restate the same explanation on multiple slides.",
       ].join("\n");
     }
 
@@ -5111,7 +7197,8 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       "Each slide should include only: title, learningGoal, keyPoints.",
       "Use 3 bullet-like key points per slide.",
       "Do not include markdown.",
-      "Use English.",
+      "Use one consistent language that matches the request.",
+      "Make each slide distinct from the others. Do not reuse the same explanation across slides.",
     ].join("\n");
   }
 }

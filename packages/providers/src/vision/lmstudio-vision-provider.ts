@@ -32,6 +32,20 @@ interface VisionChatCompletionResponse {
   }>;
 }
 
+const extractBase64ImagePayload = (
+  value: string,
+): { mimeType: string; base64: string } | null => {
+  const match = value.match(/^data:(image\/[^;]+);base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+
+  return {
+    mimeType: match[1],
+    base64: match[2],
+  };
+};
+
 const clampScore = (value: unknown): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 0;
@@ -170,6 +184,35 @@ export class LMStudioVisionProvider implements VisionProvider {
     return content;
   }
 
+  private async toLmStudioImageUrl(value: string): Promise<string> {
+    const inlineBase64 = extractBase64ImagePayload(value);
+    if (inlineBase64) {
+      return `data:${inlineBase64.mimeType};base64,${inlineBase64.base64}`;
+    }
+
+    const response = await fetch(value, {
+      headers: this.buildHeaders(),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `${this.name} image fetch failed with status ${response.status}.`,
+      );
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) {
+      throw new Error(
+        `${this.name} expected an image response but received ${contentType || "unknown content type"}.`,
+      );
+    }
+
+    const buffer = await response.arrayBuffer();
+    const mimeType = contentType.split(";")[0] ?? "image/png";
+    return `data:${mimeType};base64,${Buffer.from(buffer).toString("base64")}`;
+  }
+
   async analyzeSlideImage(input: AnalyzeSlideImageInput): Promise<VisionInsight> {
     const imageUrl = input.imageDataUrl ?? input.imageUrl;
 
@@ -212,7 +255,7 @@ export class LMStudioVisionProvider implements VisionProvider {
           {
             type: "image_url",
             image_url: {
-              url: imageUrl,
+              url: await this.toLmStudioImageUrl(imageUrl),
             },
           },
         ],

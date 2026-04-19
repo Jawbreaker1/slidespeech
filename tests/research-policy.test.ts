@@ -163,6 +163,27 @@ test("builds a research plan with direct urls and targeted queries", () => {
   assert.ok(plan.coverageGoals.length >= 2);
 });
 
+test("builds organization-focused coverage goals for company-overview prompts", () => {
+  const plan = buildResearchPlan({
+    topic:
+      "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
+  });
+
+  assert.notEqual(plan.subject, "Our company");
+  assert.match(plan.subject, /systemverification/i);
+  assert.ok(
+    plan.coverageGoals.some((goal) =>
+      /what .* does and (?:why it matters|where it creates value)/i.test(goal),
+    ),
+  );
+  assert.ok(
+    plan.coverageGoals.some((goal) =>
+      /services, capabilities, or focus areas connected to /i.test(goal),
+    ),
+  );
+  assert.ok(plan.searchQueries.some((query) => /systemverification/i.test(query)));
+});
+
 test("extracts presentation brief and subject separately from an instructional prompt", () => {
   assert.equal(
     extractPresentationBrief(
