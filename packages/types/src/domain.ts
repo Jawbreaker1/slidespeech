@@ -589,6 +589,7 @@ export type DeletePresentationResponse = z.infer<
 export const SlideIllustrationAssetSchema = z.object({
   slideId: z.string(),
   slotId: z.string(),
+  kind: z.enum(["source", "curated", "generated"]).default("generated"),
   mimeType: z.string().min(1),
   dataUri: z.string().min(1),
   altText: z.string().optional(),

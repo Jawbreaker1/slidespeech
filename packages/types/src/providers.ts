@@ -42,6 +42,7 @@ export interface PlanPresentationInput {
   presentationBrief?: string;
   intent?: PresentationIntent;
   groundingHighlights?: string[];
+  groundingExcerpts?: string[];
   pedagogicalProfile: PedagogicalProfile;
   groundingSummary?: string;
   targetDurationMinutes?: number;
@@ -75,6 +76,7 @@ export interface GenerateDeckInput {
   pedagogicalProfile: PedagogicalProfile;
   groundingSummary?: string;
   groundingHighlights?: string[];
+  groundingExcerpts?: string[];
   groundingCoverageGoals?: string[];
   groundingSourceIds?: string[];
   groundingSourceType?: "topic" | "document" | "pptx" | "mixed";

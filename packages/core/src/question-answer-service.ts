@@ -41,6 +41,13 @@ const tokenizeContext = (value: string): string[] =>
     .map((token) => token.trim())
     .filter((token) => token.length >= 3);
 
+const WORD_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu;
+
+const tokenizeWords = (value: string): string[] =>
+  Array.from(normalizeContextText(value).normalize("NFKC").matchAll(WORD_TOKEN_PATTERN))
+    .map((match) => match[0]?.trim() ?? "")
+    .filter(Boolean);
+
 const uniqueNonEmptyStrings = (
   values: Array<string | null | undefined>,
 ): string[] => {
@@ -92,16 +99,20 @@ const buildWordWindows = (
   return uniqueNonEmptyStrings(windows);
 };
 
-const buildLeadingSourceExcerpt = (
+const buildLeadingSourceExcerpts = (
   content: string,
-  wordCount = 32,
-): string | undefined => {
+  wordCounts = [32, 48, 64],
+): string[] => {
   const words = normalizeContextText(content).split(/\s+/).filter(Boolean);
   if (words.length === 0) {
-    return undefined;
+    return [];
   }
 
-  return words.slice(0, wordCount).join(" ") || undefined;
+  return uniqueNonEmptyStrings(
+    wordCounts
+      .map((wordCount) => words.slice(0, wordCount).join(" ").trim())
+      .filter(Boolean),
+  );
 };
 
 const ensureSentenceEnding = (value: string): string =>
@@ -109,6 +120,67 @@ const ensureSentenceEnding = (value: string): string =>
 
 const normalizeExampleLeadIn = (value: string): string =>
   value.replace(/^(for example|example:|a concrete example is:?)/i, "").trim();
+
+const hasRepeatedWordWindow = (value: string, minWindowSize = 5): boolean => {
+  const tokens = tokenizeWords(value)
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 2);
+
+  if (tokens.length < minWindowSize * 2) {
+    return false;
+  }
+
+  const maxWindowSize = Math.min(10, Math.floor(tokens.length / 2));
+
+  for (let windowSize = maxWindowSize; windowSize >= minWindowSize; windowSize -= 1) {
+    for (let start = 0; start + windowSize * 2 <= tokens.length; start += 1) {
+      let matches = true;
+      for (let index = 0; index < windowSize; index += 1) {
+        if (tokens[start + index] !== tokens[start + windowSize + index]) {
+          matches = false;
+          break;
+        }
+      }
+
+      if (matches) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
+
+const looksLikeTaxonomyNoise = (value: string): boolean => {
+  const tokens = tokenizeWords(value).filter((token) => /\p{L}/u.test(token));
+
+  if (tokens.length < 8) {
+    return false;
+  }
+
+  const isTitleishToken = (token: string): boolean => /^\p{Lu}/u.test(token);
+  const titleishCount = tokens.filter(isTitleishToken).length;
+  const lowercaseCount = tokens.filter((token) => /^\p{Ll}/u.test(token)).length;
+  const titleRatio = titleishCount / tokens.length;
+
+  let longestTitleishRun = 0;
+  let currentRun = 0;
+  for (const token of tokens) {
+    if (isTitleishToken(token)) {
+      currentRun += 1;
+      if (currentRun > longestTitleishRun) {
+        longestTitleishRun = currentRun;
+      }
+    } else {
+      currentRun = 0;
+    }
+  }
+
+  return (
+    (hasRepeatedWordWindow(value) || longestTitleishRun >= 7 || titleRatio >= 0.7) &&
+    lowercaseCount <= Math.max(3, Math.floor(tokens.length * 0.3))
+  );
+};
 
 export class QuestionAnswerService {
   private readonly sourceFindingCache = new Map<
@@ -131,7 +203,6 @@ export class QuestionAnswerService {
     });
     const localAnswer = this.buildLocalAnswer(
       answerMode,
-      input.deck,
       input.slide,
       input.turnDecision,
     );
@@ -172,7 +243,27 @@ export class QuestionAnswerService {
           ? { sourceGroundingContext: questionContext.sourceGroundingContext }
           : {}),
       });
-      return answer.text;
+      const normalizedAnswer = this.postProcessModelAnswer({
+        answerMode,
+        rawText: answer.text,
+      });
+
+      if (normalizedAnswer) {
+        return normalizedAnswer;
+      }
+
+      if (answerMode === "grounded_factual") {
+        return "I do not have a reliable answer to that from the current slide or the available source material.";
+      }
+
+      return this.buildFallbackAnswer({
+        answerMode,
+        deck: input.deck,
+        slide: input.slide,
+        question: input.question,
+        turnDecision: input.turnDecision,
+        ...questionContext,
+      });
     } catch (error) {
       console.warn(
         `[slidespeech] question answering fallback for slide ${input.slide.id}: ${(error as Error).message}`,
@@ -212,7 +303,6 @@ export class QuestionAnswerService {
 
   private buildLocalAnswer(
     answerMode: QuestionAnswerMode,
-    deck: Deck,
     slide: Slide,
     turnDecision: ConversationTurnDecision,
   ): string | null {
@@ -224,7 +314,7 @@ export class QuestionAnswerService {
     }
 
     if (answerMode === "example") {
-      const exampleSeed = this.selectExampleSeed(deck, slide);
+      const exampleSeed = this.selectExampleSeed(slide);
       return exampleSeed
         ? `One concrete example is ${ensureSentenceEnding(
             normalizeExampleLeadIn(exampleSeed),
@@ -239,40 +329,38 @@ export class QuestionAnswerService {
     return null;
   }
 
-  private selectExampleSeed(deck: Deck, slide: Slide): string | null {
+  private selectExampleSeed(slide: Slide): string | null {
     const slideExample = slide.examples[0]?.trim();
     if (slideExample) {
       return slideExample;
-    }
-
-    const neighboringExample = deck.slides
-      .filter((candidate) => candidate.id !== slide.id)
-      .flatMap((candidate) => candidate.examples)
-      .map((example) => example.trim())
-      .find(Boolean);
-    if (neighboringExample) {
-      return neighboringExample;
-    }
-
-    const keyPointExample =
-      slide.keyPoints.find((point) => point.trim().length > 0)?.trim() ?? "";
-    if (keyPointExample) {
-      return keyPointExample;
     }
 
     return null;
   }
 
   private buildBroaderDeckContext(
+    question: string,
     deck: Deck,
     activeSlide: Slide,
   ): string | undefined {
     const relatedSlides = deck.slides
       .filter((slide) => slide.id !== activeSlide.id)
+      .map((slide) => {
+        const snippet = normalizeContextText(
+          `${slide.title}: ${slide.learningGoal}. ${slide.keyPoints.slice(0, 2).join(" ")} ${slide.examples[0] ?? ""}`,
+        );
+        const score =
+          countTokenOverlap(snippet, question) * 6 +
+          countTokenOverlap(snippet, activeSlide.title) * 2 +
+          countTokenOverlap(snippet, activeSlide.learningGoal) * 2 +
+          countTokenOverlap(slide.title, question) * 4;
+
+        return { snippet, score };
+      })
+      .sort((left, right) => right.score - left.score)
       .slice(0, 3)
       .map(
-        (slide) =>
-          `${slide.title}: ${slide.learningGoal}. ${slide.keyPoints.slice(0, 2).join(" ")}`,
+        (candidate) => candidate.snippet,
       );
 
     const context = uniqueNonEmptyStrings(relatedSlides).join(" | ");
@@ -289,18 +377,19 @@ export class QuestionAnswerService {
     broaderDeckContext?: string;
     sourceGroundingContext?: string;
   }> {
-    const topicSignal =
-      countTokenOverlap(input.question, input.deck.topic) +
-      countTokenOverlap(input.question, input.slide.title);
     const broaderDeckContext =
       input.answerMode !== "general_contextual" &&
       input.answerMode !== "example"
         ? undefined
-        : topicSignal >= 1
-          ? this.buildBroaderDeckContext(input.deck, input.slide)
-          : undefined;
+        : this.buildBroaderDeckContext(
+            input.question,
+            input.deck,
+            input.slide,
+          );
     const sourceGroundingContext =
-      input.answerMode === "grounded_factual" || topicSignal >= 2
+      input.answerMode === "grounded_factual" ||
+      (input.answerMode === "general_contextual" &&
+        input.deck.source.sourceIds.length > 0)
         ? await this.buildSourceGroundingContext(
             input.deck,
             input.slide,
@@ -341,11 +430,13 @@ export class QuestionAnswerService {
     slide: Slide;
     question: string;
   }): string[] {
-    const windows = uniqueNonEmptyStrings([
-      buildLeadingSourceExcerpt(input.finding.content) ?? "",
-      ...buildWordWindows(input.finding.content, 16, 8),
-      ...buildWordWindows(input.finding.content, 32, 16),
+    const leadingExcerpts = buildLeadingSourceExcerpts(input.finding.content);
+    const rawWindows = uniqueNonEmptyStrings([
+      ...leadingExcerpts,
+      ...buildWordWindows(input.finding.content, 24, 12),
+      ...buildWordWindows(input.finding.content, 40, 20),
     ]);
+    const windows = rawWindows.filter((excerpt) => !looksLikeTaxonomyNoise(excerpt));
 
     const candidates = windows.map((excerpt, index) => {
       const questionOverlap = countTokenOverlap(excerpt, input.question);
@@ -355,24 +446,27 @@ export class QuestionAnswerService {
         countTokenOverlap(excerpt, input.slide.learningGoal);
       const brevityBonus = Math.max(0, 18 - tokenizeContext(excerpt).length);
       const earlyBonus = Math.max(0, 4 - index);
+      const noisePenalty = looksLikeTaxonomyNoise(excerpt) ? -12 : 0;
       const score =
         questionOverlap * 6 +
         slideOverlap * 2 +
         topicOverlap * 2 +
         brevityBonus +
-        earlyBonus;
+        earlyBonus +
+        noisePenalty;
 
       return { excerpt, score };
     });
 
-    return uniqueNonEmptyStrings(
-      [...candidates]
+    return uniqueNonEmptyStrings([
+      ...leadingExcerpts.filter((excerpt) => !looksLikeTaxonomyNoise(excerpt)).slice(-2),
+      ...[...candidates]
         .sort((left, right) => right.score - left.score)
-        .slice(0, 2)
+        .slice(0, 3)
         .map((candidate) => candidate.excerpt),
-    )
+    ])
       .filter((excerpt) => excerpt.length >= 24)
-      .slice(0, 2)
+      .slice(0, 4)
       .map((excerpt) => `${input.finding.title}: ${excerpt}`);
   }
 
@@ -399,7 +493,7 @@ export class QuestionAnswerService {
           question,
         }),
       ),
-    ).slice(0, 4);
+    ).slice(0, 6);
 
     return excerpts.length > 0 ? excerpts.join(" | ") : undefined;
   }
@@ -415,11 +509,6 @@ export class QuestionAnswerService {
     const rankedCandidates = this.rankContextCandidates(input);
     const bestCandidate = rankedCandidates[0];
     const secondBestScore = rankedCandidates[1]?.score ?? 0;
-    const questionTopicSignal =
-      countTokenOverlap(input.question, input.deck.topic) +
-      countTokenOverlap(input.question, input.slide.title);
-    const groundedTopicQuestion =
-      input.deck.source.sourceIds.length > 0 && questionTopicSignal >= 2;
 
     if (!bestCandidate) {
       return null;
@@ -433,17 +522,28 @@ export class QuestionAnswerService {
       return ensureSentenceEnding(normalizeContextText(bestCandidate.snippet));
     }
 
-    if (
-      bestCandidate.kind === "current_slide" &&
-      input.answerMode === "general_contextual" &&
-      !groundedTopicQuestion &&
-      bestCandidate.score >= 10 &&
-      bestCandidate.score >= secondBestScore + 4
-    ) {
-      return ensureSentenceEnding(normalizeContextText(bestCandidate.snippet));
+    return null;
+  }
+
+  private postProcessModelAnswer(input: {
+    answerMode: QuestionAnswerMode;
+    rawText: string;
+  }): string | null {
+    const normalized = normalizeContextText(input.rawText);
+    if (!normalized) {
+      return null;
     }
 
-    return null;
+    if (input.answerMode === "grounded_factual") {
+      const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+      if (!/[.!?]$/.test(normalized) && wordCount >= 8) {
+        return null;
+      }
+
+      return ensureSentenceEnding(normalized);
+    }
+
+    return normalized;
   }
 
   private buildFallbackAnswer(input: {
@@ -457,7 +557,6 @@ export class QuestionAnswerService {
   }): string {
     const localAnswer = this.buildLocalAnswer(
       input.answerMode,
-      input.deck,
       input.slide,
       input.turnDecision,
     );
@@ -482,6 +581,26 @@ export class QuestionAnswerService {
     }
 
     const fallbackCandidate = rankedCandidates[0];
+    const currentSlideCandidate = rankedCandidates.find(
+      (candidate) => candidate.kind === "current_slide",
+    );
+    const deckFallbackOutranksCurrentSlideClearly =
+      fallbackCandidate?.kind === "deck" &&
+      currentSlideCandidate !== undefined &&
+      fallbackCandidate.score >= currentSlideCandidate.score + 4 &&
+      countTokenOverlap(fallbackCandidate.snippet, input.question) >=
+        countTokenOverlap(currentSlideCandidate.snippet, input.question) + 1;
+    const preferCurrentSlideFallback =
+      fallbackCandidate &&
+      fallbackCandidate.kind !== "current_slide" &&
+      currentSlideCandidate &&
+      (!deckFallbackOutranksCurrentSlideClearly ||
+        currentSlideCandidate.score >= fallbackCandidate.score - 2);
+
+    if (preferCurrentSlideFallback && currentSlideCandidate) {
+      return ensureSentenceEnding(normalizeContextText(currentSlideCandidate.snippet));
+    }
+
     if (fallbackCandidate && input.answerMode !== "example") {
       return ensureSentenceEnding(normalizeContextText(fallbackCandidate.snippet));
     }
@@ -532,8 +651,8 @@ export class QuestionAnswerService {
                 (input.answerMode === "grounded_factual"
                   ? 0
                   : sourceBiasActive
-                    ? 2
-                    : 18),
+                    ? 1
+                    : 4),
             },
           ]
         : []),

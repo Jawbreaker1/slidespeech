@@ -1,4 +1,4 @@
-import type { Slide, SlideVisualTone } from "./domain";
+import type { Slide, SlideLayoutTemplate, SlideVisualTone } from "./domain";
 
 export interface SlideIllustrationDescriptor {
   title: string;
@@ -6,6 +6,7 @@ export interface SlideIllustrationDescriptor {
   caption?: string;
   accentColor?: string;
   tone?: SlideVisualTone;
+  layoutTemplate?: SlideLayoutTemplate;
 }
 
 const FALLBACK_ACCENT = "1C7C7D";
@@ -78,24 +79,137 @@ const escapeXml = (value: string) =>
 const encodeSvg = (svg: string) =>
   `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 
+type IllustrationMotif =
+  | "workflow"
+  | "analysis"
+  | "network"
+  | "spotlight"
+  | "people";
+
+const chooseIllustrationMotif = (
+  descriptor: SlideIllustrationDescriptor,
+  seed: number,
+): IllustrationMotif => {
+  switch (descriptor.layoutTemplate) {
+    case "three-step-flow":
+      return "workflow";
+    case "two-column-callouts":
+      return "analysis";
+    case "summary-board":
+      return "network";
+    case "hero-focus":
+    default:
+      return seed % 2 === 0 ? "spotlight" : "people";
+  }
+};
+
+const renderWorkflowMotif = (palette: ReturnType<typeof tonePalette>, seed: number) => {
+  const nodeY = 182 + ((seed >> 2) % 10) - 5;
+  const nodeRadius = 26 + ((seed >> 5) % 7);
+  const bridgeY = nodeY + 4;
+
+  return `
+    <circle cx="156" cy="${nodeY}" r="${nodeRadius}" fill="${palette.accent}" fill-opacity="0.14" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="322" cy="${nodeY}" r="${nodeRadius}" fill="${palette.accent}" fill-opacity="0.10" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="488" cy="${nodeY}" r="${nodeRadius}" fill="${palette.accent}" fill-opacity="0.14" stroke="${palette.border}" stroke-width="3" />
+    <path d="M188 ${bridgeY} C232 ${bridgeY - 18}, 248 ${bridgeY - 18}, 292 ${bridgeY}" stroke="${palette.accent}" stroke-width="8" stroke-linecap="round" stroke-opacity="0.82" />
+    <path d="M354 ${bridgeY} C398 ${bridgeY + 18}, 414 ${bridgeY + 18}, 458 ${bridgeY}" stroke="${palette.accent}" stroke-width="8" stroke-linecap="round" stroke-opacity="0.82" />
+    <rect x="108" y="226" width="96" height="42" rx="18" fill="${palette.surface}" stroke="${palette.border}" stroke-width="2" />
+    <rect x="274" y="226" width="96" height="42" rx="18" fill="${palette.surface}" stroke="${palette.border}" stroke-width="2" />
+    <rect x="440" y="226" width="96" height="42" rx="18" fill="${palette.surface}" stroke="${palette.border}" stroke-width="2" />
+  `.trim();
+};
+
+const renderAnalysisMotif = (palette: ReturnType<typeof tonePalette>, seed: number) => {
+  const barA = 54 + ((seed >> 1) % 28);
+  const barB = 92 + ((seed >> 4) % 34);
+  const barC = 136 + ((seed >> 7) % 28);
+
+  return `
+    <rect x="124" y="112" width="392" height="180" rx="28" fill="white" stroke="${palette.border}" stroke-width="2.5" />
+    <path d="M158 248 L158 150" stroke="${palette.border}" stroke-width="6" stroke-linecap="round" />
+    <path d="M238 248 L238 ${248 - barA}" stroke="${palette.accent}" stroke-width="34" stroke-linecap="round" stroke-opacity="0.78" />
+    <path d="M318 248 L318 ${248 - barB}" stroke="${palette.accent}" stroke-width="34" stroke-linecap="round" stroke-opacity="0.58" />
+    <path d="M398 248 L398 ${248 - barC}" stroke="${palette.accent}" stroke-width="34" stroke-linecap="round" stroke-opacity="0.88" />
+    <path d="M174 176 C242 132, 312 142, 392 104" stroke="#0F172A" stroke-width="7" stroke-linecap="round" stroke-opacity="0.18" />
+    <circle cx="392" cy="104" r="10" fill="${palette.accent}" fill-opacity="0.9" />
+    <rect x="422" y="138" width="66" height="24" rx="12" fill="${palette.accent}" fill-opacity="0.14" />
+    <rect x="422" y="174" width="82" height="24" rx="12" fill="${palette.accent}" fill-opacity="0.1" />
+  `.trim();
+};
+
+const renderNetworkMotif = (palette: ReturnType<typeof tonePalette>, seed: number) => {
+  const centerX = 322 + ((seed >> 2) % 20) - 10;
+  const centerY = 176 + ((seed >> 5) % 16) - 8;
+
+  return `
+    <circle cx="${centerX}" cy="${centerY}" r="48" fill="${palette.accent}" fill-opacity="0.13" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="168" cy="118" r="28" fill="${palette.surface}" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="490" cy="128" r="30" fill="${palette.surface}" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="152" cy="256" r="26" fill="${palette.surface}" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="500" cy="248" r="32" fill="${palette.surface}" stroke="${palette.border}" stroke-width="3" />
+    <path d="M210 132 C250 146, 270 154, ${centerX - 50} ${centerY - 20}" stroke="${palette.accent}" stroke-width="6" stroke-linecap="round" stroke-opacity="0.76" />
+    <path d="M460 145 C424 156, 406 162, ${centerX + 50} ${centerY - 12}" stroke="${palette.accent}" stroke-width="6" stroke-linecap="round" stroke-opacity="0.68" />
+    <path d="M180 240 C228 224, 250 214, ${centerX - 54} ${centerY + 28}" stroke="${palette.accent}" stroke-width="6" stroke-linecap="round" stroke-opacity="0.68" />
+    <path d="M468 234 C426 220, 404 212, ${centerX + 54} ${centerY + 22}" stroke="${palette.accent}" stroke-width="6" stroke-linecap="round" stroke-opacity="0.82" />
+    <circle cx="${centerX}" cy="${centerY}" r="11" fill="${palette.accent}" />
+  `.trim();
+};
+
+const renderSpotlightMotif = (palette: ReturnType<typeof tonePalette>, seed: number) => {
+  const glowX = 214 + ((seed >> 3) % 42);
+  const glowY = 154 + ((seed >> 6) % 38);
+
+  return `
+    <rect x="104" y="88" width="432" height="208" rx="30" fill="white" stroke="${palette.border}" stroke-width="2.5" />
+    <circle cx="${glowX}" cy="${glowY}" r="82" fill="${palette.accent}" fill-opacity="0.12" />
+    <circle cx="418" cy="150" r="54" fill="${palette.accent}" fill-opacity="0.08" />
+    <rect x="146" y="120" width="166" height="118" rx="26" fill="${palette.surface}" stroke="${palette.border}" stroke-width="2" />
+    <rect x="338" y="120" width="156" height="26" rx="13" fill="${palette.accent}" fill-opacity="0.15" />
+    <rect x="338" y="160" width="124" height="22" rx="11" fill="${palette.accent}" fill-opacity="0.10" />
+    <rect x="338" y="196" width="144" height="22" rx="11" fill="${palette.accent}" fill-opacity="0.10" />
+    <path d="M182 258 C228 232, 274 232, 320 258" stroke="${palette.accent}" stroke-width="7" stroke-linecap="round" stroke-opacity="0.72" />
+  `.trim();
+};
+
+const renderPeopleMotif = (palette: ReturnType<typeof tonePalette>, seed: number) => {
+  const boardWidth = 164 + ((seed >> 4) % 24);
+
+  return `
+    <rect x="224" y="84" width="${boardWidth}" height="98" rx="22" fill="white" stroke="${palette.border}" stroke-width="2.5" />
+    <rect x="248" y="112" width="${boardWidth - 48}" height="16" rx="8" fill="${palette.accent}" fill-opacity="0.16" />
+    <rect x="248" y="140" width="${boardWidth - 82}" height="14" rx="7" fill="${palette.accent}" fill-opacity="0.1" />
+    <circle cx="166" cy="214" r="26" fill="${palette.surface}" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="322" cy="238" r="28" fill="${palette.accent}" fill-opacity="0.12" stroke="${palette.border}" stroke-width="3" />
+    <circle cx="478" cy="214" r="26" fill="${palette.surface}" stroke="${palette.border}" stroke-width="3" />
+    <path d="M140 272 C148 244, 184 244, 192 272" stroke="${palette.border}" stroke-width="14" stroke-linecap="round" />
+    <path d="M292 304 C300 270, 344 270, 352 304" stroke="${palette.accent}" stroke-width="16" stroke-linecap="round" stroke-opacity="0.62" />
+    <path d="M452 272 C460 244, 496 244, 504 272" stroke="${palette.border}" stroke-width="14" stroke-linecap="round" />
+  `.trim();
+};
+
 export const createSlideIllustrationDataUri = (
   descriptor: SlideIllustrationDescriptor,
 ) => {
   const accent = normalizeHexColor(descriptor.accentColor);
   const palette = tonePalette(descriptor.tone, accent);
   const seed = hashString(`${descriptor.title}:${descriptor.prompt}`);
-  const circleX = 90 + (seed % 120);
-  const circleY = 86 + ((seed >> 3) % 70);
-  const circleRadius = 42 + ((seed >> 5) % 26);
-  const squareX = 210 + ((seed >> 7) % 80);
-  const squareY = 52 + ((seed >> 9) % 66);
-  const squareSize = 58 + ((seed >> 11) % 28);
-  const lineOffset = 40 + ((seed >> 13) % 45);
-  const title = escapeXml(shorten(descriptor.title, 42));
-  const prompt = escapeXml(shorten(descriptor.prompt, 88));
-  const caption = descriptor.caption
-    ? escapeXml(shorten(descriptor.caption, 58))
-    : "";
+  const motif = chooseIllustrationMotif(descriptor, seed);
+  const motifMarkup = (() => {
+    switch (motif) {
+      case "workflow":
+        return renderWorkflowMotif(palette, seed);
+      case "analysis":
+        return renderAnalysisMotif(palette, seed);
+      case "network":
+        return renderNetworkMotif(palette, seed);
+      case "people":
+        return renderPeopleMotif(palette, seed);
+      case "spotlight":
+      default:
+        return renderSpotlightMotif(palette, seed);
+    }
+  })();
 
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" fill="none">
@@ -116,26 +230,10 @@ export const createSlideIllustrationDataUri = (
       <rect x="0" y="0" width="640" height="360" rx="28" fill="url(#bg)"/>
       <rect x="20" y="20" width="600" height="320" rx="24" fill="white" stroke="${palette.border}" stroke-width="2"/>
       <rect x="20" y="20" width="600" height="320" rx="24" fill="url(#glow)"/>
-      <circle cx="${circleX}" cy="${circleY}" r="${circleRadius}" fill="${palette.accent}" fill-opacity="0.10"/>
-      <rect x="${squareX}" y="${squareY}" width="${squareSize}" height="${squareSize}" rx="18" fill="${palette.accent}" fill-opacity="0.1"/>
-      <path d="M64 ${236 - lineOffset} C180 ${176 - lineOffset}, 242 ${258 - lineOffset}, 352 ${188 - lineOffset}" stroke="${palette.accent}" stroke-width="8" stroke-linecap="round" stroke-opacity="0.75"/>
-      <path d="M210 252 C268 214, 330 300, 402 232" stroke="#0F172A" stroke-width="5" stroke-linecap="round" stroke-opacity="0.18"/>
-      <rect x="64" y="214" width="116" height="78" rx="18" fill="${palette.surface}" stroke="${palette.border}" stroke-width="1.5"/>
-      <rect x="194" y="160" width="140" height="92" rx="18" fill="${palette.surface}" stroke="${palette.border}" stroke-width="1.5"/>
-      <rect x="350" y="206" width="138" height="76" rx="18" fill="${palette.surface}" stroke="${palette.border}" stroke-width="1.5"/>
-      <rect x="64" y="54" width="116" height="32" rx="16" fill="${palette.accent}" fill-opacity="0.1"/>
-      <text x="82" y="75" fill="${palette.text}" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" letter-spacing="1.8">ILLUSTRATION</text>
-      <text x="64" y="126" fill="#0F172A" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">${title}</text>
-      <foreignObject x="64" y="142" width="516" height="78">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: Arial, Helvetica, sans-serif; font-size: 17px; line-height: 1.45; color: #334155;">
-          ${prompt}
-        </div>
-      </foreignObject>
-      ${
-        caption
-          ? `<text x="64" y="316" fill="${palette.text}" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="600">${caption}</text>`
-          : ""
-      }
+      <rect x="54" y="52" width="132" height="18" rx="9" fill="${palette.accent}" fill-opacity="0.08"/>
+      <circle cx="548" cy="76" r="10" fill="${palette.accent}" fill-opacity="0.14"/>
+      <circle cx="578" cy="76" r="10" fill="${palette.accent}" fill-opacity="0.10"/>
+      ${motifMarkup}
     </svg>
   `.trim();
 
@@ -151,12 +249,14 @@ export const getPrimarySlideIllustration = (slide: Slide) => {
 
   return {
     ...primarySlot,
+    kind: "curated" as const,
     dataUri: createSlideIllustrationDataUri({
       title: primarySlot.altText || slide.title,
       prompt: primarySlot.prompt,
       ...(primarySlot.caption ? { caption: primarySlot.caption } : {}),
       accentColor: slide.visuals.accentColor,
       tone: primarySlot.tone,
+      layoutTemplate: slide.visuals.layoutTemplate,
     }),
   };
 };

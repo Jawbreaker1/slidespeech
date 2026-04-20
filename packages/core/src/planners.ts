@@ -21,6 +21,7 @@ export class PresentationPlanner {
     pedagogicalProfile: PedagogicalProfile,
     groundingSummary?: string,
     groundingHighlights?: string[],
+    groundingExcerpts?: string[],
     targetDurationMinutes?: number,
     targetSlideCount?: number,
   ): Promise<PresentationPlan> {
@@ -31,6 +32,7 @@ export class PresentationPlanner {
       pedagogicalProfile,
       ...(groundingSummary ? { groundingSummary } : {}),
       ...(groundingHighlights?.length ? { groundingHighlights } : {}),
+      ...(groundingExcerpts?.length ? { groundingExcerpts } : {}),
       ...(targetDurationMinutes ? { targetDurationMinutes } : {}),
       ...(targetSlideCount ? { targetSlideCount } : {}),
     });

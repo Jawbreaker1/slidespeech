@@ -10,16 +10,20 @@ import { createSlideIllustrationDataUri } from "@slidespeech/types";
 
 import { healthy, unhealthy } from "../shared";
 import { sanitizeResearchQuery } from "../web-research/hosted-web-research-provider";
+import { buildCuratedFallbackIllustration } from "./curated-fallback-pack";
 
 const IMAGE_META_PATTERNS = [
   /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
   /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
+  /<meta[^>]+property=["']og:image:secure_url["'][^>]+content=["']([^"']+)["']/i,
+  /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image:secure_url["']/i,
   /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
   /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
 ];
 
 const IMG_TAG_PATTERN = /<img\b[^>]*>/gi;
 const HTML_ATTRIBUTE_PATTERN = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['"])(.*?)\2/g;
+const WIKIPEDIA_LINK_PATTERN = /href="(\/wiki\/[^"#?]+)"/gi;
 
 const STOP_WORDS = new Set([
   "a",
@@ -51,6 +55,24 @@ const LOW_QUALITY_IMAGE_SOURCE_PATTERNS = [
   /(^|\.)instagram\.com$/i,
   /(^|\.)x\.com$/i,
   /(^|\.)twitter\.com$/i,
+];
+
+const LOW_VALUE_IMAGE_RESULT_PATTERNS = [
+  /\/viewtopic\.php/i,
+  /\/viewforum\.php/i,
+  /\/album\.php/i,
+  /\bfor sale\b/i,
+  /\bclassified/i,
+  /\bpage\s+\d{2,}\b/i,
+  /\bforum(s)?\b/i,
+];
+
+const REFERENCE_IMAGE_SOURCE_PATTERNS = [
+  /(^|\.)wikipedia\.org$/i,
+  /(^|\.)wikimedia\.org$/i,
+  /(^|\.)britannica\.com$/i,
+  /(^|\.)history\.com$/i,
+  /(^|\.)smithsonianmag\.com$/i,
 ];
 
 interface HostedIllustrationProviderConfig {
@@ -168,6 +190,32 @@ const parseHtmlAttributes = (tag: string) => {
   return attributes;
 };
 
+const parseSrcsetUrls = (value: string): string[] =>
+  value
+    .split(",")
+    .map((candidate) => candidate.trim())
+    .map((candidate) => candidate.split(/\s+/)[0] ?? "")
+    .map((candidate) => candidate.trim())
+    .filter(Boolean);
+
+const extractCandidateUrlsFromAttributes = (
+  attributes: Map<string, string>,
+  pageUrl: string,
+) => {
+  const rawValues = [
+    attributes.get("src"),
+    attributes.get("data-src"),
+    attributes.get("data-lazy-src"),
+    attributes.get("data-original"),
+    ...parseSrcsetUrls(attributes.get("srcset") ?? ""),
+    ...parseSrcsetUrls(attributes.get("data-srcset") ?? ""),
+  ].filter((value): value is string => Boolean(value?.trim()));
+
+  return [...new Set(rawValues)]
+    .map((value) => normalizeUrl(value.trim(), pageUrl))
+    .filter((value): value is string => Boolean(value));
+};
+
 const buildIllustrationSemanticTokens = (
   input: RenderSlideIllustrationInput,
 ): string[] => {
@@ -214,8 +262,11 @@ const minimumAcceptedImageCandidateScore = (input: {
   const trustedSourcePage = input.preferredHosts.some(
     (host) => host && resultDomain.includes(host),
   );
+  const referenceSourcePage = REFERENCE_IMAGE_SOURCE_PATTERNS.some((pattern) =>
+    pattern.test(resultDomain),
+  );
 
-  return trustedSourcePage ? -10 : 8;
+  return trustedSourcePage || referenceSourcePage ? -10 : 8;
 };
 
 export const scoreExtractedImageCandidate = (
@@ -226,19 +277,64 @@ export const scoreExtractedImageCandidate = (
   scoreImageCandidateUrl(candidate.url, preferredHosts) +
   scoreImageCandidateSemanticMatch(candidate, desiredTokens);
 
+const buildIllustrationQueryTokens = (input: RenderSlideIllustrationInput) => {
+  const normalizedTopic = sanitizeResearchQuery(input.deck.topic) || input.deck.topic;
+  const slot = input.slide.visuals.imageSlots[0];
+  const baseTokens = [
+    ...new Set([
+      ...tokenize(normalizedTopic),
+      ...tokenize(input.deck.title),
+      ...tokenize(input.slide.title),
+    ]),
+  ];
+  const supportSources =
+    input.deck.source.sourceIds.length > 0
+      ? [
+          sanitizeResearchQuery(input.deck.title) || input.deck.title,
+          input.slide.learningGoal,
+          slot?.altText ?? "",
+        ]
+      : [input.slide.learningGoal, slot?.altText ?? ""];
+  const supportTokens = [
+    ...new Set(
+      supportSources
+        .flatMap((value) => tokenize(value))
+        .filter((token) => !baseTokens.includes(token)),
+    ),
+  ].slice(0, 4);
+
+  return [...baseTokens, ...supportTokens].slice(0, 12);
+};
+
+const extractWikipediaPageUrls = (html: string): string[] => {
+  const candidates: string[] = [];
+
+  for (const match of html.matchAll(WIKIPEDIA_LINK_PATTERN)) {
+    const relative = match[1]?.trim();
+    if (!relative) {
+      continue;
+    }
+
+    if (
+      relative.includes(":") ||
+      /Main_Page/i.test(relative) ||
+      /Special:/i.test(relative)
+    ) {
+      continue;
+    }
+
+    candidates.push(`https://en.wikipedia.org${relative}`);
+  }
+
+  return [...new Set(candidates)].slice(0, 5);
+};
+
 export const scoreSearchResultForIllustration = (
   input: RenderSlideIllustrationInput,
   result: WebSearchResult,
 ): number => {
   const domain = domainFromUrl(result.url);
-  const normalizedTopic = sanitizeResearchQuery(input.deck.topic) || input.deck.topic;
-  const queryTokens = [
-    ...tokenize(normalizedTopic),
-    ...tokenize(input.slide.title),
-    ...tokenize(input.slide.visuals.imagePrompt ?? ""),
-    ...tokenize(input.slide.visuals.imageSlots[0]?.prompt ?? ""),
-  ];
-  const uniqueTokens = [...new Set(queryTokens)];
+  const uniqueTokens = buildIllustrationQueryTokens(input);
   const titleTokens = tokenize(result.title);
   const snippetTokens = tokenize(result.snippet);
   const domainTokens = tokenize(domain.replace(/\./g, " "));
@@ -259,22 +355,50 @@ export const scoreSearchResultForIllustration = (
     score += 4;
   }
 
+  if (REFERENCE_IMAGE_SOURCE_PATTERNS.some((pattern) => pattern.test(domain))) {
+    score += 8;
+  }
+
   if (LOW_QUALITY_IMAGE_SOURCE_PATTERNS.some((pattern) => pattern.test(domain))) {
     score -= 20;
+  }
+
+  if (
+    LOW_VALUE_IMAGE_RESULT_PATTERNS.some(
+      (pattern) => pattern.test(result.title) || pattern.test(result.url),
+    )
+  ) {
+    score -= 30;
   }
 
   return score;
 };
 
 export const buildIllustrationSearchQuery = (input: RenderSlideIllustrationInput) => {
-  const slot = input.slide.visuals.imageSlots[0];
-  const base = slot?.prompt?.trim() || input.slide.title;
-  const normalizedTopic = sanitizeResearchQuery(input.deck.topic) || input.deck.topic;
+  const topicTerms = buildIllustrationQueryTokens(input).join(" ");
   const sourceHints = input.deck.source.sourceIds
     .flatMap((sourceId) => hostKeywords(sourceId))
     .slice(0, 3)
     .join(" ");
-  return `${normalizedTopic} ${input.slide.title} illustration ${base} ${sourceHints}`.trim();
+  return `${topicTerms} image ${sourceHints}`.trim();
+};
+
+const buildIllustrationSearchQueries = (
+  input: RenderSlideIllustrationInput,
+): string[] => {
+  const primaryQuery = buildIllustrationSearchQuery(input);
+
+  if (preferredSourcePages(input).length > 0) {
+    return [primaryQuery];
+  }
+
+  const topicTerms = buildIllustrationQueryTokens(input).join(" ");
+
+  return [
+    primaryQuery,
+    `${topicTerms} wikipedia image`.trim(),
+    `${topicTerms} official image`.trim(),
+  ];
 };
 
 export const extractImageCandidateUrls = (
@@ -312,17 +436,16 @@ export const extractImageCandidates = (
     }
 
     const attributes = parseHtmlAttributes(tag);
-    const raw = attributes.get("src")?.trim() ?? "";
-    if (!raw) {
+    const candidateUrls = extractCandidateUrlsFromAttributes(attributes, pageUrl);
+    if (candidateUrls.length === 0) {
       continue;
     }
 
-    const absolute = normalizeUrl(raw, pageUrl);
-    if (absolute) {
-      const altText = attributes.get("alt");
-      const title = attributes.get("title");
-      const ariaLabel = attributes.get("aria-label");
+    const altText = attributes.get("alt");
+    const title = attributes.get("title");
+    const ariaLabel = attributes.get("aria-label");
 
+    for (const absolute of candidateUrls) {
       candidates.push({
         url: absolute,
         ...(altText ? { altText } : {}),
@@ -343,7 +466,7 @@ export const extractImageCandidates = (
       seen.add(candidate.url);
       return true;
     })
-    .slice(0, 8);
+    .slice(0, 16);
 };
 
 const preferredSourcePages = (input: RenderSlideIllustrationInput): string[] => {
@@ -460,7 +583,9 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
     };
   }
 
-  private buildFallback(input: RenderSlideIllustrationInput) {
+  private buildProceduralFallback(
+    input: RenderSlideIllustrationInput,
+  ): SlideIllustrationAsset {
     const slot = input.slide.visuals.imageSlots[0];
     const title = slot?.altText || input.slide.title;
     const prompt =
@@ -468,9 +593,10 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
       input.slide.visuals.imagePrompt ||
       `Create an educational illustration for ${input.slide.title}.`;
 
-      return {
-        slideId: input.slide.id,
-        slotId: slot?.id ?? `${input.slide.id}-image-fallback`,
+    return {
+      slideId: input.slide.id,
+      slotId: slot?.id ?? `${input.slide.id}-image-fallback`,
+      kind: "curated",
       mimeType: "image/svg+xml",
       dataUri: createSlideIllustrationDataUri({
         title,
@@ -478,10 +604,22 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
         ...(slot?.caption ? { caption: slot.caption } : {}),
         accentColor: input.slide.visuals.accentColor,
         ...(slot?.tone ? { tone: slot.tone } : {}),
+        layoutTemplate: input.slide.visuals.layoutTemplate,
       }),
       ...(slot?.altText ? { altText: slot.altText } : { altText: title }),
       ...(slot?.caption ? { caption: slot.caption } : {}),
     };
+  }
+
+  private async buildFallback(
+    input: RenderSlideIllustrationInput,
+  ): Promise<SlideIllustrationAsset> {
+    const curated = await buildCuratedFallbackIllustration(input);
+    if (curated) {
+      return curated;
+    }
+
+    return this.buildProceduralFallback(input);
   }
 
   private getUsedSourceImages(deckId: string): Set<string> {
@@ -527,7 +665,12 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
       console.warn(
         `[slidespeech] vision validation failed for slide ${input.slide.id}: ${(error as Error).message}`,
       );
-      return input.trustedSourcePage;
+      return (
+        input.trustedSourcePage ||
+        REFERENCE_IMAGE_SOURCE_PATTERNS.some((pattern) =>
+          pattern.test(domainFromUrl(input.result.url)),
+        )
+      );
     }
   }
 
@@ -588,6 +731,7 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
         const asset: SlideIllustrationAsset = {
           slideId: input.slide.id,
           slotId: slot?.id ?? `${input.slide.id}-image-1`,
+          kind: "source",
           mimeType: fetched.mimeType,
           dataUri: fetched.dataUri,
           ...(slot?.altText
@@ -616,6 +760,33 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
     }
 
     return duplicateFallback;
+  }
+
+  private async tryWikipediaReferenceFallback(
+    input: RenderSlideIllustrationInput,
+  ): Promise<SlideIllustrationAsset | null> {
+    const query = buildIllustrationQueryTokens(input).join(" ");
+    if (!query) {
+      return null;
+    }
+
+    const searchUrl = `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(query)}`;
+    const searchHtml = await this.fetchHtml(searchUrl);
+    const pageUrls = extractWikipediaPageUrls(searchHtml);
+
+    for (const pageUrl of pageUrls) {
+      const asset = await this.trySearchResult(input, {
+        title: input.slide.title,
+        url: pageUrl,
+        snippet: input.deck.summary,
+      });
+
+      if (asset) {
+        return asset;
+      }
+    }
+
+    return null;
   }
 
   private cacheKey(input: RenderSlideIllustrationInput) {
@@ -653,9 +824,8 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
         }
       }
 
-      const results = await this.webResearchProvider
-        .search(buildIllustrationSearchQuery(input))
-        .then((candidates) =>
+      for (const query of buildIllustrationSearchQueries(input)) {
+        const results = await this.webResearchProvider.search(query).then((candidates) =>
           [...candidates].sort(
             (left, right) =>
               scoreSearchResultForIllustration(input, right) -
@@ -663,14 +833,22 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
           ),
         );
 
-      for (const result of results.slice(0, 4)) {
-        if (scoreSearchResultForIllustration(input, result) < 6) {
-          continue;
-        }
+        for (const result of results.slice(0, 6)) {
+          if (scoreSearchResultForIllustration(input, result) < 6) {
+            continue;
+          }
 
-        const asset = await this.trySearchResult(input, result);
-        if (asset) {
-          return asset;
+          const asset = await this.trySearchResult(input, result);
+          if (asset) {
+            return asset;
+          }
+        }
+      }
+
+      if (preferredSourcePages(input).length === 0) {
+        const referenceAsset = await this.tryWikipediaReferenceFallback(input);
+        if (referenceAsset) {
+          return referenceAsset;
         }
       }
     } catch {

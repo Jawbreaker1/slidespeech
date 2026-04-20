@@ -63,6 +63,24 @@ test("extracts image candidate metadata from img tags", () => {
   assert.match(candidates[0]?.title ?? "", /Corrupted Blood incident/i);
 });
 
+test("extracts lazy-loaded and srcset image candidates", () => {
+  const html = `
+    <html>
+      <body>
+        <img data-src="/images/company-team.webp" alt="Company team at work" />
+        <img srcset="/images/hero-small.jpg 640w, /images/hero-large.jpg 1280w" alt="Hero image" />
+      </body>
+    </html>
+  `;
+
+  const candidates = extractImageCandidates(html, "https://example.com/about");
+  const urls = candidates.map((candidate) => candidate.url);
+
+  assert.ok(urls.includes("https://example.com/images/company-team.webp"));
+  assert.ok(urls.includes("https://example.com/images/hero-small.jpg"));
+  assert.ok(urls.includes("https://example.com/images/hero-large.jpg"));
+});
+
 test("builds illustration search query from deck and slide context", () => {
   const slide = SlideSchema.parse({
     id: "slide_1",
@@ -121,9 +139,10 @@ test("builds illustration search query from deck and slide context", () => {
     slide,
   });
 
-  assert.match(query, /State machines for interactive AI teaching/i);
-  assert.match(query, /Why state machines help/i);
-  assert.match(query, /illustration/i);
+  assert.match(query, /state/i);
+  assert.match(query, /machines/i);
+  assert.match(query, /interactive/i);
+  assert.match(query, /\bimage\b/i);
 });
 
 test("illustration search query includes source host hints when source urls exist", () => {
@@ -185,6 +204,137 @@ test("illustration search query includes source host hints when source urls exis
   });
 
   assert.match(query, /systemverification/i);
+});
+
+test("illustration search query compacts noisy teaching prompts into topical terms", () => {
+  const slide = SlideSchema.parse({
+    id: "slide_1",
+    order: 0,
+    title: "Spongebob Squarepants first episode that was aired in 1999",
+    learningGoal: "See the cultural impact and legacy of the 1999 debut and why it matters.",
+    keyPoints: ["Pilot", "Premiere", "Bikini Bottom"],
+    beginnerExplanation: "Start with the first episode.",
+    advancedExplanation: "Then connect it to the broader media moment.",
+    visuals: {
+      layoutTemplate: "hero-focus",
+      accentColor: "1C7C7D",
+      cards: [],
+      callouts: [],
+      diagramNodes: [],
+      diagramEdges: [],
+      imageSlots: [
+        {
+          id: "slot_1",
+          prompt:
+            "Create an educational visual for Spongebob Squarepants first episode that was aired in 1999 that reinforces See the cultural impact and legacy of the 1999 debut and why it matters..",
+          altText: "Spongebob Squarepants first episode that was aired in 1999 illustration",
+          style: "editorial",
+          tone: "accent",
+        },
+      ],
+    },
+  });
+
+  const query = buildIllustrationSearchQuery({
+    deck: {
+      id: "deck_1",
+      title: "The Birth of Bikini Bottom: SpongeBob's 1999 Premiere",
+      topic: "Spongebob Squarepants first episode that was aired in 1999",
+      summary: "Summary",
+      pedagogicalProfile: {
+        audienceLevel: "beginner",
+        tone: "supportive and concrete",
+        pace: "balanced",
+        preferredExampleStyle: "real_world",
+        wantsFrequentChecks: true,
+        detailLevel: "standard",
+      },
+      source: {
+        type: "mixed",
+        topic: "Spongebob Squarepants first episode that was aired in 1999",
+        sourceIds: [],
+      },
+      slides: [slide],
+      createdAt: "2026-04-11T10:00:00.000Z",
+      updatedAt: "2026-04-11T10:00:00.000Z",
+      metadata: {
+        estimatedDurationMinutes: 6,
+        tags: [],
+        language: "en",
+      },
+    },
+    slide,
+  });
+
+  assert.match(query, /spongebob/i);
+  assert.match(query, /1999/i);
+  assert.match(query, /\bimage\b/i);
+  assert.doesNotMatch(query, /create an educational visual/i);
+  assert.doesNotMatch(query, /that reinforces/i);
+});
+
+test("illustration search query keeps title anchors when deck topic is overly generic", () => {
+  const slide = SlideSchema.parse({
+    id: "slide_1",
+    order: 1,
+    title: "How the premiere introduced the main characters",
+    learningGoal: "Understand how the first episode establishes SpongeBob's world.",
+    keyPoints: ["SpongeBob", "Squidward", "Bikini Bottom"],
+    beginnerExplanation: "The premiere introduces the show's core cast and tone.",
+    advancedExplanation: "The debut episode sets the pattern for the comedic world.",
+    visuals: {
+      layoutTemplate: "three-step-flow",
+      accentColor: "1C7C7D",
+      cards: [],
+      callouts: [],
+      diagramNodes: [],
+      diagramEdges: [],
+      imageSlots: [
+        {
+          id: "slot_1",
+          prompt: "Editorial image about the SpongeBob premiere.",
+          altText: "SpongeBob premiere illustration",
+          style: "editorial",
+          tone: "accent",
+        },
+      ],
+    },
+  });
+
+  const query = buildIllustrationSearchQuery({
+    deck: {
+      id: "deck_1",
+      title: "SpongeBob SquarePants: The 1999 Premiere",
+      topic: "The first episode that aired in 1999",
+      summary: "Summary",
+      pedagogicalProfile: {
+        audienceLevel: "beginner",
+        tone: "supportive and concrete",
+        pace: "balanced",
+        preferredExampleStyle: "real_world",
+        wantsFrequentChecks: true,
+        detailLevel: "standard",
+      },
+      source: {
+        type: "mixed",
+        topic: "The first episode that aired in 1999",
+        sourceIds: [],
+      },
+      slides: [slide],
+      createdAt: "2026-04-19T22:00:00.000Z",
+      updatedAt: "2026-04-19T22:00:00.000Z",
+      metadata: {
+        estimatedDurationMinutes: 6,
+        tags: [],
+        language: "en",
+      },
+    },
+    slide,
+  });
+
+  assert.match(query, /spongebob/i);
+  assert.match(query, /squarepants/i);
+  assert.match(query, /1999/i);
 });
 
 test("illustration ranking penalizes irrelevant low-quality domains", () => {
@@ -269,6 +419,80 @@ test("illustration ranking penalizes irrelevant low-quality domains", () => {
         lowQualityResult,
       ),
   );
+});
+
+test("illustration ranking strongly penalizes forum and classifieds results", () => {
+  const slide = SlideSchema.parse({
+    id: "slide_1",
+    order: 0,
+    title: "SpongeBob's 1999 premiere",
+    learningGoal: "Ground the topic in the actual debut.",
+    keyPoints: ["Help Wanted", "1999", "Nickelodeon"],
+    beginnerExplanation: "This slide introduces the debut.",
+    advancedExplanation: "This slide uses the original release context.",
+    visuals: {
+      layoutTemplate: "hero-focus",
+      accentColor: "1C7C7D",
+      cards: [],
+      callouts: [],
+      diagramNodes: [],
+      diagramEdges: [],
+      imageSlots: [
+        {
+          id: "slot_1",
+          prompt: "SpongeBob 1999 premiere image",
+          style: "editorial",
+          tone: "accent",
+        },
+      ],
+    },
+  });
+  const deck = DeckSchema.parse({
+    id: "deck_1",
+    title: "The Birth of Bikini Bottom: SpongeBob's 1999 Premiere",
+    topic: "Spongebob Squarepants first episode that was aired in 1999",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "mixed",
+      topic: "Spongebob Squarepants first episode that was aired in 1999",
+      sourceIds: [],
+    },
+    slides: [slide],
+    createdAt: "2026-04-11T10:00:00.000Z",
+    updatedAt: "2026-04-11T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 6,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const forumScore = scoreSearchResultForIllustration(
+    { deck, slide },
+    {
+      title: "FOR SALE - SpongeBob Bounce Round Moonbounce",
+      url: "http://www.jlaforums.com/viewtopic.php?t=9513397",
+      snippet: "Used and enjoyed SpongeBob squarepants moonbounce.",
+    },
+  );
+  const referenceScore = scoreSearchResultForIllustration(
+    { deck, slide },
+    {
+      title: "Help Wanted (SpongeBob SquarePants) - Wikipedia",
+      url: "https://en.wikipedia.org/wiki/Help_Wanted_(SpongeBob_SquarePants)",
+      snippet: "The first episode of SpongeBob SquarePants premiered in 1999.",
+    },
+  );
+
+  assert.ok(referenceScore > forumScore);
 });
 
 test("semantic image candidate scoring prefers topic-relevant metadata", () => {
@@ -461,6 +685,7 @@ test("hosted illustration provider falls back when vision rejects a source image
       slide,
     });
 
+    assert.equal(asset.kind, "curated");
     assert.equal(asset.sourceImageUrl, undefined);
     assert.equal(asset.sourcePageUrl, undefined);
     assert.match(asset.mimeType, /svg\+xml/i);
@@ -619,6 +844,7 @@ test("hosted illustration provider accepts a trusted source-page image with weak
       slide,
     });
 
+    assert.equal(asset.kind, "source");
     assert.equal(asset.sourcePageUrl, "https://example.com/");
     assert.equal(asset.sourceImageUrl, "https://example.com/uploads/12345.webp");
     assert.match(asset.mimeType, /^image\/webp/i);
@@ -771,9 +997,343 @@ test("hosted illustration provider soft-accepts a trusted source-page image when
       slide,
     });
 
+    assert.equal(asset.kind, "source");
     assert.equal(asset.sourcePageUrl, "https://example.com/");
     assert.equal(asset.sourceImageUrl, "https://example.com/uploads/12345.webp");
     assert.match(asset.mimeType, /^image\/webp/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hosted illustration provider can recover a topical image via wikipedia fallback when search results are junk", async () => {
+  const slide = SlideSchema.parse({
+    id: "slide_sponge_1",
+    order: 0,
+    title: "Spongebob Squarepants first episode that was aired in 1999",
+    learningGoal: "Ground the topic in the original debut.",
+    keyPoints: ["Help Wanted", "1999", "Nickelodeon"],
+    beginnerExplanation: "Start with the original episode.",
+    advancedExplanation: "Then connect it to the first release context.",
+    visuals: {
+      layoutTemplate: "hero-focus",
+      accentColor: "1C7C7D",
+      cards: [],
+      callouts: [],
+      diagramNodes: [],
+      diagramEdges: [],
+      imageSlots: [
+        {
+          id: "slot_1",
+          prompt: "SpongeBob 1999 premiere image",
+          altText: "SpongeBob 1999 premiere",
+          style: "editorial",
+          tone: "accent",
+        },
+      ],
+    },
+  });
+  const deck = DeckSchema.parse({
+    id: "deck_sponge_1",
+    title: "The Birth of Bikini Bottom: SpongeBob's 1999 Premiere",
+    topic: "Spongebob Squarepants first episode that was aired in 1999",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "mixed",
+      topic: "Spongebob Squarepants first episode that was aired in 1999",
+      sourceIds: [],
+    },
+    slides: [slide],
+    createdAt: "2026-04-19T12:00:00.000Z",
+    updatedAt: "2026-04-19T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const webResearchProvider: WebResearchProvider = {
+    name: "test-web-research",
+    async healthCheck() {
+      return {
+        provider: "test-web-research",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async search() {
+      return [
+        {
+          title: "FOR SALE - SpongeBob Bounce Round Moonbounce",
+          url: "http://www.jlaforums.com/viewtopic.php?t=9513397",
+          snippet: "Used and enjoyed SpongeBob squarepants moonbounce.",
+        },
+      ];
+    },
+    async fetch() {
+      throw new Error("unused");
+    },
+    async summarizeFindings() {
+      return "unused";
+    },
+  };
+
+  const visionProvider: VisionProvider = {
+    name: "test-vision",
+    async healthCheck() {
+      return {
+        provider: "test-vision",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async analyzeSlideImage() {
+      return {
+        summary: "This is a relevant reference still for the episode topic.",
+        isRelevant: true,
+        relevanceScore: 0.68,
+        visualIssues: [],
+        pedagogicalHints: [],
+      };
+    },
+    async analyzeDeckImages(input) {
+      return Promise.all(input.slides.map((slideInput) => this.analyzeSlideImage(slideInput)));
+    },
+    async describeVisualIssues() {
+      return [];
+    },
+    async extractPedagogicalVisualHints() {
+      return [];
+    },
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+
+    if (url.startsWith("http://www.jlaforums.com/")) {
+      return new Response("<html><body>No usable images here.</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }
+
+    if (url.startsWith("https://en.wikipedia.org/w/index.php?search=")) {
+      return new Response(
+        '<html><body><a href="/wiki/Help_Wanted_(SpongeBob_SquarePants)">Help Wanted</a></body></html>',
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      );
+    }
+
+    if (url === "https://en.wikipedia.org/wiki/Help_Wanted_(SpongeBob_SquarePants)") {
+      return new Response(
+        '<html><head><meta property="og:image" content="https://upload.wikimedia.org/help-wanted.jpg" /></head><body></body></html>',
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      );
+    }
+
+    if (url === "https://upload.wikimedia.org/help-wanted.jpg") {
+      return new Response(Uint8Array.from([255, 216, 255]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const provider = new HostedIllustrationProvider({
+      webResearchProvider,
+      visionProvider,
+      timeoutMs: 1000,
+    });
+
+    const asset = await provider.renderSlideIllustration({
+      deck,
+      slide,
+    });
+
+    assert.equal(asset.kind, "source");
+    assert.equal(
+      asset.sourcePageUrl,
+      "https://en.wikipedia.org/wiki/Help_Wanted_(SpongeBob_SquarePants)",
+    );
+    assert.equal(asset.sourceImageUrl, "https://upload.wikimedia.org/help-wanted.jpg");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hosted illustration provider soft-accepts wikipedia fallback when vision transport fails", async () => {
+  const slide = SlideSchema.parse({
+    id: "slide_sponge_2",
+    order: 0,
+    title: "Spongebob Squarepants first episode that was aired in 1999",
+    learningGoal: "Ground the topic in the original debut.",
+    keyPoints: ["Help Wanted", "1999", "Nickelodeon"],
+    beginnerExplanation: "Start with the original episode.",
+    advancedExplanation: "Then connect it to the first release context.",
+    visuals: {
+      layoutTemplate: "hero-focus",
+      accentColor: "1C7C7D",
+      cards: [],
+      callouts: [],
+      diagramNodes: [],
+      diagramEdges: [],
+      imageSlots: [
+        {
+          id: "slot_1",
+          prompt: "SpongeBob 1999 premiere image",
+          altText: "SpongeBob 1999 premiere",
+          style: "editorial",
+          tone: "accent",
+        },
+      ],
+    },
+  });
+  const deck = DeckSchema.parse({
+    id: "deck_sponge_2",
+    title: "The Birth of Bikini Bottom: SpongeBob's 1999 Premiere",
+    topic: "Spongebob Squarepants first episode that was aired in 1999",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "mixed",
+      topic: "Spongebob Squarepants first episode that was aired in 1999",
+      sourceIds: [],
+    },
+    slides: [slide],
+    createdAt: "2026-04-19T12:00:00.000Z",
+    updatedAt: "2026-04-19T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const webResearchProvider: WebResearchProvider = {
+    name: "test-web-research",
+    async healthCheck() {
+      return {
+        provider: "test-web-research",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async search() {
+      return [];
+    },
+    async fetch() {
+      throw new Error("unused");
+    },
+    async summarizeFindings() {
+      return "unused";
+    },
+  };
+
+  const visionProvider: VisionProvider = {
+    name: "test-vision",
+    async healthCheck() {
+      return {
+        provider: "test-vision",
+        ok: true,
+        detail: "ok",
+        checkedAt: "2026-04-19T12:00:00.000Z",
+      };
+    },
+    async analyzeSlideImage() {
+      throw new Error("lmstudio-vision returned an empty response.");
+    },
+    async analyzeDeckImages(input) {
+      return Promise.all(input.slides.map((slideInput) => this.analyzeSlideImage(slideInput)));
+    },
+    async describeVisualIssues() {
+      return [];
+    },
+    async extractPedagogicalVisualHints() {
+      return [];
+    },
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+
+    if (url.startsWith("https://en.wikipedia.org/w/index.php?search=")) {
+      return new Response(
+        '<html><body><a href="/wiki/Help_Wanted_(SpongeBob_SquarePants)">Help Wanted</a></body></html>',
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      );
+    }
+
+    if (url === "https://en.wikipedia.org/wiki/Help_Wanted_(SpongeBob_SquarePants)") {
+      return new Response(
+        '<html><head><meta property="og:image" content="https://upload.wikimedia.org/help-wanted.jpg" /></head><body></body></html>',
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      );
+    }
+
+    if (url === "https://upload.wikimedia.org/help-wanted.jpg") {
+      return new Response(Uint8Array.from([255, 216, 255]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const provider = new HostedIllustrationProvider({
+      webResearchProvider,
+      visionProvider,
+      timeoutMs: 1000,
+    });
+
+    const asset = await provider.renderSlideIllustration({
+      deck,
+      slide,
+    });
+
+    assert.equal(asset.kind, "source");
+    assert.equal(
+      asset.sourcePageUrl,
+      "https://en.wikipedia.org/wiki/Help_Wanted_(SpongeBob_SquarePants)",
+    );
+    assert.equal(asset.sourceImageUrl, "https://upload.wikimedia.org/help-wanted.jpg");
   } finally {
     globalThis.fetch = originalFetch;
   }

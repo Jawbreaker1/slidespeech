@@ -1,5 +1,6 @@
 import type {
   RenderSlideIllustrationInput,
+  SlideIllustrationAsset,
   SlideIllustrationProvider,
 } from "@slidespeech/types";
 import { getPrimarySlideIllustration } from "@slidespeech/types";
@@ -23,13 +24,16 @@ export class MockIllustrationProvider implements SlideIllustrationProvider {
       throw new Error(`Slide ${input.slide.id} does not define an image slot.`);
     }
 
-    return {
+    const asset: SlideIllustrationAsset = {
       slideId: input.slide.id,
       slotId: illustration.id,
+      kind: "curated",
       mimeType: "image/svg+xml",
       dataUri: illustration.dataUri,
       ...(illustration.altText ? { altText: illustration.altText } : {}),
       ...(illustration.caption ? { caption: illustration.caption } : {}),
     };
+
+    return asset;
   }
 }

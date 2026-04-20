@@ -161,6 +161,59 @@ const directSourceGroundingLooksSufficient = (input: {
   });
 };
 
+const uniqueNonEmptyStrings = (values: Array<string | null | undefined>): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = value?.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      continue;
+    }
+
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(normalized);
+  }
+
+  return result;
+};
+
+const deriveGroundingExcerpts = (input: {
+  subject: string;
+  coverageGoals: string[];
+  findings: Array<{ title: string; url: string; content: string }>;
+}): string[] => {
+  const anchors = uniqueNonEmptyStrings([input.subject, ...input.coverageGoals]).join(" ");
+  const anchorTokens = tokenizeForGrounding(anchors);
+
+  const candidates = input.findings
+    .filter((finding) => fetchedFindingLooksUsable(finding.content))
+    .flatMap((finding) =>
+      finding.content
+        .split(/(?<=[.!?])\s+/)
+        .map((value) => value.replace(/\s+/g, " ").trim())
+        .filter((value) => value.length >= 40 && value.length <= 260)
+        .map((value, index) => ({
+          value,
+          index,
+          score:
+            anchorTokens.filter((token) => value.toLowerCase().includes(token)).length * 2 +
+            (/\b\d{2,4}\b/.test(value) ? 2 : 0) +
+            (/[,:;]/.test(value) ? 1 : 0),
+        })),
+    )
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((candidate) => candidate.value);
+
+  return uniqueNonEmptyStrings(candidates).slice(0, 8);
+};
+
 export const createPresentation = async (input: {
   topic: string;
   pedagogicalProfile?: Partial<PedagogicalProfile> | undefined;
@@ -238,9 +291,15 @@ export const createPresentation = async (input: {
       findings: directSourceResearch.findings,
     });
 
-  const explicitSourceFallbackResearch =
+  const shouldRunSupportingExplicitSourceSearch =
     researchPlan.explicitSourceUrls.length > 0 &&
-    (successfulDirectSourceUrls.length === 0 || !directSourceGroundingSufficient)
+    (
+      successfulDirectSourceUrls.length === 0 ||
+      !directSourceGroundingSufficient ||
+      presentationIntent.presentationFrame === "organization"
+    );
+  const explicitSourceFallbackResearch =
+    shouldRunSupportingExplicitSourceSearch
       ? await searchAndSummarizeWebResearch({
           query: buildExplicitSourceFallbackQuery({
             topic: researchPlan.subject,
@@ -346,6 +405,15 @@ export const createPresentation = async (input: {
       ...searchResearches.flatMap((research) => research.findings),
     ],
   });
+  const groundingExcerpts = deriveGroundingExcerpts({
+    subject: presentationSubject,
+    coverageGoals: researchPlan.coverageGoals,
+    findings: [
+      ...(directSourceResearch?.findings ?? []),
+      ...(explicitSourceFallbackResearch?.findings ?? []),
+      ...searchResearches.flatMap((research) => research.findings),
+    ],
+  });
 
   const result = await appContext.sessionService.createSession(
     {
@@ -363,6 +431,7 @@ export const createPresentation = async (input: {
         ? {
             groundingSummary,
             ...(groundingHighlights.length > 0 ? { groundingHighlights } : {}),
+            ...(groundingExcerpts.length > 0 ? { groundingExcerpts } : {}),
             ...(researchPlan.coverageGoals.length > 0
               ? { groundingCoverageGoals: researchPlan.coverageGoals }
               : {}),

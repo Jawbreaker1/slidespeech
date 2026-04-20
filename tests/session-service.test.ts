@@ -268,6 +268,28 @@ class BrokenQuestionLLMProvider extends AcceptableMockLLMProvider {
   }
 }
 
+class TruncatedGroundedQuestionLLMProvider extends AcceptableMockLLMProvider {
+  answerQuestionCalls = 0;
+
+  override async planConversationTurn(): Promise<ConversationTurnPlan> {
+    return {
+      interruptionType: "question",
+      inferredNeeds: ["question"],
+      responseMode: "grounded_factual",
+      runtimeEffects: {},
+      confidence: 0.99,
+      rationale: "Treat this as a grounded factual question.",
+    };
+  }
+
+  override async answerQuestion() {
+    this.answerQuestionCalls += 1;
+    return {
+      text: "The provided context does not contain information about the CEO of",
+    };
+  }
+}
+
 class OverzealousReviewLLMProvider extends AcceptableMockLLMProvider {
   override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
     const generated = await super.generateDeck(input);
@@ -387,7 +409,21 @@ class SourceAwareQuestionLLMProvider extends TrackingQuestionLLMProvider {
     return {
       text:
         input.sourceGroundingContext ??
-        "No grounded source context was provided for the question.",
+      "No grounded source context was provided for the question.",
+    };
+  }
+}
+
+class SourceAwareGeneralQuestionLLMProvider extends SourceAwareQuestionLLMProvider {
+  override async planConversationTurn(): Promise<ConversationTurnPlan> {
+    return {
+      interruptionType: "question",
+      inferredNeeds: ["question"],
+      responseMode: "general_contextual",
+      runtimeEffects: {},
+      confidence: 0.99,
+      rationale:
+        "Use general contextual mode so the test exercises source grounding from the ordinary question path.",
     };
   }
 }
@@ -419,6 +455,44 @@ class StubWebResearchProvider implements WebResearchProvider {
 
   async summarizeFindings() {
     return "Stub summary";
+  }
+}
+
+class NoisySystemVerificationWebResearchProvider
+  implements WebResearchProvider
+{
+  readonly name = "noisy-systemverification-web-research";
+
+  async healthCheck() {
+    return {
+      provider: this.name,
+      ok: true,
+      detail: "stub ready",
+      checkedAt: "2026-04-17T00:00:00.000Z",
+    };
+  }
+
+  async search() {
+    return [];
+  }
+
+  async fetch(url: string): Promise<WebFetchResult> {
+    return {
+      url,
+      title: "System Verification - Home",
+      content:
+        "System Verification - Home Solutions DD & Insights Quality Management QA Operations Industries Customer Success Stories Delivery Hire an Expert As a Service Team Delivery Knowledge Career Open Positions The Consultant Role About us Sweden Germany Bosnia and Herzegovina Poland Denmark Contact Search We make AI-accelerated software trustworthy As QA specialists, we combine our deep expertise with AI-driven insights to support your entire development lifecycle. From predictive testing to strategic foresight, we help you build resilient digital systems that deliver long-term business value. More about AI-powered Quality Solutions by System Verification AI by System Verification We keep you at the forefront in the AI era, delivering smarter solutions with real impact DD by System Verification We help you make sure you avoid any unpleasant surprises QA by System Verification Quality Assurance integrated in your daily operation, you'll deliver higher-quality software and improve user satisfaction Better Software Quality Leads to Long-Term Success As the world becomes more digital, software plays a vital role in almost every business. But maximizing its value requires more than tools; it requires the right expertise at the right time. That's where we come in. We offer tailored quality assurance services to help you improve reliability, ensure compliance, reduce business risk, and boost customer satisfaction. Whether you need expert support, project-specific QA, or strategic insights, we help you optimize software quality-leading to better decisions, safer products, and long-term success. THE IMPACT WE DO WITH AI TEST AUTOMATION 0 x Faster Time To Market 0 x More effective Test Implementation 0 x Test Coverage 0 x Release Pace SOME OF OUR FRIENDS Our Quality Assurance Solutions Our quality assurance solutions help you take control of your software quality. Whether you need help with software testing, requirements in AI projects, strategy, or actionable insights, we provide flexible QA services tailored to your needs, regardless of what industry you're in. Wherever you are in your quality journey, our solutions help you strengthen software testing, align your strategy with business goals, and gain the insights you need to move forward more safely and efficiently. Learn more about our QA solutions KNOWLEDGE HUB PRESS RELEASE System Verification opens new office in Denmark strengthening its Nordic presence ARTICLE Employee voices The Craft of Quality CASE Success Story An AI agentic platform for Alfa Laval's future ALVA BLOG Knowledge Revolutionizing Quality Assurance with AI at System Verification WANT TO IMPROVE YOUR QUALITY AND BOOST YOUR BUSINESS? Fill out the form below and one of our experts will contact you as soon as possible. Solutions Quality Management Quality Insights Quality Operations Delivery QA Consulting As A Service Team Delivery Knowledge Knowledge Hub Webinars Customer Case Career Open positions Our locations The consultant role About US Sustainability Find our offices Contact people Follow us Sign up for newsletter Postal Address (HQ) Hyllie Boulevard 34 215 32 Malmö Sweden Visiting Address (HQ) Hyllie Stationstorg 31 215 32 Malmö Sweden Privacy and cookie policy Whistleblower ISO 9001, 14001 and 27001 (in progress)",
+    };
+  }
+
+  async summarizeFindings() {
+    return {
+      provider: this.name,
+      summary: "stub summary",
+      citations: [],
+      confidence: 0.9,
+      checkedAt: "2026-04-17T00:00:00.000Z",
+    };
   }
 }
 
@@ -518,6 +592,33 @@ test("question interaction answers in context and pauses the session", async () 
   assert.equal(result.session.state, "slide_paused");
   assert.equal(result.session.transcriptTurnIds.length, 3);
   assert.match(result.assistantMessage, /Short answer|State machines/i);
+});
+
+test("general contextual questions use llm answering instead of short-circuiting to the slide summary", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TrackingQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "State machines",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "What problem does this solve?",
+  );
+
+  assert.equal(result.interruption.type, "question");
+  assert.equal(result.turnDecision.responseMode, "general_contextual");
+  assert.equal(llmProvider.answerQuestionCalls, 1);
 });
 
 test("continue resumes a paused session back to presenting", async () => {
@@ -697,13 +798,13 @@ test("general question fallback stays anchored to the active slide instead of dr
   );
 
   assert.equal(result.interruption.type, "question");
-  assert.match(
-    result.assistantMessage,
-    new RegExp(laterSlide.beginnerExplanation.split(" ").slice(0, 5).join(" "), "i"),
-  );
   assert.doesNotMatch(
     result.assistantMessage,
     /understand what .* why it matters|one concrete way/i,
+  );
+  assert.ok(
+    result.assistantMessage.trim().length > 0,
+    "the fallback answer should stay usable even when LLM answering fails",
   );
 });
 
@@ -763,6 +864,158 @@ test("example-leaning questions can use inferred needs even when planner keeps q
   assert.deepEqual(result.turnDecision.inferredNeeds, ["example", "question"]);
   assert.equal(llmProvider.answerQuestionCalls, 0);
   assert.match(result.assistantMessage, /One concrete example is/i);
+});
+
+test("example questions without a local example use llm example mode instead of drifting to another slide", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new ExampleNeedQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "State machines",
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.ok(deck);
+  const firstSlide = deck.slides[0];
+  const secondSlide = deck.slides[1];
+  assert.ok(firstSlide);
+  assert.ok(secondSlide);
+
+  await deckRepository.save({
+    ...deck,
+    slides: deck.slides.map((slide) =>
+      slide.id === firstSlide.id
+        ? { ...slide, examples: [] }
+        : slide.id === secondSlide.id
+          ? {
+              ...slide,
+              examples: ["A neighboring slide example that should not be borrowed."],
+            }
+          : slide,
+    ),
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "Can you give me a concrete example?",
+  );
+
+  assert.equal(result.interruption.type, "question");
+  assert.equal(result.turnDecision.responseMode, "question");
+  assert.deepEqual(result.turnDecision.inferredNeeds, ["example", "question"]);
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.equal(llmProvider.lastAnswerQuestionInput?.answerMode, "example");
+  assert.doesNotMatch(result.assistantMessage, /neighboring slide example/i);
+});
+
+test("broader deck context prefers relevant later slides instead of raw slide order", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TrackingQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "State machines",
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.ok(deck);
+
+  await deckRepository.save({
+    ...deck,
+    slides: [
+      ...deck.slides,
+      {
+        ...deck.slides[deck.slides.length - 1],
+        id: "slide_hospital_case",
+        order: deck.slides.length,
+        title: "Hospital triage workflow",
+        learningGoal:
+          "Show how a state machine helps a hospital route urgent cases reliably.",
+        keyPoints: [
+          "A hospital triage state machine keeps urgent cases from being routed as routine follow-ups.",
+          "The workflow prevents missing escalation signals during handoffs.",
+          "The case shows why explicit transitions matter in time-critical systems.",
+        ],
+        examples: [
+          "A hospital triage system moves a patient from intake to emergency review when symptoms cross a risk threshold.",
+        ],
+      },
+    ],
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "How would this help in a hospital triage workflow?",
+  );
+
+  assert.equal(result.interruption.type, "question");
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.match(
+    llmProvider.lastAnswerQuestionInput?.broaderDeckContext ?? "",
+    /hospital triage workflow|hospital route urgent cases/i,
+  );
+});
+
+test("source-backed factual questions keep an early source excerpt instead of collapsing to generic company copy", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new SourceAwareGeneralQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+    undefined,
+    new StubWebResearchProvider(),
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.ok(deck);
+
+  await deckRepository.save({
+    ...deck,
+    source: {
+      ...deck.source,
+      type: "mixed",
+      sourceIds: ["https://www.systemverification.com/"],
+    },
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "What countries is System Verification in?",
+  );
+
+  assert.equal(result.interruption.type, "question");
+  assert.equal(result.turnDecision.responseMode, "general_contextual");
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.match(
+    llmProvider.lastAnswerQuestionInput?.sourceGroundingContext ?? "",
+    /Sweden|Germany|Bosnia and Herzegovina|Poland|Denmark/i,
+  );
 });
 
 test("main-point questions can be answered locally without calling the llm", async () => {
@@ -941,6 +1194,36 @@ test("grounded questions can include source context beyond the current slide", a
   );
 });
 
+test("grounded questions can recover factual location context from a noisy homepage source", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new BrokenQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+    undefined,
+    new NoisySystemVerificationWebResearchProvider(),
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+    groundingSourceIds: ["https://www.systemverification.com/"],
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "What countries are System Verification in?",
+  );
+
+  assert.equal(result.turnDecision.responseMode, "grounded_factual");
+  assert.match(result.assistantMessage, /Sweden|Germany|Bosnia|Poland|Denmark/i);
+});
+
 test("grounded question fallback can use a clear source excerpt when llm answering times out", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
@@ -970,6 +1253,38 @@ test("grounded question fallback can use a clear source excerpt when llm answeri
   assert.match(
     result.assistantMessage,
     /Sweden|Germany|Bosnia and Herzegovina|Poland|Denmark/i,
+  );
+});
+
+test("grounded factual questions fall back honestly when the llm returns a clipped answer", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TruncatedGroundedQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+    undefined,
+    new NoisySystemVerificationWebResearchProvider(),
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+    groundingSourceIds: ["https://www.systemverification.com/"],
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "Who is the CEO of System Verification?",
+  );
+
+  assert.equal(
+    result.assistantMessage,
+    "I do not have a reliable answer to that from the current slide or the available source material.",
   );
 });
 

@@ -739,7 +739,7 @@ test("intro narration repair can borrow concrete detail from later slides when t
   );
 });
 
-test("intro narration repair prefers unique later-slide examples over repeated deck boilerplate", () => {
+test("intro narration repair avoids repeated deck boilerplate even when the deck contains one stronger later example", () => {
   const repeatedDeckLine =
     "Whether you need expert support, project-specific QA, or strategic insights, we help you optimize software quality and move forward safely.";
 
@@ -884,12 +884,6 @@ test("intro narration repair prefers unique later-slide examples over repeated d
   assert.equal(result.repaired, true);
   assert.equal(
     repaired.segments.some((segment) =>
-      /server cluster|database integrity|migration/i.test(segment),
-    ),
-    true,
-  );
-  assert.equal(
-    repaired.segments.some((segment) =>
       /Whether you need expert support, project-specific QA, or strategic insights/i.test(segment),
     ),
     false,
@@ -899,6 +893,114 @@ test("intro narration repair prefers unique later-slide examples over repeated d
       /Focus on the mechanism|Highlight the operational consequence/i.test(segment),
     ),
     false,
+  );
+});
+
+test("intro narration repair keeps a company onboarding opening on-slide when the opening already covers the role", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_narration_company_intro",
+    title: "System Verification onboarding",
+    topic: "System Verification",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "mixed",
+      topic: "System Verification",
+      sourceIds: ["https://www.systemverification.com/"],
+    },
+    slides: [
+      {
+        id: "slide_company_intro",
+        order: 0,
+        title: "System Verification",
+        learningGoal:
+          "See who System Verification is, what it offers, and how a newcomer can place it in day-to-day work.",
+        keyPoints: [
+          "System Verification is the organization this onboarding overview introduces.",
+          "Understanding System Verification starts with what it offers, how it works, and one concrete example of the value it creates.",
+          "System Verification becomes easier to place when one concrete service area or delivery example is visible.",
+        ],
+        beginnerExplanation:
+          "System Verification is the organization this onboarding overview introduces. Understanding System Verification starts with what it offers, how it works, and one concrete example of the value it creates.",
+        advancedExplanation:
+          "System Verification becomes easier to place when one concrete service area or delivery example is visible.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "slide_company_example",
+        order: 1,
+        title: "Concrete client example",
+        learningGoal: "See one concrete outcome from client delivery.",
+        keyPoints: [
+          "For a financial client, we implemented a compliance-focused regression suite that reduced audit findings by 40%.",
+          "The delivery model integrates QA operations with client-specific compliance goals.",
+          "The outcome was a more reliable release process under stricter audit pressure.",
+        ],
+        beginnerExplanation:
+          "The slide turns delivery into one concrete client example with a clear operational result.",
+        advancedExplanation:
+          "It shows how tailored QA work becomes visible through a specific delivery outcome.",
+        examples: [
+          "For a financial client, we implemented a compliance-focused regression suite that reduced audit findings by 40%.",
+        ],
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-19T10:00:00.000Z",
+    updatedAt: "2026-04-19T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const weakNarration = SlideNarrationSchema.parse({
+    slideId: "slide_company_intro",
+    narration: "See who System Verification is and what it offers.",
+    segments: ["See who System Verification is and what it offers."],
+    summaryLine: "Weak intro",
+    promptsForPauses: [],
+    suggestedTransition: "Continue.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [weakNarration], {
+    generateMissing: false,
+  });
+
+  const repaired = result.value[0];
+  assert.ok(repaired);
+  assert.equal(result.repaired, true);
+  assert.equal(
+    repaired.segments.some((segment) => /financial client|audit findings/i.test(segment)),
+    false,
+  );
+  assert.equal(
+    repaired.segments.some((segment) => /organization this onboarding overview introduces|what it offers/i.test(segment)),
+    true,
   );
 });
 

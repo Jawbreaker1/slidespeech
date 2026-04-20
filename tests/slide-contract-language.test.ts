@@ -12,6 +12,7 @@ const {
   buildContractAnchoredKeyPoints,
   buildContractLearningGoal,
   buildOutlineDeckSummary,
+  buildOrientationSlideFromContext,
   buildProceduralOrientationKeyPoints,
   buildRoleSpecificSlideRecoveryFromContext,
   normalizePresentationPlan,
@@ -256,6 +257,7 @@ test("organization onboarding contracts allocate distinct later-slide anchors", 
         "Expert support for requirements in AI projects",
         "Global QA operations across Sweden, Germany, Bosnia and Herzegovina, Poland, and Denmark",
         "Flexible QA services cover software testing and quality management",
+        "Founding details, corporate structure, and primary market focus",
       ],
     },
     4,
@@ -270,6 +272,12 @@ test("organization onboarding contracts allocate distinct later-slide anchors", 
     .slice(1)
     .map((contract: { focus: string }) => contract.focus.trim().toLowerCase());
   assert.equal(new Set(laterFoci).size, laterFoci.length);
+  assert.notEqual(contracts[1]?.evidence ?? "", "");
+  assert.notEqual(contracts[2]?.evidence ?? "", "");
+  assert.doesNotMatch(
+    contracts[3]?.evidence ?? "",
+    /\bfounding details\b|\bcorporate structure\b|\bprimary market focus\b/i,
+  );
   assert.match(contracts.at(-1)?.evidence ?? "", /AI projects|Sweden|software testing/i);
 });
 
@@ -302,6 +310,144 @@ test("organization orientation key points avoid leaking raw contract scaffolding
     points.join(" "),
     /What Systemverification does and where it creates value\b/i,
   );
+});
+
+test("organization onboarding orientation slide stays newcomer-facing instead of borrowing later-slide examples", () => {
+  const orientedSlide = buildOrientationSlideFromContext(
+    {
+      topic: "System Verification",
+      presentationBrief:
+        "Create an onboarding presentation about our company. More information is available at https://www.systemverification.com/",
+      intent: {
+        subject: "System Verification",
+        presentationFrame: "organization",
+        organization: "System Verification",
+        framing: "onboarding presentation about our company",
+        presentationGoal:
+          "Help a newcomer understand who System Verification is, what it offers, how it works, and where it creates value.",
+        coverageRequirements: [
+          "Independent software testing and quality assurance services",
+        ],
+      },
+      plan: {
+        title: "System Verification onboarding",
+        recommendedSlideCount: 4,
+        learningObjectives: [
+          "Understand who System Verification is, what it offers, and where it fits.",
+        ],
+        storyline: [
+          "Company overview",
+          "Capabilities and services",
+          "Delivery and QA operations",
+          "Customer value example",
+        ],
+        audienceLevel: "beginner",
+      },
+      groundingCoverageGoals: [
+        "QA operations and verification support for complex engineering teams",
+      ],
+      groundingHighlights: [
+        "Global QA operations across Sweden, Germany, Bosnia and Herzegovina, Poland, and Denmark",
+        "For a financial client, we implemented a compliance-focused regression suite that reduced audit findings by 40%.",
+      ],
+    } as any,
+    {
+      id: "slide_intro",
+      order: 0,
+      title: "System Verification",
+      learningGoal: "",
+      keyPoints: [],
+      speakerNotes: [],
+      examples: [],
+      likelyQuestions: [],
+      beginnerExplanation: "",
+      advancedExplanation: "",
+      visuals: {
+        layoutTemplate: "hero-focus",
+        cards: [],
+        callouts: [],
+        diagramNodes: [],
+        diagramEdges: [],
+        imagePrompt: "",
+        imageSlots: [],
+      },
+      requiredContext: [],
+      dependenciesOnOtherSlides: [],
+      visualNotes: [],
+      sourceIds: [],
+    } as any,
+    {
+      slides: [
+        {
+          id: "slide_intro",
+          order: 0,
+          title: "System Verification",
+          learningGoal: "",
+          keyPoints: [],
+          speakerNotes: [],
+          examples: [],
+          likelyQuestions: [],
+          beginnerExplanation: "",
+          advancedExplanation: "",
+          visuals: {
+            layoutTemplate: "hero-focus",
+            cards: [],
+            callouts: [],
+            diagramNodes: [],
+            diagramEdges: [],
+            imagePrompt: "",
+            imageSlots: [],
+          },
+          requiredContext: [],
+          dependenciesOnOtherSlides: [],
+          visualNotes: [],
+          sourceIds: [],
+        },
+        {
+          id: "slide_later",
+          order: 1,
+          title: "Capabilities",
+          learningGoal: "See what the company offers.",
+          keyPoints: [
+            "For a financial client, we implemented a compliance-focused regression suite that reduced audit findings by 40%.",
+          ],
+          speakerNotes: [],
+          examples: [
+            "For a financial client, we implemented a compliance-focused regression suite that reduced audit findings by 40%.",
+          ],
+          likelyQuestions: [],
+          beginnerExplanation:
+            "For a financial client, we implemented a compliance-focused regression suite that reduced audit findings by 40%.",
+          advancedExplanation: "",
+          visuals: {
+            layoutTemplate: "hero-focus",
+            cards: [],
+            callouts: [],
+            diagramNodes: [],
+            diagramEdges: [],
+            imagePrompt: "",
+            imageSlots: [],
+          },
+          requiredContext: [],
+          dependenciesOnOtherSlides: [],
+          visualNotes: [],
+          sourceIds: [],
+        },
+      ],
+    } as any,
+    {
+      index: 0,
+      label: "orientation",
+      kind: "orientation",
+      focus: "Who System Verification is",
+      objective: "What System Verification offers and how a newcomer should place it",
+    },
+  ) as any;
+
+  assert.match(orientedSlide.learningGoal, /newcomer|who System Verification is|what it offers/i);
+  assert.equal(orientedSlide.keyPoints.some((point: string) => /financial client|audit findings/i.test(point)), false);
+  assert.equal(orientedSlide.examples.some((example: string) => /financial client|audit findings/i.test(example)), false);
+  assert.match(orientedSlide.keyPoints.join(" "), /organization|onboarding|offers|creates value/i);
 });
 
 test("source-backed subject contracts allocate detail, implication, and takeaway roles", () => {

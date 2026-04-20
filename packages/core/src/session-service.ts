@@ -50,6 +50,7 @@ export interface CreatePresentationSessionInput {
   pedagogicalProfile?: Partial<PedagogicalProfile> | undefined;
   groundingSummary?: string | undefined;
   groundingHighlights?: string[] | undefined;
+  groundingExcerpts?: string[] | undefined;
   groundingCoverageGoals?: string[] | undefined;
   groundingSourceIds?: string[] | undefined;
   groundingSourceType?: "topic" | "document" | "pptx" | "mixed" | undefined;
@@ -468,6 +469,7 @@ export class PresentationSessionService {
         pedagogicalProfile,
         input.groundingSummary,
         input.groundingHighlights,
+        input.groundingExcerpts,
         input.targetDurationMinutes,
         input.targetSlideCount,
       );
@@ -499,6 +501,9 @@ export class PresentationSessionService {
         : {}),
       ...(input.groundingHighlights?.length
         ? { groundingHighlights: input.groundingHighlights }
+        : {}),
+      ...(input.groundingExcerpts?.length
+        ? { groundingExcerpts: input.groundingExcerpts }
         : {}),
       ...(input.groundingCoverageGoals?.length
         ? { groundingCoverageGoals: input.groundingCoverageGoals }

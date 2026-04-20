@@ -88,4 +88,9 @@ test("illustration helper returns a data uri for image slots", () => {
 
   assert.ok(illustration);
   assert.match(illustration.dataUri, /^data:image\/svg\+xml/);
+  assert.equal(illustration.kind, "curated");
+  const decoded = decodeURIComponent(illustration.dataUri.split(",")[1] ?? "");
+  assert.doesNotMatch(decoded, /ILLUSTRATION/);
+  assert.doesNotMatch(decoded, /Create an editorial illustration for a visual learning slide\./);
+  assert.doesNotMatch(decoded, /Visual example/);
 });

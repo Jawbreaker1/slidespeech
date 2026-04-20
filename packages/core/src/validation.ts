@@ -297,15 +297,25 @@ const buildNarrationSupportStatements = (deck: Deck, slide: Slide): string[] => 
     .filter(Boolean);
 
   const sourcePriority = (source: AudienceFacingSource) =>
-    source === "example"
-      ? 6
-      : source === "keyPoint"
-        ? 5
+    slide.order === 0
+      ? source === "keyPoint"
+        ? 6
         : source === "explanation"
-          ? 4
-          : source === "speakerNote"
-            ? 3
-            : 2;
+          ? 5
+          : source === "example"
+            ? 4
+            : source === "speakerNote"
+              ? 3
+              : 2
+      : source === "example"
+        ? 6
+        : source === "keyPoint"
+          ? 5
+          : source === "explanation"
+            ? 4
+            : source === "speakerNote"
+              ? 3
+              : 2;
 
   const scoredStatements = [
     ...slide.examples.slice(0, 2).map((text) => ({ source: "example" as const, text })),
@@ -368,8 +378,20 @@ const buildNarrationSupportStatements = (deck: Deck, slide: Slide): string[] => 
   const currentConcreteCount = prioritizedCurrentStatements.filter((statement) =>
     hasConcreteDetailSignals(statement),
   ).length;
+  const currentAnchorCoverageCount = prioritizedCurrentStatements.filter((statement) =>
+    visibleNarrationAnchors.some(
+      (anchor) => anchor && tokenOverlapRatio(statement, anchor) >= 0.55,
+    ),
+  ).length;
 
   if (currentConcreteCount >= 2 && prioritizedCurrentStatements.length >= 4) {
+    return prioritizedCurrentStatements;
+  }
+
+  if (
+    prioritizedCurrentStatements.length >= 3 &&
+    currentAnchorCoverageCount >= Math.min(3, prioritizedCurrentStatements.length)
+  ) {
     return prioritizedCurrentStatements;
   }
 

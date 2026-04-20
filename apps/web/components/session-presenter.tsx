@@ -17,7 +17,11 @@ import type {
   VoiceTurnResponse,
 } from "@slidespeech/types";
 import { resolvePresentationTheme } from "@slidespeech/types";
-import { PresenterControls, VisualSlideCanvas } from "@slidespeech/ui";
+import {
+  PresenterControls,
+  SlidePreviewCard,
+  VisualSlideCanvas,
+} from "@slidespeech/ui";
 
 import {
   fetchSessionSnapshot,
@@ -62,6 +66,33 @@ type VoiceTranscriptSummary = {
   confidence?: number;
   hadSpeech: boolean;
   transcriptAvailable: boolean;
+};
+
+type AnswerReadyNotice = {
+  question: string | null;
+  answer: string;
+};
+
+type BackendVoiceRecordingSupport = {
+  available: boolean;
+  reason: string | null;
+};
+
+const VOICE_WORD_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu;
+
+const tokenizeVoiceTranscript = (value: string): string[] =>
+  Array.from(value.normalize("NFKC").matchAll(VOICE_WORD_TOKEN_PATTERN))
+    .map((match) => match[0]?.trim() ?? "")
+    .filter(Boolean);
+
+const isLowSignalBrowserVoiceTranscript = (value: string): boolean => {
+  const tokens = tokenizeVoiceTranscript(value);
+
+  if (tokens.length === 0) {
+    return true;
+  }
+
+  return tokens.length === 1 && tokens[0]!.length <= 3;
 };
 
 const toInteractionLog = (
@@ -135,6 +166,48 @@ const applyUpdate = (
   };
 };
 
+const getBackendVoiceRecordingSupport = (): BackendVoiceRecordingSupport => {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return {
+      available: false,
+      reason:
+        "Microphone recording is not available before the presenter finishes loading.",
+    };
+  }
+
+  if (!window.isSecureContext) {
+    return {
+      available: false,
+      reason:
+        "Microphone recording requires a secure browser context. Open the presenter on http://localhost:3000 or HTTPS.",
+    };
+  }
+
+  if (
+    !navigator.mediaDevices ||
+    typeof navigator.mediaDevices.getUserMedia !== "function"
+  ) {
+    return {
+      available: false,
+      reason:
+        "This browser/context does not expose microphone recording APIs for backend STT.",
+    };
+  }
+
+  if (typeof MediaRecorder === "undefined") {
+    return {
+      available: false,
+      reason:
+        "This browser does not support in-browser audio recording for backend STT.",
+    };
+  }
+
+  return {
+    available: true,
+    reason: null,
+  };
+};
+
 export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [state, setState] = useState<PresenterState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -159,6 +232,11 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [isListeningBrowserVoice, setIsListeningBrowserVoice] = useState(false);
   const [browserInterimTranscript, setBrowserInterimTranscript] = useState("");
   const [browserSpeechSupported, setBrowserSpeechSupported] = useState(false);
+  const [backendVoiceRecordingSupport, setBackendVoiceRecordingSupport] =
+    useState<BackendVoiceRecordingSupport>({
+      available: false,
+      reason: null,
+    });
   const [isSubmittingVoice, setIsSubmittingVoice] = useState(false);
   const [liveVoiceMode, setLiveVoiceMode] = useState(false);
   const [lastVoiceTranscript, setLastVoiceTranscript] =
@@ -166,6 +244,8 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [pendingUserTurn, setPendingUserTurn] = useState<string | null>(null);
   const [pendingPresentationStart, setPendingPresentationStart] = useState(false);
   const [showBlockingOverlay, setShowBlockingOverlay] = useState(false);
+  const [answerReadyNotice, setAnswerReadyNotice] =
+    useState<AnswerReadyNotice | null>(null);
   const [isPending, startTransition] = useTransition();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playbackSequenceRef = useRef(0);
@@ -208,6 +288,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     const provider = createBrowserSpeechToTextProvider();
     browserSpeechProviderRef.current = provider;
     setBrowserSpeechSupported(provider !== null);
+    setBackendVoiceRecordingSupport(getBackendVoiceRecordingSupport());
 
     return () => {
       provider?.stop();
@@ -301,6 +382,11 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const isDeckNarrationReady = slides.length > 0 && missingNarrationCount === 0;
   const isWaitingForNarrationDuringPlayback =
     isPresenting && isSynthesizingSpeech && !isPlayingSpeech;
+  const backendVoiceRecordingAvailable = backendVoiceRecordingSupport.available;
+  const recordQuestionUsesBrowserFallback =
+    !backendVoiceRecordingAvailable && browserSpeechSupported;
+  const recordQuestionUnavailable =
+    !backendVoiceRecordingAvailable && !browserSpeechSupported;
   const isBuildingAnswer =
     Boolean(pendingUserTurn) ||
     isInteracting ||
@@ -311,16 +397,16 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     [...interactionLog].reverse().find((entry) => entry.role === "assistant")?.text ??
     null;
   const workingOverlayTitle = isBuildingAnswer
-    ? "Building answer"
+    ? "Generating answer"
     : pendingPresentationStart
       ? "Preparing full narration"
       : "Generating content";
   const workingOverlayMessage = isBuildingAnswer
     ? pendingUserTurn
-      ? `Working on a spoken answer to “${pendingUserTurn}”.`
+      ? `Generating a spoken answer to “${pendingUserTurn}”.`
       : isSubmittingVoice && !isRecordingVoice
-        ? "Transcribing your question and preparing the answer."
-        : "Preparing the next answer for the presentation."
+        ? "Transcribing your question and generating the answer."
+        : "Generating the next spoken answer for the presentation."
     : pendingPresentationStart
       ? `Getting the remaining slide narration ready before presentation starts. ${narrationReadySlideCount} of ${slides.length} slides are ready.`
       : activeSlide
@@ -566,6 +652,20 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   }, [isBuildingAnswer, rawBlockingPresenterWork]);
 
   useEffect(() => {
+    if (!answerReadyNotice) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setAnswerReadyNotice(null);
+    }, 2200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [answerReadyNotice]);
+
+  useEffect(() => {
     if (
       !state ||
       !activeSlide ||
@@ -672,6 +772,32 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     setIsPlayingSpeech(false);
   };
 
+  const pauseForVoiceInterruption = () => {
+    stopActiveAudio();
+    setLastSpokenText(null);
+    setPendingPresentationStart(false);
+    setState((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      if (
+        previous.session.state !== "presenting" &&
+        previous.session.state !== "resuming"
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        session: {
+          ...previous.session,
+          state: "slide_paused",
+        },
+      };
+    });
+  };
+
   const disarmLiveVoiceMode = () => {
     liveVoiceModeRef.current = false;
     browserSpeechProviderRef.current?.stop();
@@ -704,12 +830,42 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     return window.btoa(binary);
   };
 
+  const isAnswerLikeResponse = (
+    result: SessionInteractionPayload | VoiceTurnResponse,
+  ): boolean => {
+    const interruptionType = result.interruption?.type;
+    const responseMode = result.turnDecision?.responseMode;
+
+    return (
+      (interruptionType !== undefined &&
+        ["question", "simplify", "deepen", "example", "repeat"].includes(
+          interruptionType,
+        )) ||
+      (responseMode !== undefined &&
+        [
+          "question",
+          "summarize_current_slide",
+          "general_contextual",
+          "grounded_factual",
+          "simplify",
+          "deepen",
+          "example",
+          "repeat",
+        ].includes(responseMode))
+    );
+  };
+
   const applyInteractionResponse = async (
     result: SessionInteractionPayload | VoiceTurnResponse,
+    options?: {
+      userText?: string;
+      wasPresenting?: boolean;
+    },
   ) => {
     setState((previous) => (previous ? applyUpdate(previous, result) : previous));
 
     const assistantMessage = result.assistantMessage?.trim();
+    const answerLikeResponse = isAnswerLikeResponse(result);
     setPendingUserTurn(null);
 
     if (assistantMessage) {
@@ -719,7 +875,22 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       ]);
     }
 
-    if (!assistantMessage || !shouldAutoResumeAfterAnswer(result)) {
+    if (assistantMessage && answerLikeResponse) {
+      setAnswerReadyNotice({
+        question: options?.userText?.trim() || null,
+        answer: assistantMessage,
+      });
+    }
+
+    if (!assistantMessage || !answerLikeResponse) {
+      return;
+    }
+
+    if (!shouldAutoResumeAfterAnswer(result, options?.wasPresenting === true)) {
+      await playSpeech({
+        text: assistantMessage,
+        style: "answer",
+      });
       return;
     }
 
@@ -751,7 +922,12 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
   const shouldAutoResumeAfterAnswer = (
     result: SessionInteractionPayload | VoiceTurnResponse,
+    wasPresenting: boolean,
   ): boolean => {
+    if (!wasPresenting) {
+      return false;
+    }
+
     const interruptionType = result.interruption?.type;
     const responseMode = result.turnDecision?.responseMode;
 
@@ -761,9 +937,16 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         interruptionType,
       ) &&
       (responseMode === undefined ||
-        ["question", "simplify", "deepen", "example", "repeat"].includes(
-          responseMode,
-        ))
+        [
+          "question",
+          "summarize_current_slide",
+          "general_contextual",
+          "grounded_factual",
+          "simplify",
+          "deepen",
+          "example",
+          "repeat",
+        ].includes(responseMode))
     );
   };
 
@@ -781,20 +964,15 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     startTransition(async () => {
       try {
         setError(null);
+        disarmLiveVoiceMode();
+        stopActiveAudio();
+        const support = getBackendVoiceRecordingSupport();
+        setBackendVoiceRecordingSupport(support);
 
-        if (
-          typeof navigator === "undefined" ||
-          !navigator.mediaDevices ||
-          typeof navigator.mediaDevices.getUserMedia !== "function"
-        ) {
+        if (!support.available) {
           throw new Error(
-            "Microphone recording is not available in this browser/context. Try Chrome or Edge, or check that microphone access is allowed.",
-          );
-        }
-
-        if (typeof MediaRecorder === "undefined") {
-          throw new Error(
-            "This browser does not support in-browser audio recording for backend STT.",
+            support.reason ??
+              "Microphone recording is not available in this browser/context.",
           );
         }
 
@@ -817,6 +995,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         };
 
         recorder.onstop = async () => {
+          const wasPresenting = isPresenting;
           try {
             setIsSubmittingVoice(true);
             disarmLiveVoiceMode();
@@ -850,7 +1029,10 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
             }
 
             if (result.interactionApplied) {
-              await applyInteractionResponse(result);
+              await applyInteractionResponse(result, {
+                ...(transcriptText ? { userText: transcriptText } : {}),
+                wasPresenting,
+              });
             } else {
               setState((previous) => (previous ? applyUpdate(previous, result) : previous));
               setPendingUserTurn(null);
@@ -877,6 +1059,30 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     });
   };
 
+  const handleRecordQuestion = () => {
+    if (isSubmittingVoice) {
+      return;
+    }
+
+    const support = getBackendVoiceRecordingSupport();
+    setBackendVoiceRecordingSupport(support);
+
+    if (support.available || isRecordingVoice) {
+      handleBackendVoiceRecording();
+      return;
+    }
+
+    if (browserSpeechSupported) {
+      void handleBrowserVoiceInput();
+      return;
+    }
+
+    setError(
+      support.reason ??
+        "Voice input is not available in this browser/context right now.",
+    );
+  };
+
   const handleBrowserVoiceInput = async () => {
     const provider = browserSpeechProviderRef.current;
 
@@ -885,6 +1091,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     try {
+      const wasPresenting = isPresenting;
       setError(null);
       const transcript = await provider.listenOnce({
         lang: "en-US",
@@ -892,18 +1099,21 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           setIsListeningBrowserVoice(true);
           setBrowserInterimTranscript("");
         },
+        onSpeechStart: () => {
+          pauseForVoiceInterruption();
+        },
         onEnd: () => {
           setIsListeningBrowserVoice(false);
         },
         onInterimResult: (text) => {
           if (text.trim()) {
-            stopActiveAudio();
+            pauseForVoiceInterruption();
           }
           setBrowserInterimTranscript(text);
         },
       });
 
-      stopActiveAudio();
+      pauseForVoiceInterruption();
       disarmLiveVoiceMode();
 
       setLastVoiceTranscript({
@@ -921,6 +1131,12 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         return;
       }
 
+      if (isLowSignalBrowserVoiceTranscript(transcript.text)) {
+        setPendingUserTurn(null);
+        setError("Voice input was too short or unclear. Try again.");
+        return;
+      }
+
       setPendingUserTurn(transcript.text);
       setInteractionLog((previous) => [
         ...previous,
@@ -928,7 +1144,10 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       ]);
       setIsInteracting(true);
       const result = await interactWithSession(sessionId, transcript.text);
-      await applyInteractionResponse(result);
+      await applyInteractionResponse(result, {
+        userText: transcript.text,
+        wasPresenting,
+      });
     } catch (voiceError) {
       const message = (voiceError as Error).message;
       if (
@@ -1180,6 +1399,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     const userText = commandInput.trim();
 
     startTransition(async () => {
+      const wasPresenting = isPresenting;
       try {
         setError(null);
         setIsInteracting(true);
@@ -1191,7 +1411,10 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           { role: "user", text: userText },
         ]);
         const result = await interactWithSession(sessionId, userText);
-        await applyInteractionResponse(result);
+        await applyInteractionResponse(result, {
+          userText,
+          wasPresenting,
+        });
         setPendingUserTurn(null);
         setCommandInput("");
       } catch (interactionError) {
@@ -1386,7 +1609,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
             <p className="mt-4 text-sm leading-6 text-paper/75">
               {workingOverlayMessage}
             </p>
-            {slides.length > 0 ? (
+            {!isBuildingAnswer && slides.length > 0 ? (
               <div className="mt-5">
                 <div className="h-2 overflow-hidden rounded-full bg-white/8">
                   <div
@@ -1403,6 +1626,33 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                 </p>
               </div>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+      {answerReadyNotice ? (
+        <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-ink/38 px-6 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-[30px] border border-emerald-300/20 bg-slate-950/92 px-6 py-6 shadow-2xl">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-400/20 text-lg text-emerald-200">
+                ✓
+              </span>
+              <div>
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-paper/55">
+                  Response generated
+                </p>
+                <p className="mt-1 text-xl font-semibold text-paper">
+                  Answer ready
+                </p>
+              </div>
+            </div>
+            {answerReadyNotice.question ? (
+              <p className="mt-4 text-sm leading-6 text-paper/68">
+                Question: “{answerReadyNotice.question}”
+              </p>
+            ) : null}
+            <p className="mt-3 text-base leading-7 text-paper/82">
+              {answerReadyNotice.answer}
+            </p>
           </div>
         </div>
       ) : null}
@@ -1670,25 +1920,41 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                   </button>
                   <button
                     className="rounded-full border border-white/20 px-4 py-2 text-sm transition hover:border-white/40 disabled:opacity-50"
-                    disabled={isSubmittingVoice || isListeningBrowserVoice || isInteracting}
+                    disabled={
+                      isSubmittingVoice ||
+                      isListeningBrowserVoice ||
+                      isInteracting ||
+                      (recordQuestionUnavailable && !isRecordingVoice)
+                    }
                     onClick={() => {
-                      handleBackendVoiceRecording();
+                      handleRecordQuestion();
                     }}
                     type="button"
                   >
                     {isRecordingVoice
                       ? "Stop recording"
-                      : isSubmittingVoice
-                        ? "Processing..."
-                        : "Record question"}
+                      : isListeningBrowserVoice
+                        ? "Stop listening"
+                        : isSubmittingVoice
+                          ? "Processing..."
+                          : backendVoiceRecordingAvailable
+                            ? "Record question"
+                            : recordQuestionUsesBrowserFallback
+                              ? "Speak question"
+                              : "Record question unavailable"}
                   </button>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-paper/60">
-                  {browserSpeechSupported
-                    ? liveVoiceMode
-                      ? "Browser speech recognition is armed for live interruption testing. It disarms automatically when a question is sent."
-                      : "Record question uses backend STT. Live voice remains available for interruption-style browser testing."
-                    : "Browser speech recognition is not available here. Record question uses backend server-side STT."}
+                  {backendVoiceRecordingAvailable
+                    ? browserSpeechSupported
+                      ? liveVoiceMode
+                        ? "Browser speech recognition is armed for live interruption testing. It disarms automatically when a question is sent."
+                        : "Record question captures audio for backend STT. Live voice remains available for interruption-style browser testing."
+                      : "Record question captures audio for backend STT. Browser speech recognition is not available here."
+                    : recordQuestionUsesBrowserFallback
+                      ? "This browser/context cannot record audio directly for backend STT here, so Record question falls back to one-shot browser speech recognition."
+                      : backendVoiceRecordingSupport.reason ??
+                        "Voice input is not available here right now."}
                 </p>
                 <div className="mt-3 rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm text-paper/75">
                   <p>
@@ -1821,28 +2087,21 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
             <h3 className="text-lg font-semibold">Slides</h3>
             <p className="text-sm text-paper/55">Choose any slide in the current deck.</p>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
             {slides.map((slide, index) => (
               <button
-                className="text-left"
+                className="min-w-0 text-left"
                 key={slide.id}
                 onClick={() => handleSelectSlide(index)}
                 type="button"
               >
-                <div
-                  className={`overflow-hidden rounded-[24px] border p-2 transition ${
-                    index === currentSlideIndex
-                      ? "border-coral bg-white/10"
-                      : "border-white/10 bg-white/5 hover:border-white/25"
-                  }`}
-                >
-                  <VisualSlideCanvas
-                    slide={slide}
-                    dark
-                    illustrationAsset={illustrationsBySlideId[slide.id]}
-                    theme={deckTheme}
-                  />
-                </div>
+                <SlidePreviewCard
+                  isActive={index === currentSlideIndex}
+                  illustrationAsset={illustrationsBySlideId[slide.id]}
+                  slide={slide}
+                  slideNumber={index + 1}
+                  theme={deckTheme}
+                />
               </button>
             ))}
           </div>

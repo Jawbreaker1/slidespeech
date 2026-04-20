@@ -69,6 +69,9 @@ const QUERY_STOPWORDS = new Set([
   "daily",
 ]);
 
+const GENERIC_ENTITY_REFERENCE_PATTERN =
+  /\b(?:our|my|the)\s+(?:company|organisation|organization|business|employer)\b/i;
+
 const WORD_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu;
 
 const tokenizeWords = (value: string): string[] =>
@@ -153,6 +156,11 @@ const buildQueryTokens = (query: string): string[] =>
 const buildSpecificQueryTokens = (query: string): string[] =>
   buildQueryTokens(query).filter((token) => token.length >= 5 || /\d/.test(token));
 
+const buildEntityHintTokens = (input: { title: string; url: string }): string[] =>
+  tokenize(`${input.title} ${input.url}`)
+    .filter((token) => token.length >= 4)
+    .filter((token) => !["home", "about", "contact", "www", "https", "http"].includes(token));
+
 const trimExplicitSourceLeadIn = (content: string): string => {
   const markers = [
     " Det här gör vi ",
@@ -192,8 +200,16 @@ export const sanitizeFetchedFinding = (
     return null;
   }
 
-  const queryTokens = buildQueryTokens(query);
-  const specificQueryTokens = buildSpecificQueryTokens(query);
+  const genericEntityQuery = GENERIC_ENTITY_REFERENCE_PATTERN.test(query.trim());
+  const entityHintTokens =
+    options?.allowTrustedExplicitSource && (genericEntityQuery || buildQueryTokens(query).length <= 2)
+      ? buildEntityHintTokens({ title: finding.title, url: finding.url })
+      : [];
+  const queryTokens = uniqueStrings([...buildQueryTokens(query), ...entityHintTokens]);
+  const specificQueryTokens = uniqueStrings([
+    ...buildSpecificQueryTokens(query),
+    ...entityHintTokens.filter((token) => token.length >= 5 || /\d/.test(token)),
+  ]);
   const specializedQuery = SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query);
   const normalizedContent = finding.content
     .replace(/\u00a0/g, " ")
@@ -245,7 +261,20 @@ export const sanitizeFetchedFinding = (
 
   const content =
     scoredSentences.length > 0
-      ? scoredSentences.slice(0, 6).map((candidate) => candidate.sentence).join(" ")
+      ? uniqueStrings([
+          ...scoredSentences.slice(0, 4).map((candidate) => candidate.sentence),
+          ...scoredSentences
+            .filter(
+              (candidate) =>
+                candidate.specificOverlap >= 1 ||
+                /\b\d{2,4}\b/.test(candidate.sentence) ||
+                /[,:;]/.test(candidate.sentence),
+            )
+            .slice(0, 3)
+            .map((candidate) => candidate.sentence),
+        ])
+          .slice(0, 6)
+          .join(" ")
       : options?.allowTrustedExplicitSource
         ? sentences.slice(0, 4).join(" ")
         : "";
@@ -617,7 +646,7 @@ type ResearchCacheKeyInput =
     };
 
 const RESEARCH_CACHE_DIR = resolve(process.cwd(), "data/research-cache");
-const RESEARCH_CACHE_VERSION = 12;
+const RESEARCH_CACHE_VERSION = 13;
 
 const cacheKeyFor = (input: ResearchCacheKeyInput): string => {
   const hash = createHash("sha1");

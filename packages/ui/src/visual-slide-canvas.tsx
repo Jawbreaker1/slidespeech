@@ -45,6 +45,15 @@ const normalizeComparableText = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const shouldRenderIllustration = (
+  illustrationAsset: SlideIllustrationAsset | undefined,
+) =>
+  Boolean(
+    illustrationAsset &&
+      (illustrationAsset.kind === "source" ||
+        illustrationAsset.kind === "curated"),
+  );
+
 const buildAudienceCallouts = (slide: Slide): SlideCallout[] => {
   const likelyQuestionSet = new Set(
     slide.likelyQuestions
@@ -356,7 +365,7 @@ const renderIllustrationFrame = (input: {
           color: input.dark ? "#FFFFFF" : input.accent,
         }}
       >
-        {input.illustration.sourceImageUrl ? "Source image" : "Visual"}
+        {input.illustration.kind === "source" ? "Source image" : "Illustration"}
       </span>
     </div>
     <div
@@ -415,7 +424,7 @@ export const VisualSlideCanvas = ({
   const resolvedTheme = resolvePresentationTheme(theme);
   const themeStyles = getCanvasThemeStyles(resolvedTheme, dark, accent);
   const illustration =
-    illustrationAsset && illustrationAsset.sourceImageUrl ? illustrationAsset : null;
+    shouldRenderIllustration(illustrationAsset) ? illustrationAsset! : null;
   const nodes =
     visuals.diagramNodes.length > 0
       ? visuals.diagramNodes

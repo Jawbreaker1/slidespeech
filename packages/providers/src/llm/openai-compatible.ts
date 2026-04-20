@@ -137,14 +137,33 @@ const normalizeVisualTone = (value: unknown): "accent" | "neutral" | "success" |
 const deriveVisualCards = (
   slideCandidate: Record<string, unknown>,
   keyPoints: string[],
-) =>
-  keyPoints.slice(0, 3).map((point, index) => {
-    const [head, ...rest] = point.split(":");
-    const title =
-      rest.length > 0 && typeof head === "string" && head.trim().length > 0
-        ? head.trim()
-        : `Key point ${index + 1}`;
-    const body = (rest.length > 0 ? rest.join(":") : point).trim();
+) => {
+  const usedTitles = new Set<string>();
+
+  return keyPoints.slice(0, 3).map((point, index) => {
+    const normalizedPoint = point.replace(/\s+/g, " ").trim();
+    const [head, ...rest] = normalizedPoint.split(":");
+    const tail = rest.join(":").trim();
+    const headText = typeof head === "string" ? head.trim() : "";
+    const headTokens = [...new Set(tokenizeDeckShapeText(headText))];
+    const tailTokens = [...new Set(tokenizeDeckShapeText(tail))];
+    const headCarriesEnoughInformation =
+      headText.length >= 8 &&
+      headTokens.length >= 2 &&
+      (!tail ||
+        headText.length >= Math.min(24, Math.round(tail.length * 0.4)) ||
+        headTokens.length >= Math.max(3, Math.floor(tailTokens.length / 2)));
+
+    let title = headCarriesEnoughInformation
+      ? shortenTitlePhrase(headText, 42)
+      : shortenTitlePhrase(tail || normalizedPoint, 42);
+    const normalizedTitle = normalizeComparableText(title);
+
+    if (!title || usedTitles.has(normalizedTitle)) {
+      title = shortenTitlePhrase(normalizedPoint, 42);
+    }
+
+    usedTitles.add(normalizeComparableText(title));
 
     return {
       id:
@@ -152,15 +171,90 @@ const deriveVisualCards = (
           ? `${slideCandidate.id}-card-${index + 1}`
           : `card-${index + 1}`,
       title,
-      body,
+      body: (headCarriesEnoughInformation && tail ? tail : normalizedPoint).trim(),
       tone:
         index === 0
           ? "accent"
           : index === keyPoints.length - 1
             ? "success"
-          : "neutral",
+            : "neutral",
     };
   });
+};
+
+const hasDuplicateComparableValues = (values: string[]): boolean => {
+  const normalized = values
+    .map((value) => normalizeComparableText(value))
+    .filter(Boolean);
+  return new Set(normalized).size !== normalized.length;
+};
+
+const countAnchorAlignedVisualValues = (
+  values: string[],
+  anchor: string,
+): number =>
+  values.filter(
+    (value) =>
+      countAnchorOverlap(value, anchor) >= 2 ||
+      hasMeaningfulAnchorOverlap(value, anchor),
+  ).length;
+
+const shouldRefreshDerivedVisuals = (
+  visuals: Record<string, unknown>,
+  anchor: string,
+): boolean => {
+  const heroStatement =
+    typeof visuals.heroStatement === "string" ? visuals.heroStatement.trim() : "";
+  const cards = toRecordArray(visuals.cards);
+  const diagramNodes = toRecordArray(visuals.diagramNodes);
+  const cardTitles = cards
+    .map((card) =>
+      typeof card.title === "string" ? card.title.trim() : "",
+    )
+    .filter(Boolean);
+  const cardTexts = cards
+    .map((card) =>
+      [
+        typeof card.title === "string" ? card.title.trim() : "",
+        typeof card.body === "string" ? card.body.trim() : "",
+      ]
+        .join(" ")
+        .trim(),
+    )
+    .filter(Boolean);
+  const nodeLabels = diagramNodes
+    .map((node) =>
+      typeof node.label === "string" ? node.label.trim() : "",
+    )
+    .filter(Boolean);
+
+  if (!heroStatement || !hasMeaningfulAnchorOverlap(heroStatement, anchor)) {
+    return true;
+  }
+
+  if (
+    (cardTitles.length >= 2 && hasDuplicateComparableValues(cardTitles)) ||
+    (nodeLabels.length >= 2 && hasDuplicateComparableValues(nodeLabels))
+  ) {
+    return true;
+  }
+
+  if (
+    cardTexts.length >= 2 &&
+    countAnchorAlignedVisualValues(cardTexts, anchor) < Math.min(2, cardTexts.length)
+  ) {
+    return true;
+  }
+
+  if (
+    nodeLabels.length >= 2 &&
+    countAnchorAlignedVisualValues(nodeLabels, anchor) < Math.min(2, nodeLabels.length)
+  ) {
+    return true;
+  }
+
+  return false;
+};
 
 const normalizeComparableText = (value: string): string =>
   value
@@ -243,49 +337,6 @@ const deriveVisuals = (
       tone: "info" as const,
     })),
   ];
-  const providedCards = toRecordArray(provided.cards).map((card, index) => ({
-    id:
-      typeof card.id === "string"
-        ? card.id
-        : `${String(slideCandidate.id ?? "slide")}-card-${index + 1}`,
-    title:
-      typeof card.title === "string" && card.title.trim().length > 0
-        ? card.title
-        : `Card ${index + 1}`,
-    body:
-      typeof card.body === "string" && card.body.trim().length > 0
-        ? card.body
-        : options.keyPoints[index] ?? options.learningGoal,
-    tone: normalizeVisualTone(card.tone),
-  }));
-  const providedCallouts = toRecordArray(provided.callouts).map(
-    (callout, index) => ({
-      id:
-        typeof callout.id === "string"
-          ? callout.id
-          : `${String(slideCandidate.id ?? "slide")}-callout-${index + 1}`,
-      label:
-        typeof callout.label === "string" && callout.label.trim().length > 0
-          ? callout.label
-          : `Callout ${index + 1}`,
-      text:
-        typeof callout.text === "string" && callout.text.trim().length > 0
-          ? callout.text
-          : calloutSeed[index]?.text ?? options.learningGoal,
-      tone: normalizeVisualTone(callout.tone ?? calloutSeed[index]?.tone),
-    }),
-  );
-  const providedNodes = toRecordArray(provided.diagramNodes).map((node, index) => ({
-    id:
-      typeof node.id === "string"
-        ? node.id
-        : `${String(slideCandidate.id ?? "slide")}-node-${index + 1}`,
-    label:
-      typeof node.label === "string" && node.label.trim().length > 0
-        ? node.label
-        : options.keyPoints[index] ?? `Node ${index + 1}`,
-    tone: normalizeVisualTone(node.tone),
-  }));
   const providedImageSlots = toRecordArray(provided.imageSlots).map((slot, index) => ({
     id:
       typeof slot.id === "string"
@@ -333,41 +384,27 @@ const deriveVisuals = (
           : "editorial",
     tone: fallbackLayout === "summary-board" ? "success" : "accent",
   } as const;
-  const cards =
-    providedCards.length > 0 ? providedCards : deriveVisualCards(slideCandidate, options.keyPoints);
-  const diagramNodes =
-    providedNodes.length > 0
-      ? providedNodes
-      : options.keyPoints.slice(0, 3).map((point, index) => ({
-          id: `${String(slideCandidate.id ?? "slide")}-node-${index + 1}`,
-          label: point.split(":")[0]?.trim() || point,
-          tone:
-            index === 0
-              ? "info"
-              : index === 1
-                ? "accent"
-                : "success",
-        }));
-  const rawCallouts =
-    providedCallouts.length > 0
-      ? providedCallouts
-      : calloutSeed.map((callout, index) => ({
-          id: `${String(slideCandidate.id ?? "slide")}-callout-${index + 1}`,
-          ...callout,
-        }));
+  const cards = deriveVisualCards(slideCandidate, options.keyPoints);
+  const diagramNodes = cards.slice(0, 3).map((card, index) => ({
+    id: `${String(slideCandidate.id ?? "slide")}-node-${index + 1}`,
+    label: shortenTitlePhrase(card.title || card.body, 42),
+    tone:
+      index === 0
+        ? "info"
+        : index === 1
+          ? "accent"
+          : "success",
+  }));
+  const rawCallouts = calloutSeed.map((callout, index) => ({
+    id: `${String(slideCandidate.id ?? "slide")}-callout-${index + 1}`,
+    ...callout,
+  }));
 
   return {
     layoutTemplate: normalizeLayoutTemplate(provided.layoutTemplate, fallbackLayout),
     accentColor: normalizeHexColor(provided.accentColor),
-    eyebrow:
-      typeof provided.eyebrow === "string" && provided.eyebrow.trim().length > 0
-        ? provided.eyebrow
-        : options.title,
-    heroStatement:
-      typeof provided.heroStatement === "string" &&
-      provided.heroStatement.trim().length > 0
-        ? provided.heroStatement
-        : options.learningGoal,
+    eyebrow: options.title,
+    heroStatement: options.learningGoal,
     cards,
     callouts: filterAudienceVisualCallouts(rawCallouts, {
       keyPoints: options.keyPoints,
@@ -1323,7 +1360,11 @@ const buildSlideEnrichmentPromptLines = (input: {
     input.slide.title,
     input.slide.learningGoal,
   ]).join(" ");
+  const groundingExcerptCandidates = uniqueNonEmptyStrings(
+    input.generationInput.groundingExcerpts ?? [],
+  ).filter((value) => value.length >= 24);
   const contextCandidates = uniqueNonEmptyStrings([
+    ...groundingExcerptCandidates,
     ...groundingSummaryCandidates,
     ...(input.generationInput.groundingHighlights ?? []),
     ...(input.generationInput.groundingCoverageGoals ?? []),
@@ -1433,7 +1474,16 @@ const buildSlideEnrichmentPromptLines = (input: {
     relevantContext.length > 0
       ? `Relevant grounding:\n${relevantContext.map((value) => `- ${value}`).join("\n")}`
       : "Relevant grounding: none",
+    groundingExcerptCandidates.length > 0
+      ? `Grounded source excerpts:\n${groundingExcerptCandidates
+          .slice(0, 6)
+          .map((value) => `- ${value}`)
+          .join("\n")}`
+      : null,
     "This slide must add a distinct explanatory center. Do not restate the same explanation, role, or takeaway used on earlier slides.",
+    groundingExcerptCandidates.length > 0
+      ? "Prefer concrete details from the grounded source excerpts over broad company-value language or generic summary copy."
+      : null,
     organizationArc
       ? "Teach the organization/entity itself, not the abstract generic concept behind its name."
       : null,
@@ -1796,6 +1846,42 @@ const isGenericOpeningFocus = (subject: string, value: string): boolean => {
   );
 };
 
+const framingImpliesOrientation = (
+  input: Pick<GenerateDeckInput, "presentationBrief" | "intent">,
+): boolean =>
+  /\b(onboarding|orientation|introduction|overview)\b/i.test(
+    `${input.intent?.framing ?? ""} ${input.presentationBrief ?? ""}`,
+  );
+
+const resolveOrganizationDisplayName = (
+  input: Pick<GenerateDeckInput, "topic" | "intent">,
+): string => {
+  const subject = resolveIntentSubject(input);
+  const organization = input.intent?.organization?.trim() ?? "";
+
+  if (!organization) {
+    return subject;
+  }
+
+  const normalizedSubject = normalizeComparableText(subject);
+  const normalizedOrganization = normalizeComparableText(organization);
+  if (normalizedSubject && normalizedSubject === normalizedOrganization) {
+    return subject;
+  }
+
+  const subjectTokens = tokenizeDeckShapeText(subject);
+  const organizationTokens = tokenizeDeckShapeText(organization);
+  if (subjectTokens.length > organizationTokens.length) {
+    return subject;
+  }
+
+  if (subject.length >= organization.length + 2) {
+    return subject;
+  }
+
+  return organization;
+};
+
 const pickOpeningFocus = (
   input: Pick<
     GenerateDeckInput,
@@ -1813,7 +1899,7 @@ const pickOpeningFocus = (
   const arcPolicy = deriveSlideArcPolicy(input);
   const entityName =
     input.intent?.presentationFrame === "organization"
-      ? input.intent.organization ?? subject
+      ? resolveOrganizationDisplayName(input)
       : subject;
   const explicitCoverageRequirements = uniqueNonEmptyStrings(
     (input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? ""))
@@ -2171,6 +2257,14 @@ const selectAlignedContractSeed = (options: {
   return ranked[0]?.seed;
 };
 
+const seedAlignsToReferenceTexts = (
+  value: string,
+  referenceTexts: string[],
+): boolean =>
+  referenceTexts.some(
+    (reference) => countAnchorOverlap(value, reference) >= 2,
+  );
+
 const isWorkshopPresentation = (
   input: Pick<GenerateDeckInput, "intent">,
 ): boolean =>
@@ -2291,7 +2385,7 @@ const buildContractFallbackFocus = (
   const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
   const entityName =
     input.intent?.presentationFrame === "organization"
-      ? input.intent.organization ?? subject
+      ? resolveOrganizationDisplayName(input)
       : subject;
 
   switch (kind) {
@@ -2374,6 +2468,40 @@ const buildContractFallbackObjective = (
     default:
       return undefined;
   }
+};
+
+const buildContractReferenceTexts = (
+  input: Pick<
+    GenerateDeckInput,
+    | "topic"
+    | "presentationBrief"
+    | "intent"
+    | "groundingHighlights"
+    | "groundingCoverageGoals"
+    | "groundingSourceIds"
+  >,
+  kind: SlideContract["kind"],
+  learningObjective: string | undefined,
+  storylineValue: string | undefined,
+): string[] => {
+  const subject = resolveIntentSubject(input);
+  const arcPolicy = deriveSlideArcPolicy(input);
+
+  return uniqueNonEmptyStrings([
+    learningObjective ?? "",
+    storylineValue ?? "",
+    buildContractFallbackFocus(input, kind),
+    buildContractFallbackObjective(input, kind) ?? "",
+    arcPolicy === "organization-overview" ? input.intent?.presentationGoal ?? "" : "",
+    ...(arcPolicy === "organization-overview" && kind === "orientation"
+      ? input.intent?.audienceCues ?? []
+      : []),
+    arcPolicy === "source-backed-subject"
+      ? resolveSourceBackedCaseAnchor(input) ?? ""
+      : "",
+  ]).filter(
+    (value) => normalizeComparableText(value) !== normalizeComparableText(subject),
+  );
 };
 
 const contractSeedPriorities = (
@@ -2562,11 +2690,23 @@ const buildSlideContractLabel = (
   }
 };
 
-const contractRequiresEvidence = (kind: SlideContract["kind"]): boolean =>
-  kind === "entity-value" ||
-  kind === "workshop-practice" ||
-  kind === "subject-detail" ||
-  kind === "subject-implication";
+const contractRequiresEvidence = (
+  kind: SlideContract["kind"],
+  input?: ArcPolicyInput,
+): boolean => {
+  const organizationArc = input
+    ? deriveSlideArcPolicy(input) === "organization-overview"
+    : false;
+
+  return (
+    kind === "entity-value" ||
+    kind === "workshop-practice" ||
+    kind === "subject-detail" ||
+    kind === "subject-implication" ||
+    (organizationArc &&
+      (kind === "entity-capabilities" || kind === "entity-operations"))
+  );
+};
 
 const openingSeedPriorities = (
   input: Pick<
@@ -2634,6 +2774,8 @@ const buildSlideContracts = (
   const seeds = buildContractSeeds(input);
   const contractKinds = buildSlideContractKinds(input, slideCount);
   const arcPolicy = deriveSlideArcPolicy(input);
+  const planLedContractSelection =
+    arcPolicy === "source-backed-subject" || arcPolicy === "organization-overview";
   const contracts: SlideContract[] = [];
   const usedSeedIds = new Set<string>();
   const usedTexts: string[] = [];
@@ -2674,54 +2816,106 @@ const buildSlideContracts = (
     const kind = contractKinds[index] ?? "subject-implication";
     const priorities = contractSeedPriorities(kind, input);
     const distinctFrom = uniqueNonEmptyStrings(usedTexts.slice(-4));
-    const focusSeed = selectDistinctContractSeed({
-      seeds,
-      usedSeedIds,
-      usedTexts,
-      preferredSources: priorities.focus,
-    });
-    if (focusSeed) {
-      usedSeedIds.add(focusSeed.id);
+    const roleReferenceTexts = buildContractReferenceTexts(
+      input,
+      kind,
+      learningObjectives[index],
+      storyline[index],
+    );
+    const focusSeed =
+      arcPolicy === "organization-overview"
+        ? selectAlignedContractSeed({
+            seeds,
+            usedSeedIds,
+            preferredSources: priorities.focus,
+            referenceTexts: roleReferenceTexts,
+          }) ??
+          selectDistinctContractSeed({
+            seeds,
+            usedSeedIds,
+            usedTexts,
+            preferredSources: priorities.focus,
+          })
+        : selectDistinctContractSeed({
+            seeds,
+            usedSeedIds,
+            usedTexts,
+            preferredSources: priorities.focus,
+          });
+    const acceptedFocusSeed =
+      arcPolicy === "organization-overview" &&
+      focusSeed &&
+      !seedAlignsToReferenceTexts(focusSeed.text, roleReferenceTexts)
+        ? undefined
+        : focusSeed;
+    if (acceptedFocusSeed) {
+      usedSeedIds.add(acceptedFocusSeed.id);
     }
     const focus = pickContractText(
       input,
-      arcPolicy === "source-backed-subject"
+      planLedContractSelection
         ? [
             learningObjectives[index],
             storyline[index],
-            focusSeed?.text,
+            acceptedFocusSeed?.text,
             buildContractFallbackFocus(input, kind),
           ]
         : [
-            focusSeed?.text,
+            acceptedFocusSeed?.text,
             learningObjectives[index],
             storyline[index],
             buildContractFallbackFocus(input, kind),
           ],
       { preferConcrete: true },
     );
-    const objectiveSeed = selectDistinctContractSeed({
-      seeds,
-      usedSeedIds,
-      usedTexts: [...usedTexts, focus],
-      preferredSources: priorities.objective,
-      fallbackSources: priorities.focus,
-    });
-    if (objectiveSeed) {
-      usedSeedIds.add(objectiveSeed.id);
+    const objectiveSeed =
+      arcPolicy === "organization-overview"
+        ? selectAlignedContractSeed({
+            seeds,
+            usedSeedIds,
+            preferredSources: priorities.objective,
+            referenceTexts: [...roleReferenceTexts, focus].filter(
+              (value): value is string => Boolean(value),
+            ),
+          }) ??
+          selectDistinctContractSeed({
+            seeds,
+            usedSeedIds,
+            usedTexts: [...usedTexts, focus],
+            preferredSources: priorities.objective,
+            fallbackSources: priorities.focus,
+          })
+        : selectDistinctContractSeed({
+            seeds,
+            usedSeedIds,
+            usedTexts: [...usedTexts, focus],
+            preferredSources: priorities.objective,
+            fallbackSources: priorities.focus,
+          });
+    const objectiveReferenceTexts = [...roleReferenceTexts, focus].filter(
+      (value): value is string => Boolean(value),
+    );
+    const acceptedObjectiveSeed =
+      arcPolicy === "organization-overview" &&
+      objectiveSeed &&
+      !seedAlignsToReferenceTexts(objectiveSeed.text, objectiveReferenceTexts)
+        ? undefined
+        : objectiveSeed;
+    if (acceptedObjectiveSeed) {
+      usedSeedIds.add(acceptedObjectiveSeed.id);
     }
     const objective = pickContractText(
       input,
       (
-        arcPolicy === "source-backed-subject"
+        planLedContractSelection
           ? [
               storyline[index],
               learningObjectives[index],
-              objectiveSeed?.text,
+              acceptedObjectiveSeed?.text,
               buildContractFallbackObjective(input, kind),
             ]
           : [
-              objectiveSeed?.text,
+              acceptedObjectiveSeed?.text,
               buildContractFallbackObjective(input, kind),
             ]
       ).filter(
@@ -2729,42 +2923,44 @@ const buildSlideContracts = (
       ),
       { preferConcrete: true },
     );
-    const evidenceSeed = contractRequiresEvidence(kind)
-      ? arcPolicy === "source-backed-subject"
+    const alignedEvidenceSeed =
+      contractRequiresEvidence(kind, input) &&
+      (arcPolicy === "source-backed-subject" || arcPolicy === "organization-overview")
         ? selectAlignedContractSeed({
             seeds,
             usedSeedIds,
             preferredSources: priorities.evidence,
-            referenceTexts: [focus, objective].filter((value): value is string => Boolean(value)),
-          }) ??
-          selectDistinctContractSeed({
-            seeds,
-            usedSeedIds,
-            usedTexts: [...usedTexts, focus, objective].filter(
+            referenceTexts: [focus, objective, ...roleReferenceTexts].filter(
               (value): value is string => Boolean(value),
             ),
-            preferredSources: priorities.evidence,
-            fallbackSources: priorities.focus,
           })
-        : selectDistinctContractSeed({
-            seeds,
-            usedSeedIds,
-            usedTexts: [...usedTexts, focus, objective].filter(
-              (value): value is string => Boolean(value),
-            ),
-            preferredSources: priorities.evidence,
-            fallbackSources: priorities.focus,
-          })
+        : undefined;
+    const fallbackEvidenceSeed = contractRequiresEvidence(kind, input)
+      ? selectDistinctContractSeed({
+          seeds,
+          usedSeedIds,
+          usedTexts: [...usedTexts, focus, objective].filter(
+            (value): value is string => Boolean(value),
+          ),
+          preferredSources: priorities.evidence,
+          fallbackSources: priorities.focus,
+        })
       : undefined;
+    const evidenceSeedCandidate = alignedEvidenceSeed ?? fallbackEvidenceSeed;
+    const evidenceSeed =
+      evidenceSeedCandidate &&
+      normalizeComparableText(evidenceSeedCandidate.text) !== normalizeComparableText(focus) &&
+      normalizeComparableText(evidenceSeedCandidate.text) !== normalizeComparableText(objective)
+        ? evidenceSeedCandidate
+        : fallbackEvidenceSeed &&
+            normalizeComparableText(fallbackEvidenceSeed.text) !== normalizeComparableText(focus) &&
+            normalizeComparableText(fallbackEvidenceSeed.text) !== normalizeComparableText(objective)
+          ? fallbackEvidenceSeed
+          : undefined;
     if (evidenceSeed) {
       usedSeedIds.add(evidenceSeed.id);
     }
-    const evidence =
-      evidenceSeed &&
-      normalizeComparableText(evidenceSeed.text) !== normalizeComparableText(focus) &&
-      normalizeComparableText(evidenceSeed.text) !== normalizeComparableText(objective)
-        ? evidenceSeed.text
-        : undefined;
+    const evidence = evidenceSeed?.text;
 
     contracts.push({
       index,
@@ -3364,25 +3560,68 @@ const buildContractAnchoredKeyPoints = (
               .some((anchor) => contractTextSimilarity(point, anchor) >= 0.6),
         )
       : rankedConcretePoints;
+  const prioritizedStatements =
+    organizationArc && contract.kind === "orientation"
+      ? [
+          objective && !looksFragmentarySlidePoint(objective)
+            ? toAudienceFacingSentence(objective)
+            : null,
+          focus && !looksFragmentarySlidePoint(focus)
+            ? toAudienceFacingSentence(focus)
+            : null,
+          ...anchorStatements
+            .filter((statement) => statement.length > 0)
+            .map((statement) => toAudienceFacingSentence(statement)),
+          ...(orientationConcretePoints.length > 0
+            ? orientationConcretePoints.slice(0, 1)
+            : rankedConcretePoints.slice(0, 1)
+          ).map((point) => toAudienceFacingSentence(point)),
+          ...fallbackStatements.map((statement) => toAudienceFacingSentence(statement)),
+        ]
+      : organizationArc &&
+          (contract.kind === "entity-capabilities" ||
+            contract.kind === "entity-operations" ||
+            contract.kind === "entity-value")
+        ? [
+            ...anchorStatements
+              .filter((statement) => statement.length > 0)
+              .map((statement) => toAudienceFacingSentence(statement)),
+            evidence && !looksFragmentarySlidePoint(evidence)
+              ? toAudienceFacingSentence(evidence)
+              : null,
+            ...rankedConcretePoints
+              .slice(0, 1)
+              .map((point) => toAudienceFacingSentence(point)),
+            objective && !looksFragmentarySlidePoint(objective)
+              ? toAudienceFacingSentence(objective)
+              : null,
+            focus && !looksFragmentarySlidePoint(focus)
+              ? toAudienceFacingSentence(focus)
+              : null,
+            ...fallbackStatements.map((statement) => toAudienceFacingSentence(statement)),
+          ]
+        : [
+            ...(orientationConcretePoints.length > 0
+              ? orientationConcretePoints
+              : rankedConcretePoints
+            ).map((point) => toAudienceFacingSentence(point)),
+            ...anchorStatements
+              .filter((statement) => statement.length > 0)
+              .map((statement) => toAudienceFacingSentence(statement)),
+            evidence && !looksFragmentarySlidePoint(evidence)
+              ? toAudienceFacingSentence(evidence)
+              : null,
+            objective && !looksFragmentarySlidePoint(objective)
+              ? toAudienceFacingSentence(objective)
+              : null,
+            focus && !looksFragmentarySlidePoint(focus)
+              ? toAudienceFacingSentence(focus)
+              : null,
+            ...fallbackStatements.map((statement) => toAudienceFacingSentence(statement)),
+          ];
 
   return uniqueNonEmptyStrings(
-    [
-      ...(orientationConcretePoints.length > 0
-        ? orientationConcretePoints
-        : rankedConcretePoints
-      ).map((point) => toAudienceFacingSentence(point)),
-      ...anchorStatements
-        .filter((statement) => statement.length > 0)
-        .map((statement) => toAudienceFacingSentence(statement)),
-      evidence && !looksFragmentarySlidePoint(evidence)
-        ? toAudienceFacingSentence(evidence)
-        : null,
-      objective && !looksFragmentarySlidePoint(objective)
-        ? toAudienceFacingSentence(objective)
-        : null,
-      focus && !looksFragmentarySlidePoint(focus) ? toAudienceFacingSentence(focus) : null,
-      ...fallbackStatements.map((statement) => toAudienceFacingSentence(statement)),
-    ].filter((value): value is string => Boolean(value)),
+    prioritizedStatements.filter((value): value is string => Boolean(value)),
   ).slice(0, 3);
 };
 
@@ -3402,8 +3641,22 @@ const buildContractLearningGoal = (
   const workshop = isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">);
   const focusAnchor = resolveSourceBackedCaseAnchor(input);
   const arcPolicy = deriveSlideArcPolicy(input);
+  const organizationArc = arcPolicy === "organization-overview";
+  const entityName =
+    input.intent?.presentationFrame === "organization"
+      ? resolveOrganizationDisplayName(input)
+      : subject;
+  const orientationFraming = framingImpliesOrientation(input as Pick<
+    GenerateDeckInput,
+    "presentationBrief" | "intent"
+  >);
   if (input.intent?.contentMode === "procedural" && contract.index === 0) {
     return `See which ingredients, steps, and final adjustments define ${subject.toLowerCase()}.`;
+  }
+  if (contract.index === 0 && organizationArc) {
+    return orientationFraming
+      ? `See who ${entityName} is, what it offers, and how a newcomer can place it in day-to-day work.`
+      : `See who ${entityName} is, what it offers, and how to recognize its role in practice.`;
   }
   if (contract.kind === "procedural-ingredients") {
     return `See which inputs shape the flavor, balance, and texture of ${subject.toLowerCase()}.`;
@@ -3576,21 +3829,28 @@ const buildOrientationSlideFromContext = (
 ): Record<string, unknown> => {
   const subject = resolveIntentSubject(input);
   const title = buildContractTitle(input, contract);
+  const organizationArc =
+    deriveSlideArcPolicy(input as ArcPolicyInput) === "organization-overview";
+  const entityName =
+    input.intent?.presentationFrame === "organization"
+      ? resolveOrganizationDisplayName(input)
+      : subject;
+  const orientationFraming = framingImpliesOrientation(input);
   if (input.intent?.contentMode === "procedural") {
     const keyPoints = buildProceduralOrientationKeyPoints(subject);
-  return {
-    ...(slide as unknown as Record<string, unknown>),
-    title,
-    learningGoal: buildContractLearningGoal(input, contract),
-    keyPoints,
-    speakerNotes: [],
-    examples: [],
-    likelyQuestions: [],
-    beginnerExplanation: keyPoints.slice(0, 2).join(" "),
-    advancedExplanation: keyPoints[2] ?? "",
-    id: slide.id,
-    order: slide.order,
-  };
+    return {
+      ...(slide as unknown as Record<string, unknown>),
+      title,
+      learningGoal: buildContractLearningGoal(input, contract),
+      keyPoints,
+      speakerNotes: [],
+      examples: [],
+      likelyQuestions: [],
+      beginnerExplanation: keyPoints.slice(0, 2).join(" "),
+      advancedExplanation: keyPoints[2] ?? "",
+      id: slide.id,
+      order: slide.order,
+    };
   }
   const coverageAnchors = uniqueNonEmptyStrings([
     ...(input.intent?.coverageRequirements ?? extractCoverageRequirements(input.presentationBrief ?? "")),
@@ -3606,6 +3866,94 @@ const buildOrientationSlideFromContext = (
         !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(value)),
     )
     .slice(0, 2);
+  const compactGroundingSupport = uniqueNonEmptyStrings(
+    (input.groundingHighlights ?? []).map((highlight) =>
+      compactGroundingHighlight(highlight, subject),
+    ),
+  ).filter(
+    (value) =>
+      value.length >= 28 &&
+      !isGenericOpeningFocus(subject, value) &&
+      !PROMOTIONAL_SOURCE_PATTERNS.some((pattern) => pattern.test(value)) &&
+      !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(value)) &&
+      !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(value)),
+  );
+
+  if (organizationArc) {
+    const organizationSupportCandidates = [
+      ...coverageAnchors,
+      ...compactGroundingSupport.filter((value) =>
+        countAnchorOverlap(
+          value,
+          `${entityName} ${contract.focus} ${contract.objective ?? ""} ${input.intent?.presentationGoal ?? ""}`,
+        ) >= 2 ||
+        hasMeaningfulAnchorOverlap(
+          value,
+          `${entityName} ${contract.focus} ${contract.objective ?? ""}`,
+        ),
+      ),
+    ];
+    const rankedOrganizationSupport = rankContractConcretePoints(
+      input,
+      contract,
+      organizationSupportCandidates.filter(
+        (value): value is string =>
+          Boolean(value) &&
+          !isWeakContractEchoPoint(contract, value) &&
+          !isGenericOpeningFocus(subject, value),
+      ),
+    );
+    const supportExample =
+      rankedOrganizationSupport.find(
+        (value) =>
+          (/\b\d{1,4}\b/.test(value) || tokenizeDeckShapeText(value).length >= 7) &&
+          (countAnchorOverlap(value, `${entityName} ${contract.focus} ${contract.objective ?? ""}`) >=
+            2 ||
+            hasMeaningfulAnchorOverlap(value, contract.focus)),
+      ) ?? rankedOrganizationSupport[0];
+    const keyPoints = uniqueNonEmptyStrings(
+      [
+        toAudienceFacingSentence(
+          orientationFraming
+            ? `${entityName} is the organization this onboarding overview introduces`
+            : `${entityName} is the organization at the center of this overview`,
+        ),
+        supportExample ? toAudienceFacingSentence(supportExample) : null,
+        toAudienceFacingSentence(
+          orientationFraming
+            ? `${entityName} becomes easier to place when its services, delivery model, and customer-facing outcomes stay visible together`
+            : `${entityName} becomes easier to recognize when its services, delivery model, and customer-facing outcomes stay visible together`,
+        ),
+        ...coverageAnchors
+          .map((anchor) => buildOrientationCoveragePoint(subject, anchor))
+          .filter((point) => !isWeakContractEchoPoint(contract, point)),
+        toAudienceFacingSentence(
+          `${entityName} becomes easier to place when one concrete service area, customer-facing responsibility, or delivery example is visible`,
+        ),
+      ].filter((value): value is string => Boolean(value)),
+    ).slice(0, 3);
+    const beginnerExplanation = keyPoints.slice(0, 2).join(" ");
+    const advancedExplanation =
+      keyPoints[2] ??
+      toAudienceFacingSentence(
+        `${entityName} is easier to understand when identity, capability, and concrete value stay visible together`,
+      );
+
+    return {
+      ...(slide as unknown as Record<string, unknown>),
+      title,
+      learningGoal: buildContractLearningGoal(input, contract),
+      keyPoints,
+      speakerNotes: [],
+      examples: [],
+      likelyQuestions: [],
+      beginnerExplanation,
+      advancedExplanation,
+      id: slide.id,
+      order: slide.order,
+    };
+  }
+
   const laterSlideSupport = uniqueNonEmptyStrings(
     deck.slides
       .slice(1)
@@ -4577,7 +4925,18 @@ const applyPlanDrivenDeckShape = (
       beginnerExplanationNeedsRepair ||
       advancedExplanationNeedsRepair ||
       heroStatementNeedsRepair;
+    const visualAnchor = [
+      nextTitle || buildContractTitle(input, contract),
+      learningGoal,
+      ...nextKeyPoints,
+      nextBeginnerExplanation,
+      nextAdvancedExplanation,
+    ]
+      .join(" ")
+      .trim();
+    const visualsNeedRepair = shouldRefreshDerivedVisuals(visuals, visualAnchor);
     const nextVisuals = contentNeedsVisualRefresh
+      || visualsNeedRepair
       ? deriveVisuals(
           {
             ...slide,
@@ -4789,10 +5148,7 @@ const normalizeDeck = (
       typeof candidate.title === "string" && candidate.title.trim().length > 0
         ? candidate.title
         : input.plan?.title ?? `${topic}: generated presentation`,
-    topic:
-      typeof candidate.topic === "string" && candidate.topic.trim().length > 0
-        ? candidate.topic
-        : topic,
+    topic,
     summary:
       typeof candidate.summary === "string" && candidate.summary.trim().length > 0
         ? candidate.summary
@@ -5527,6 +5883,7 @@ export const __testables = {
   buildContractAnchoredKeyPoints,
   buildContractLearningGoal,
   buildOutlineDeckSummary,
+  buildOrientationSlideFromContext,
   buildProceduralOrientationKeyPoints,
   buildRoleSpecificSlideRecoveryFromContext,
   normalizePresentationPlan,
@@ -5707,6 +6064,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
     presentationBrief?: string;
     intent?: GenerateDeckInput["intent"];
     groundingHighlights?: string[];
+    groundingExcerpts?: string[];
     pedagogicalProfile: { audienceLevel: string };
     groundingSummary?: string;
     targetDurationMinutes?: number;
@@ -5719,6 +6077,12 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       input.groundingHighlights?.length
         ? `Grounding highlights: ${input.groundingHighlights.join("; ")}`
         : "No grounding highlights were provided.",
+      input.groundingExcerpts?.length
+        ? `Grounded source excerpts:\n${input.groundingExcerpts
+            .slice(0, 6)
+            .map((value) => `- ${value}`)
+            .join("\n")}`
+        : "No grounded source excerpts were provided.",
       `Audience level: ${input.pedagogicalProfile.audienceLevel}`,
       input.groundingSummary
         ? `External grounding summary: ${compactGroundingSummary(input.groundingSummary)}`
@@ -5815,6 +6179,12 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         input.groundingHighlights?.length
           ? `Grounding highlights: ${input.groundingHighlights.join("; ")}`
           : "No grounding highlights were provided.",
+        input.groundingExcerpts?.length
+          ? `Grounded source excerpts:\n${input.groundingExcerpts
+              .slice(0, 6)
+              .map((value) => `- ${value}`)
+              .join("\n")}`
+          : "No grounded source excerpts were provided.",
         `Audience level: ${input.pedagogicalProfile.audienceLevel}`,
         input.groundingSummary
           ? `External grounding summary: ${compactGroundingSummary(input.groundingSummary)}`
@@ -6372,50 +6742,150 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       .map((callout) => `${callout.label}: ${callout.text}`)
       .join(" | ");
     const slideExample = input.slide.examples[0]?.trim() || "None";
+    const normalizeShortAnswer = (value: string): string => {
+      const trimmed = value.replace(/\s+/g, " ").trim();
+      if (!trimmed) {
+        return trimmed;
+      }
+
+      return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+    };
+
+    if (input.answerMode === "grounded_factual" && input.sourceGroundingContext) {
+      try {
+        const groundedAnswer = await this.chatToolCall({
+          functionName: "return_grounded_factual_answer",
+          functionDescription:
+            "Return whether the grounded source context directly supports a short factual answer.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            required: ["answerable", "answer"],
+            properties: {
+              answerable: {
+                type: "boolean",
+              },
+              answer: {
+                type: "string",
+              },
+            },
+          },
+          messages: [
+            {
+              role: "system",
+              content: [
+                "You answer short factual questions for an AI presentation runtime.",
+                "Use only the provided grounded source context.",
+                "Do not use slide text, broader deck context, or outside knowledge.",
+                "If the grounded source context does not directly support the answer, set answerable=false and leave answer empty.",
+                "Call the provided tool and do not answer in plain text.",
+              ].join(" "),
+            },
+            {
+              role: "user",
+              content: [
+                `Deck topic: ${input.deck.topic}`,
+                `Question: ${input.question}`,
+                `Grounded source context: ${input.sourceGroundingContext}`,
+                "If a short list or contact-style excerpt directly contains the fact, you may extract it.",
+                "Keep the answer short and direct.",
+              ].join("\n"),
+            },
+          ],
+          maxTokens: 500,
+          timeoutMs: 7000,
+          tokenAttempts: [500, 800, 1200],
+          parse: (value) => {
+            if (
+              typeof value !== "object" ||
+              value === null ||
+              typeof (value as { answerable?: unknown }).answerable !== "boolean" ||
+              typeof (value as { answer?: unknown }).answer !== "string"
+            ) {
+              throw new Error("Grounded factual answer tool returned an invalid payload.");
+            }
+
+            return {
+              answerable: (value as { answerable: boolean }).answerable,
+              answer: (value as { answer: string }).answer,
+            };
+          },
+        });
+
+        if (!groundedAnswer.answerable || !groundedAnswer.answer.trim()) {
+          return {
+            text: "I do not have a reliable answer to that from the current slide or the available source material.",
+          };
+        }
+
+        return {
+          text: normalizeShortAnswer(groundedAnswer.answer),
+        };
+      } catch (error) {
+        console.warn(
+          `[slidespeech] ${this.name} grounded factual tool-call path failed: ${(error as Error).message}`,
+        );
+      }
+    }
+
     const answerInstruction =
       input.answerMode === "example"
         ? "Give one concrete example. Do not just restate the slide."
         : input.answerMode === "grounded_factual"
-          ? "Answer only if the available grounded context supports it. If not, say that briefly."
+          ? "Answer only if the available grounded context supports it. If a short list, navigation excerpt, or contact-style excerpt directly carries the fact, you may extract the fact from it. If the context still does not support the fact, say that briefly."
           : input.answerMode === "summarize_current_slide"
             ? "State the main point of the current slide in direct language."
-            : "Answer the user's question directly. Prefer concrete wording over abstract framing.";
+            : "Answer the user's question directly. Prefer concrete wording over abstract framing. If the question asks for a concrete fact that the context does not actually provide, say that briefly instead of replying with a generic summary.";
+    const preferredAnswerLanguage = input.deck.metadata.language || "en";
     const text = await this.chatText([
       {
         role: "system",
         content:
-          "You are a fast AI presentation assistant. Answer in English using at most 4 short sentences. Prefer the current slide, but use broader deck context or source grounding when they clearly answer the question better. If the available context still does not support the answer, say that briefly instead of bluffing.",
+          input.answerMode === "grounded_factual"
+            ? `You are a fast AI presentation assistant. Answer using at most 3 short sentences. Answer in the same language as the user's question when that is clear; otherwise use the deck language (${preferredAnswerLanguage}). Use only the provided grounded source context. Do not use the slide text, the broader deck context, or outside knowledge. If the grounded source context does not support the answer, say that briefly instead of bluffing.`
+            : `You are a fast AI presentation assistant. Answer using at most 4 short sentences. Answer in the same language as the user's question when that is clear; otherwise use the deck language (${preferredAnswerLanguage}). Prefer the current slide, but use broader deck context or source grounding when they clearly answer the question better. If the available context still does not support the answer, say that briefly instead of bluffing. Do not replace a missing concrete fact with a generic description of the company, topic, or slide.`,
       },
       {
         role: "user",
-        content: [
-          `Topic: ${input.deck.topic}`,
-          `Slide title: ${input.slide.title}`,
-          `Slide learning goal: ${input.slide.learningGoal}`,
-          `Visible key points: ${input.slide.keyPoints.join("; ")}`,
-          `Visible cards: ${visibleCards || "None"}`,
-          `Visible callouts: ${visibleCallouts || "None"}`,
-          `Example on this slide: ${slideExample}`,
-          `Question: ${input.question}`,
-          `Beginner explanation: ${input.slide.beginnerExplanation}`,
-          input.broaderDeckContext
-            ? `Broader deck context: ${input.broaderDeckContext}`
-            : null,
-          input.sourceGroundingContext
-            ? `Source grounding context: ${input.sourceGroundingContext}`
-            : null,
-          answerInstruction,
-          "Do not mention the presentation, deck, or slide unless the user asks about them.",
-        ].join("\n"),
+        content:
+          input.answerMode === "grounded_factual"
+            ? [
+                `Deck topic: ${input.deck.topic}`,
+                `Question: ${input.question}`,
+                input.sourceGroundingContext
+                  ? `Source grounding context: ${input.sourceGroundingContext}`
+                  : "Source grounding context: None",
+                answerInstruction,
+              ].join("\n")
+            : [
+                `Topic: ${input.deck.topic}`,
+                `Slide title: ${input.slide.title}`,
+                `Slide learning goal: ${input.slide.learningGoal}`,
+                `Visible key points: ${input.slide.keyPoints.join("; ")}`,
+                `Visible cards: ${visibleCards || "None"}`,
+                `Visible callouts: ${visibleCallouts || "None"}`,
+                `Example on this slide: ${slideExample}`,
+                `Question: ${input.question}`,
+                `Beginner explanation: ${input.slide.beginnerExplanation}`,
+                input.broaderDeckContext
+                  ? `Broader deck context: ${input.broaderDeckContext}`
+                  : null,
+                input.sourceGroundingContext
+                  ? `Source grounding context: ${input.sourceGroundingContext}`
+                  : null,
+                answerInstruction,
+                "Do not mention the presentation, deck, or slide unless the user asks about them.",
+              ].join("\n"),
       },
     ], {
-      maxTokens: 1200,
-      timeoutMs: 18000,
-      tokenAttempts: [1200, 1600],
+      maxTokens: input.answerMode === "grounded_factual" ? 700 : 1200,
+      timeoutMs: input.answerMode === "grounded_factual" ? 9000 : 18000,
+      tokenAttempts:
+        input.answerMode === "grounded_factual" ? [700, 1000] : [1200, 1600],
       disableLmStudioBudgetLift: true,
     });
 
-    return { text };
+    return { text: normalizeShortAnswer(text) };
   }
 
   async simplifyExplanation(
@@ -6753,6 +7223,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       "Use interruptionType=question by default for freeform learner input.",
       "Use responseMode=summarize_current_slide when the learner asks for the main point, key takeaway, or a short summary of the current slide.",
       "Use responseMode=grounded_factual when the learner asks for specific factual information that likely depends on grounded source material or external facts rather than just the current slide wording.",
+      "Concrete factual questions about locations, countries, offices, dates, counts, certifications, customers, or legal/organizational facts should normally use grounded_factual when sources are available.",
       "Use responseMode=general_contextual for ordinary conceptual questions that should be answered from the current slide plus the broader deck context.",
       "Use responseMode=question only when you are unsure whether general_contextual or grounded_factual is the better route.",
     ].join("\n");
@@ -6886,6 +7357,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
         "Use interruptionType=question by default for freeform learner input.",
         "Use responseMode=summarize_current_slide when the learner asks for the main point, key takeaway, or a short summary of the current slide.",
         "Use responseMode=grounded_factual when the learner asks for specific factual information that likely depends on grounded source material or external facts rather than just the current slide wording.",
+        "Concrete factual questions about locations, countries, offices, dates, counts, certifications, customers, or legal/organizational facts should normally use grounded_factual when sources are available.",
         "Use responseMode=general_contextual for ordinary conceptual questions that should be answered from the current slide plus the broader deck context.",
         "Use responseMode=question only when you are unsure whether general_contextual or grounded_factual is the better route.",
       ].join("\n"),
@@ -7143,12 +7615,21 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       input.groundingSummary
         ? `Grounding summary: ${compactGroundingSummary(input.groundingSummary)}`
         : "No external grounding summary was provided.",
+      input.groundingExcerpts?.length
+        ? `Grounded source excerpts:\n${input.groundingExcerpts
+            .slice(0, 8)
+            .map((value) => `- ${value}`)
+            .join("\n")}`
+        : "No grounded source excerpts were provided.",
       input.revisionGuidance
         ? `Revision guidance from the previous weak draft: ${summarizeRevisionGuidance(input.revisionGuidance)}`
         : null,
       input.groundingSummary
         ? "Use the grounding summary as the factual source of truth. If details are sparse, stay generic rather than hallucinating."
         : "Avoid pretending to know current facts that were not provided.",
+      input.groundingExcerpts?.length
+        ? "Prefer concrete facts, named offerings, locations, examples, or operating details from the grounded source excerpts over broad marketing or value language."
+        : null,
       input.revisionGuidance
         ? "You are revising a weak prior draft. Fix the cited quality problems directly instead of rephrasing them."
         : null,

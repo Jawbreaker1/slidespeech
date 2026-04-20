@@ -1,8 +1,8 @@
 # SlideSpeech
 
-SlideSpeech is an MVP for an interactive AI presenter and AI teacher.
+SlideSpeech is an interactive AI presenter and AI teacher.
 
-The core idea is not "generate slides and stop there". The product is an orchestration runtime that can:
+The product is not "generate slides and stop there". It is an orchestration runtime that can:
 
 - turn a topic or source material into a teachable deck
 - present it step by step
@@ -11,31 +11,81 @@ The core idea is not "generate slides and stop there". The product is an orchest
 - adapt the teaching style
 - and resume from the right place
 
+The ambition is simple:
+
+- generate a usable presentation quickly
+- keep it grounded in real source material when grounding matters
+- present it like a teacher, not like a static slide deck
+- let the audience interrupt without breaking the flow
+
 The architecture is intentionally modular so LLM, vision, STT, TTS, VAD, storage, and research backends can be swapped without rewriting the core product logic.
 
-## Demo focus, temporary freeze, and current reality
+## What makes SlideSpeech interesting
 
-The project is temporarily shifting focus from deep generator work to end-to-end demo readiness.
-That does **not** mean presentation generation is solved.
+Most AI slide tools stop after deck generation.
+SlideSpeech treats generation as the first step in a longer teaching loop:
 
-Current reality:
+1. classify the prompt into a structured presentation intent
+2. build a grounded plan and deck
+3. present the material progressively
+4. classify interruptions and questions at runtime
+5. answer in context
+6. resume from the right point
 
-- presentation generation is still **not close to done**
-- the generator still relies on too many retries, repairs, and guarded fallback paths
-- opening-slide quality, deck-wide topic discipline, and narration consistency are still not reliable enough
-- generation latency is still too high for the final product shape
+That is the real product shape:
 
-What this temporary shift means:
+- a generation system
+- a presentation runtime
+- a conversational teaching layer on top
 
-- we will build and polish the full user flow needed for a demo
-- we will use a curated set of prompts that currently behave well enough
-- we will continue measuring generation quality during that work
-- we are **not** treating current generation as production-ready, general-purpose, or even broadly reliable yet
+## Classification and pipeline
 
-In other words: SlideSpeech may become demoable before its generation pipeline is truly good.
-That is acceptable for a POC, but it should not be mistaken for the generator being finished.
+Classification is central to the system.
+SlideSpeech tries to make explicit decisions early instead of relying on one giant prompt.
 
-## Generation pipeline
+At generation time, the system classifies things like:
+
+- `presentationFrame`
+  - `subject`
+  - `organization`
+  - `mixed`
+- `deliveryFormat`
+  - `presentation`
+  - `workshop`
+- `contentMode`
+  - `descriptive`
+  - `procedural`
+- whether live web grounding is required
+
+At runtime, the system classifies learner turns into a small number of response modes so it can build only the context it actually needs.
+
+### End-to-end product flow
+
+```mermaid
+flowchart TD
+    A["Prompt or source-aware request"] --> B["Intent classification"]
+    B --> C["Research planning"]
+    C --> D["Grounded evidence bundle"]
+    D --> E["Presentation plan"]
+    E --> F["Deck generation"]
+    F --> G["Slide enrichment and visuals"]
+    G --> H["Narration and review"]
+    H --> I["Interactive presenter runtime"]
+    I --> J["Learner interruption"]
+    J --> K["Turn classification"]
+    K --> L["Context-aware answer"]
+    L --> M["Resume from the right point"]
+```
+
+This is the core idea behind the codebase:
+
+- classify first
+- build the right context for that class of task
+- answer or generate once
+- validate locally
+- keep the runtime fast and recoverable
+
+## Current generation pipeline
 
 SlideSpeech is not meant to be "one prompt in, one static deck out".
 The product goal is a grounded teaching pipeline with two modes:
@@ -72,6 +122,28 @@ flowchart TD
 ```
 
 This is why SlideSpeech can already produce grounded, narration-aware decks, but also why generation can still take too long: several LLM-heavy stages are still serialized and guarded.
+
+## Demo focus, temporary freeze, and current reality
+
+The project is temporarily shifting focus from deep generator work to end-to-end demo readiness.
+That does **not** mean presentation generation is solved.
+
+Current reality:
+
+- presentation generation is still **not close to done**
+- the generator still relies on too many retries, repairs, and guarded fallback paths
+- opening-slide quality, deck-wide topic discipline, and narration consistency are still not reliable enough
+- generation latency is still too high for the final product shape
+
+What this temporary shift means:
+
+- we will build and polish the full user flow needed for a demo
+- we will use a curated set of prompts that currently behave well enough
+- we will continue measuring generation quality during that work
+- we are **not** treating current generation as production-ready, general-purpose, or even broadly reliable yet
+
+In other words: SlideSpeech may become demoable before its generation pipeline is truly good.
+That is acceptable for a POC, but it should not be mistaken for the generator being finished.
 
 ### Target pipeline
 

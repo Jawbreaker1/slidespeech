@@ -10,6 +10,7 @@ export interface BrowserSpeechToTextProvider {
   listenOnce(options?: {
     lang?: string;
     onStart?: () => void;
+    onSpeechStart?: () => void;
     onEnd?: () => void;
     onInterimResult?: (text: string) => void;
   }): Promise<BrowserSpeechToTextResult>;
@@ -49,6 +50,8 @@ interface SpeechRecognitionLike extends EventTarget {
   maxAlternatives: number;
   onstart: (() => void) | null;
   onend: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onsoundstart: (() => void) | null;
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
   onresult: ((event: SpeechRecognitionEventLike) => void) | null;
   start(): void;
@@ -125,6 +128,7 @@ class BrowserNativeSpeechToTextProvider implements BrowserSpeechToTextProvider {
   listenOnce(options?: {
     lang?: string;
     onStart?: () => void;
+    onSpeechStart?: () => void;
     onEnd?: () => void;
     onInterimResult?: (text: string) => void;
   }) {
@@ -145,10 +149,22 @@ class BrowserNativeSpeechToTextProvider implements BrowserSpeechToTextProvider {
       let settled = false;
       let finalText = "";
       let finalConfidence = 0.85;
+      let signaledSpeechStart = false;
+
+      const signalSpeechStart = () => {
+        if (signaledSpeechStart) {
+          return;
+        }
+
+        signaledSpeechStart = true;
+        options?.onSpeechStart?.();
+      };
 
       const cleanup = () => {
         recognition.onstart = null;
         recognition.onend = null;
+        recognition.onspeechstart = null;
+        recognition.onsoundstart = null;
         recognition.onerror = null;
         recognition.onresult = null;
         this.activeRecognition = null;
@@ -174,6 +190,14 @@ class BrowserNativeSpeechToTextProvider implements BrowserSpeechToTextProvider {
         options?.onStart?.();
       };
 
+      recognition.onspeechstart = () => {
+        signalSpeechStart();
+      };
+
+      recognition.onsoundstart = () => {
+        signalSpeechStart();
+      };
+
       recognition.onresult = (event) => {
         let interimText = "";
 
@@ -195,6 +219,8 @@ class BrowserNativeSpeechToTextProvider implements BrowserSpeechToTextProvider {
           if (!transcript) {
             continue;
           }
+
+          signalSpeechStart();
 
           if (result.isFinal) {
             finalText = normalizeTranscript(`${finalText} ${transcript}`);
