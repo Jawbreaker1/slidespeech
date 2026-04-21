@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { resolvePiperModelSelection } from "../packages/providers/src/tts/piper-tts-provider";
 
-test("prefers bryce-medium when no explicit piper model is configured", () => {
+test("falls back to an installed piper voice when the preferred default is missing", () => {
   const selection = resolvePiperModelSelection({});
 
   assert.equal(selection.modelPath, "models/tts/en_US-bryce-medium.onnx");

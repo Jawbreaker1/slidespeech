@@ -11,7 +11,7 @@ type VoiceAsset = {
 const PIPER_VOICE_RELEASE = "v1.0.0";
 const DEFAULT_MODEL_PATH =
   process.env.PIPER_TTS_MODEL_PATH?.trim() ||
-  "models/tts/en_US-bryce-medium.onnx";
+  "models/tts/en_US-hfc_male-medium.onnx";
 
 const PIPER_VOICE_ASSETS: Record<string, VoiceAsset> = {
   "en_US-bryce-medium.onnx": {
@@ -75,9 +75,10 @@ const main = async () => {
 
   const installQueue = [
     primaryVoice,
-    ...(primaryVoice.filename === "en_US-lessac-medium.onnx"
-      ? []
-      : [PIPER_VOICE_ASSETS["en_US-lessac-medium.onnx"]]),
+    ...[
+      PIPER_VOICE_ASSETS["en_US-bryce-medium.onnx"],
+      PIPER_VOICE_ASSETS["en_US-lessac-medium.onnx"],
+    ].filter((voice) => voice.filename !== primaryVoice.filename),
   ];
 
   const modelsDir = resolve("models/tts");

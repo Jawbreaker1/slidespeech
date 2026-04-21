@@ -14,10 +14,11 @@ import type {
 import { healthy, unhealthy } from "../shared";
 
 const DEFAULT_PYTHON_BIN = ".venv-tts/bin/python";
-const DEFAULT_MODEL_PATH = "models/tts/en_US-bryce-medium.onnx";
-const DEFAULT_CONFIG_PATH = "models/tts/en_US-bryce-medium.onnx.json";
+const DEFAULT_MODEL_PATH = "models/tts/en_US-hfc_male-medium.onnx";
+const DEFAULT_CONFIG_PATH = "models/tts/en_US-hfc_male-medium.onnx.json";
 const DEFAULT_SENTENCE_SILENCE_MS = 80;
 const FALLBACK_MODEL_CANDIDATES = [
+  "models/tts/en_US-hfc_male-medium.onnx",
   "models/tts/en_US-bryce-medium.onnx",
   "models/tts/en_US-lessac-high.onnx",
   "models/tts/en_US-lessac-medium.onnx",

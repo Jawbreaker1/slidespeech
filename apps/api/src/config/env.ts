@@ -34,10 +34,10 @@ const EnvSchema = z.object({
   PIPER_TTS_PYTHON_BIN: z.string().default(".venv-tts/bin/python"),
   PIPER_TTS_MODEL_PATH: z
     .string()
-    .default("models/tts/en_US-bryce-medium.onnx"),
+    .default("models/tts/en_US-hfc_male-medium.onnx"),
   PIPER_TTS_CONFIG_PATH: z
     .string()
-    .default("models/tts/en_US-bryce-medium.onnx.json"),
+    .default("models/tts/en_US-hfc_male-medium.onnx.json"),
   PIPER_TTS_SPEAKER_ID: z
     .string()
     .optional()
