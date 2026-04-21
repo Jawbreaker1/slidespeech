@@ -34,10 +34,10 @@ const EnvSchema = z.object({
   PIPER_TTS_PYTHON_BIN: z.string().default(".venv-tts/bin/python"),
   PIPER_TTS_MODEL_PATH: z
     .string()
-    .default("models/tts/en_US-lessac-medium.onnx"),
+    .default("models/tts/en_US-bryce-medium.onnx"),
   PIPER_TTS_CONFIG_PATH: z
     .string()
-    .default("models/tts/en_US-lessac-medium.onnx.json"),
+    .default("models/tts/en_US-bryce-medium.onnx.json"),
   PIPER_TTS_SPEAKER_ID: z
     .string()
     .optional()
@@ -46,7 +46,7 @@ const EnvSchema = z.object({
         ? undefined
         : Number.parseInt(value, 10),
     ),
-  PIPER_TTS_SENTENCE_SILENCE_MS: z.coerce.number().default(120),
+  PIPER_TTS_SENTENCE_SILENCE_MS: z.coerce.number().default(80),
   SYSTEM_TTS_VOICE: z.string().default("Daniel"),
   SYSTEM_TTS_RATE_WPM: z.coerce.number().default(180),
   STORAGE_ROOT: z.string().default("data"),

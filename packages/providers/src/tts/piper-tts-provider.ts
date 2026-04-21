@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import { join } from "node:path";
 import readline from "node:readline";
 
@@ -14,9 +14,14 @@ import type {
 import { healthy, unhealthy } from "../shared";
 
 const DEFAULT_PYTHON_BIN = ".venv-tts/bin/python";
-const DEFAULT_MODEL_PATH = "models/tts/en_US-lessac-medium.onnx";
-const DEFAULT_CONFIG_PATH = "models/tts/en_US-lessac-medium.onnx.json";
-const DEFAULT_SENTENCE_SILENCE_MS = 120;
+const DEFAULT_MODEL_PATH = "models/tts/en_US-bryce-medium.onnx";
+const DEFAULT_CONFIG_PATH = "models/tts/en_US-bryce-medium.onnx.json";
+const DEFAULT_SENTENCE_SILENCE_MS = 80;
+const FALLBACK_MODEL_CANDIDATES = [
+  "models/tts/en_US-bryce-medium.onnx",
+  "models/tts/en_US-lessac-high.onnx",
+  "models/tts/en_US-lessac-medium.onnx",
+] as const;
 const WORKER_PATH = join(
   process.cwd(),
   "packages/providers/src/tts/piper-tts-worker.py",
@@ -32,6 +37,11 @@ type WorkerResponse = {
   ok: boolean;
   payload?: Record<string, unknown>;
   error?: string;
+};
+
+type PiperModelSelection = {
+  modelPath: string;
+  configPath: string;
 };
 
 export interface PiperTTSProviderConfig {
@@ -59,6 +69,61 @@ const parseSpeakerOverride = (voice: string | undefined): number | undefined => 
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const buildConfigPathForModel = (modelPath: string): string => `${modelPath}.json`;
+
+const trimOrUndefined = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+export const resolvePiperModelSelection = (
+  config: PiperTTSProviderConfig,
+): PiperModelSelection => {
+  const configuredModelPath = trimOrUndefined(config.modelPath);
+  const configuredConfigPath = trimOrUndefined(config.configPath);
+  const candidates: PiperModelSelection[] = [];
+
+  if (configuredModelPath) {
+    candidates.push({
+      modelPath: configuredModelPath,
+      configPath:
+        configuredConfigPath ?? buildConfigPathForModel(configuredModelPath),
+    });
+  }
+
+  for (const modelPath of FALLBACK_MODEL_CANDIDATES) {
+    candidates.push({
+      modelPath,
+      configPath: buildConfigPathForModel(modelPath),
+    });
+  }
+
+  const preferredCandidate = candidates.find(
+    (candidate, index) =>
+      candidates.findIndex(
+        (otherCandidate) =>
+          otherCandidate.modelPath === candidate.modelPath &&
+          otherCandidate.configPath === candidate.configPath,
+      ) === index,
+  );
+
+  for (const candidate of candidates) {
+    if (
+      existsSync(candidate.modelPath) &&
+      existsSync(candidate.configPath)
+    ) {
+      return candidate;
+    }
+  }
+
+  return preferredCandidate ?? {
+    modelPath: configuredModelPath ?? DEFAULT_MODEL_PATH,
+    configPath:
+      configuredConfigPath ??
+      buildConfigPathForModel(configuredModelPath ?? DEFAULT_MODEL_PATH),
+  };
+};
+
 export class PiperTTSProvider implements TextToSpeechProvider {
   readonly name = "piper-tts";
 
@@ -68,7 +133,11 @@ export class PiperTTSProvider implements TextToSpeechProvider {
 
   private readonly pendingRequests = new Map<string, PendingRequest>();
 
-  constructor(private readonly config: PiperTTSProviderConfig) {}
+  private readonly resolvedModelSelection: PiperModelSelection;
+
+  constructor(private readonly config: PiperTTSProviderConfig) {
+    this.resolvedModelSelection = resolvePiperModelSelection(config);
+  }
 
   async healthCheck(): Promise<ProviderHealthStatus> {
     try {
@@ -127,11 +196,11 @@ export class PiperTTSProvider implements TextToSpeechProvider {
   }
 
   private modelPath(): string {
-    return this.config.modelPath?.trim() || DEFAULT_MODEL_PATH;
+    return this.resolvedModelSelection.modelPath;
   }
 
   private configPath(): string {
-    return this.config.configPath?.trim() || DEFAULT_CONFIG_PATH;
+    return this.resolvedModelSelection.configPath;
   }
 
   private sentenceSilenceMs(): number {
