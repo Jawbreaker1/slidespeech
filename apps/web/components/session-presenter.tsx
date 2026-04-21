@@ -244,7 +244,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [pendingUserTurn, setPendingUserTurn] = useState<string | null>(null);
   const [pendingPresentationStart, setPendingPresentationStart] = useState(false);
   const [showBlockingOverlay, setShowBlockingOverlay] = useState(false);
-  const [answerReadyNotice, setAnswerReadyNotice] =
+  const [latestAnswerNotice, setLatestAnswerNotice] =
     useState<AnswerReadyNotice | null>(null);
   const [isPending, startTransition] = useTransition();
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -643,27 +643,13 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     const timeoutId = window.setTimeout(() => {
-      setShowBlockingOverlay(true);
-    }, isBuildingAnswer ? 250 : 650);
+        setShowBlockingOverlay(true);
+    }, isBuildingAnswer ? 120 : 650);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
   }, [isBuildingAnswer, rawBlockingPresenterWork]);
-
-  useEffect(() => {
-    if (!answerReadyNotice) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setAnswerReadyNotice(null);
-    }, 2200);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [answerReadyNotice]);
 
   useEffect(() => {
     if (
@@ -876,7 +862,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     if (assistantMessage && answerLikeResponse) {
-      setAnswerReadyNotice({
+      setLatestAnswerNotice({
         question: options?.userText?.trim() || null,
         answer: assistantMessage,
       });
@@ -1021,6 +1007,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
             const transcriptText = result.transcript?.text.trim();
             if (transcriptText) {
+              setLatestAnswerNotice(null);
               setPendingUserTurn(transcriptText);
               setInteractionLog((previous) => [
                 ...previous,
@@ -1137,6 +1124,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         return;
       }
 
+      setLatestAnswerNotice(null);
       setPendingUserTurn(transcript.text);
       setInteractionLog((previous) => [
         ...previous,
@@ -1405,6 +1393,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         setIsInteracting(true);
         disarmLiveVoiceMode();
         stopActiveAudio();
+        setLatestAnswerNotice(null);
         setPendingUserTurn(userText);
         setInteractionLog((previous) => [
           ...previous,
@@ -1626,33 +1615,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                 </p>
               </div>
             ) : null}
-          </div>
-        </div>
-      ) : null}
-      {answerReadyNotice ? (
-        <div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-ink/38 px-6 backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-[30px] border border-emerald-300/20 bg-slate-950/92 px-6 py-6 shadow-2xl">
-            <div className="flex items-center gap-4">
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-400/20 text-lg text-emerald-200">
-                ✓
-              </span>
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-paper/55">
-                  Response generated
-                </p>
-                <p className="mt-1 text-xl font-semibold text-paper">
-                  Answer ready
-                </p>
-              </div>
-            </div>
-            {answerReadyNotice.question ? (
-              <p className="mt-4 text-sm leading-6 text-paper/68">
-                Question: “{answerReadyNotice.question}”
-              </p>
-            ) : null}
-            <p className="mt-3 text-base leading-7 text-paper/82">
-              {answerReadyNotice.answer}
-            </p>
           </div>
         </div>
       ) : null}
@@ -1972,12 +1934,30 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     </span>
                   </p>
                 </div>
-                {pendingUserTurn ? (
-                  <div className="mt-3 rounded-[18px] border border-sky-300/20 bg-sky-400/10 px-4 py-3 text-sm leading-6 text-paper">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/60">
-                      Generating answer for
+                {isBuildingAnswer ? (
+                  <div className="mt-3 rounded-[22px] border border-sky-300/20 bg-sky-400/10 px-4 py-4 text-paper shadow-[0_0_0_1px_rgba(125,211,252,0.06)]">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-paper/20 border-t-paper" />
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/60">
+                          Working
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-paper">
+                          Generating answer
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-paper/80">
+                      {workingOverlayMessage}
                     </p>
-                    <p className="mt-2">{pendingUserTurn}</p>
+                    {pendingUserTurn ? (
+                      <div className="mt-3 rounded-[16px] border border-white/10 bg-white/5 px-3 py-3 text-sm leading-6 text-paper/90">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/50">
+                          Current question
+                        </p>
+                        <p className="mt-2">{pendingUserTurn}</p>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {browserInterimTranscript ? (
@@ -2002,14 +1982,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     </p>
                   </div>
                 ) : null}
-                {isInteracting ? (
-                  <div className="mt-3 rounded-[18px] border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-paper">
-                    <div className="flex items-center gap-3">
-                      <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-paper/20 border-t-paper" />
-                      <span>Generating answer...</span>
-                    </div>
-                  </div>
-                ) : null}
                 <textarea
                   className="mt-4 min-h-28 w-full rounded-[22px] border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-paper outline-none placeholder:text-paper/35"
                   onChange={(event) => setCommandInput(event.target.value)}
@@ -2023,23 +1995,35 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     onClick={sendInteraction}
                     type="button"
                   >
-                    {isInteracting ? "Sending..." : "Send"}
+                    {isBuildingAnswer ? "Generating..." : "Send"}
                   </button>
                 </div>
-                {latestAssistantMessage ? (
-                  <div className="mt-4 rounded-[22px] bg-white/5 px-4 py-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/55">
-                      Latest assistant answer
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-paper/85">
-                      {latestAssistantMessage}
+                {latestAnswerNotice ? (
+                  <div className="mt-4 rounded-[22px] border border-emerald-300/20 bg-emerald-400/10 px-4 py-4">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/20 text-base text-emerald-100">
+                        ✓
+                      </span>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/55">
+                          Answer ready
+                        </p>
+                        {latestAnswerNotice.question ? (
+                          <p className="mt-1 text-sm leading-6 text-paper/70">
+                            Question: “{latestAnswerNotice.question}”
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-paper/90">
+                      {latestAnswerNotice.answer}
                     </p>
                     <button
                       className="mt-3 rounded-full border border-white/20 px-3 py-1.5 text-sm transition hover:border-white/40 disabled:opacity-50"
                       disabled={isSynthesizingSpeech}
                       onClick={() =>
                         void playSpeech({
-                          text: latestAssistantMessage,
+                          text: latestAnswerNotice.answer,
                           style: "answer",
                         })
                       }
@@ -2047,6 +2031,15 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
                     >
                       Speak last answer
                     </button>
+                  </div>
+                ) : latestAssistantMessage ? (
+                  <div className="mt-4 rounded-[22px] bg-white/5 px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/55">
+                      Latest assistant message
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-paper/85">
+                      {latestAssistantMessage}
+                    </p>
                   </div>
                 ) : null}
               </section>
