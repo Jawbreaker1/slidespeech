@@ -7,10 +7,12 @@
     "packages/*"
   ],
   "scripts": {
+    "predev": "npm run setup:tts",
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev --workspace @slidespeech/api\" \"npm run dev --workspace @slidespeech/web\"",
+    "predev:api": "npm run setup:tts",
     "dev:api": "npm run dev --workspace @slidespeech/api",
     "dev:web": "npm run dev --workspace @slidespeech/web",
-    "setup:tts": "tsx scripts/setup_piper_voices.ts",
+    "setup:tts": "node --import tsx scripts/setup_piper_voices.ts",
     "verify:api": "./scripts/verify_api_fixed_port.sh",
     "eval:decks": "tsx scripts/evaluate_decks.ts",
     "bench:structured": "tsx scripts/benchmark_structured_output.ts",
