@@ -424,13 +424,21 @@ npm install
 cp .env.example .env
 ```
 
-3. Start the app:
+3. If you want local Piper TTS, bootstrap the server-side voice assets:
+
+```bash
+npm run setup:tts
+```
+
+This installs the default Piper voice used by the backend, so every browser user of that backend hears the same narration without needing local browser TTS setup.
+
+4. Start the app:
 
 ```bash
 npm run dev
 ```
 
-4. Open:
+5. Open:
 
 - web: [http://localhost:3000](http://localhost:3000)
 - api: [http://localhost:4000](http://localhost:4000)
