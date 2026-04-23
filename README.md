@@ -20,6 +20,9 @@ The ambition is simple:
 
 The architecture is intentionally modular so LLM, vision, STT, TTS, VAD, storage, and research backends can be swapped without rewriting the core product logic.
 
+Active implementation tracking lives in [tasks.md](/Users/johanengwall/github_repos/slidespeech/tasks.md).
+This README is the product and status narrative, not the canonical task list.
+
 ## What makes SlideSpeech interesting
 
 Most AI slide tools stop after deck generation.
@@ -145,6 +148,17 @@ What this temporary shift means:
 In other words: SlideSpeech may become demoable before its generation pipeline is truly good.
 That is acceptable for a POC, but it should not be mistaken for the generator being finished.
 
+## Experimental note: Qwen3-TTS on Apple Silicon
+
+We tested `Qwen3-TTS` on Apple Silicon through an `MLX` runtime because voice quality was promising.
+On this Mac-based setup, that path was not stable enough to keep:
+
+- repeated Python crashes during `libmlx` / Metal device initialization
+- at least one kernel panic and full machine reboot during benchmarking
+
+For that reason, the local Mac workflow intentionally stays on `Piper` for now.
+If we revisit `Qwen3-TTS`, it should happen on a separate machine or with a different runtime stack rather than this current Apple Silicon + MLX combination.
+
 ### Target pipeline
 
 The target architecture is faster, cleaner, and more progressive.
@@ -263,6 +277,8 @@ This matters for multilingual support too:
 - it reduces the need for English-specific after-the-fact output repair
 
 ## Current status
+
+Active implementation tracking now lives in [tasks.md](/Users/johanengwall/github_repos/slidespeech/tasks.md). This README is a product/status narrative, not the canonical task list.
 
 Implemented now:
 
