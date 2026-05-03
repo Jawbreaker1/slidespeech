@@ -50,6 +50,75 @@ test("deck validation normalizes slide order and records validation metadata", (
   assert.ok((result.value.metadata.validation?.issues.length ?? 0) > 0);
 });
 
+test("deck validation repairs generic visual card titles from card content", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_generic_card_titles",
+    title: "System Verification overview",
+    topic: "System Verification",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "System Verification",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_generic_cards",
+        order: 0,
+        title: "System Verification",
+        learningGoal: "Understand how System Verification supports QA delivery.",
+        keyPoints: [
+          "System Verification integrates QA, AI-powered quality solutions, and advisory services to support software delivery.",
+          "Testing, automation, and risk review create evidence before release decisions.",
+          "Delivery support connects QA work to daily collaboration with product teams.",
+        ],
+        beginnerExplanation:
+          "System Verification helps teams connect QA work with practical release decisions.",
+        advancedExplanation:
+          "Its QA model combines advisory, automation, and delivery support around evidence-based software quality decisions.",
+        visuals: {
+          layoutTemplate: "two-column-callouts",
+          accentColor: "1C7C7D",
+          cards: [
+            {
+              id: "card_generic_1",
+              title: "Key idea 1",
+              body: "System Verification integrates QA, AI-powered quality solutions, and advisory services to support software delivery.",
+              tone: "accent",
+            },
+          ],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-05-03T10:00:00.000Z",
+    updatedAt: "2026-05-03T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const result = validateAndRepairDeck(deck);
+  const cardTitle = result.value.slides[0]?.visuals.cards[0]?.title ?? "";
+
+  assert.doesNotMatch(cardTitle, /key\s*(?:point|idea)\s*\d+/i);
+  assert.match(cardTitle, /System Verification integrates QA/i);
+  assert.equal(result.repaired, true);
+});
+
 test("narration validation reanchors narration that is not tied to the slide", () => {
   const deck = DeckSchema.parse({
     id: "deck_2",
@@ -201,6 +270,86 @@ test("narration validation rebuilds audience-facing narration without slide-meta
   assert.notEqual(narration, weakNarration.narration);
   assert.equal(repairedNarration.segments.length >= 4, true);
   assert.equal(narration.length > weakNarration.narration.length, true);
+});
+
+test("intro narration validation adds a presenter opening before the first content claim", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_intro_presenter_opening",
+    title: "AI tools at VGR",
+    topic: "AI tools in daily work",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "AI tools in daily work",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_intro_claim_first",
+        order: 0,
+        title: "AI tools in daily work",
+        learningGoal:
+          "See how AI tools can support daily protocol, meeting, and follow-up work.",
+        keyPoints: [
+          "AI drafts initial protocol structures based on meeting audio or notes, ensuring all key decisions and action items are captured.",
+          "A human review step keeps the protocol accurate before it is shared.",
+          "The workflow is useful only when sensitive details and policy boundaries are handled correctly.",
+        ],
+        beginnerExplanation:
+          "AI support starts with concrete administrative work such as notes, protocols, and follow-up lists.",
+        advancedExplanation:
+          "The useful pattern is draft, review, correct, and then decide what can be shared.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-27T08:00:00.000Z",
+    updatedAt: "2026-04-27T08:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 5,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const claimFirstNarration = SlideNarrationSchema.parse({
+    slideId: "slide_intro_claim_first",
+    narration:
+      "AI can turn meeting audio or notes into an initial protocol structure with decisions and action items. Human review keeps the protocol accurate before it is shared with others. The workflow is useful only when sensitive details and policy boundaries are handled correctly. That makes the first example concrete enough to anchor the rest of the talk.",
+    segments: [
+      "AI can turn meeting audio or notes into an initial protocol structure with decisions and action items.",
+      "Human review keeps the protocol accurate before it is shared with others.",
+      "The workflow is useful only when sensitive details and policy boundaries are handled correctly.",
+      "That makes the first example concrete enough to anchor the rest of the talk.",
+    ],
+    summaryLine: "Claim-first intro",
+    promptsForPauses: [],
+    suggestedTransition: "Continue.",
+  });
+
+  const result = validateAndRepairNarrations(deck, [claimFirstNarration], {
+    generateMissing: false,
+  });
+
+  const repaired = result.value[0];
+  assert.equal(result.repaired, true);
+  assert.match(repaired?.segments[0] ?? "", /^Welcome everyone\./);
+  assert.match(repaired?.narration ?? "", /AI tools in daily work/i);
 });
 
 test("repaired narration keeps transition metadata separate from played segments", () => {
@@ -486,8 +635,9 @@ test("well-anchored narration remains stable for Swedish slide content", () => {
   const goodNarration = SlideNarrationSchema.parse({
     slideId: "slide_sv_intro",
     narration:
-      "AI-stöd snabbar upp första utkast och planeringsanteckningar. I praktiken betyder det att teamet kan jämföra idéer snabbare innan någon låser en slutlig plan. Den viktiga gränsen är att människor fortfarande granskar vad som är korrekt och säkert att dela.",
+      "Välkomna. Vi börjar med att rama in AI-stöd i dagligt arbete så att resten av genomgången får en tydlig kontext. AI-stöd snabbar upp första utkast och planeringsanteckningar. I praktiken betyder det att teamet kan jämföra idéer snabbare innan någon låser en slutlig plan. Den viktiga gränsen är att människor fortfarande granskar vad som är korrekt och säkert att dela.",
     segments: [
+      "Välkomna. Vi börjar med att rama in AI-stöd i dagligt arbete så att resten av genomgången får en tydlig kontext.",
       "AI-stöd snabbar upp första utkast och planeringsanteckningar.",
       "I praktiken betyder det att teamet kan jämföra idéer snabbare innan någon låser en slutlig plan.",
       "Den viktiga gränsen är att människor fortfarande granskar vad som är korrekt och säkert att dela.",

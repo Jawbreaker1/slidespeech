@@ -65,17 +65,6 @@ const hashString = (value: string) => {
   return hash;
 };
 
-const shorten = (value: string, maxLength: number) =>
-  value.length <= maxLength ? value : `${value.slice(0, maxLength - 1).trimEnd()}…`;
-
-const escapeXml = (value: string) =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-
 const encodeSvg = (svg: string) =>
   `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 

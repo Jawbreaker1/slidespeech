@@ -45,6 +45,31 @@ test("explicit web research override wins over heuristic", () => {
   );
 });
 
+test("explicitly disabled web research does not require grounding for heuristic entity topics", () => {
+  const plan = buildResearchPlan({
+    topic: "Create a concise 4-slide presentation about why API startup validation matters for demos.",
+    requestedUseWebResearch: false,
+  });
+
+  assert.equal(plan.requiresGroundedFacts, false);
+  assert.equal(
+    shouldUseWebResearchForTopic({
+      topic: "Create a concise 4-slide presentation about why API startup validation matters for demos.",
+      requestedUseWebResearch: false,
+    }),
+    false,
+  );
+});
+
+test("explicit source urls still require grounding when web research is disabled", () => {
+  const plan = buildResearchPlan({
+    topic: "Create a company presentation. Use https://www.systemverification.com/ for grounding.",
+    requestedUseWebResearch: false,
+  });
+
+  assert.equal(plan.requiresGroundedFacts, true);
+});
+
 test("extracts and normalizes explicit source urls from the topic prompt", () => {
   assert.deepEqual(
     extractExplicitSourceUrls(
@@ -147,6 +172,18 @@ test("builds guessed official urls for compact brand prompts", () => {
       "https://www.volvo.com/",
       "https://volvo.com/",
       "https://www.volvocars.com/",
+      "https://www.volvocars.com/intl/",
+    ],
+  );
+});
+
+test("builds direct site guesses for car-brand subjects without duplicated cars suffixes", () => {
+  assert.deepEqual(
+    buildGuessedOfficialUrls("Volvo Cars"),
+    [
+      "https://www.volvocars.com/",
+      "https://volvocars.com/",
+      "https://www.volvocars.com/intl/",
     ],
   );
 });
@@ -161,6 +198,28 @@ test("builds a research plan with direct urls and targeted queries", () => {
   assert.ok(plan.directUrls.includes("https://www.systemverification.com/"));
   assert.ok(plan.searchQueries.some((query) => /official/i.test(query)));
   assert.ok(plan.coverageGoals.length >= 2);
+});
+
+test("buildResearchPlan preserves multiple explicit urls for direct grounding", () => {
+  const plan = buildResearchPlan({
+    topic: "Create an onboarding presentation about our company. Use https://www.systemverification.com/ and https://www.systemverification.com/about-us for grounding.",
+  });
+
+  assert.ok(plan.directUrls.includes("https://www.systemverification.com/"));
+  assert.ok(plan.directUrls.includes("https://www.systemverification.com/about-us"));
+});
+
+test("buildResearchPlan does not leak google instructions into search queries", () => {
+  const plan = buildResearchPlan({
+    topic:
+      "Create a short presentation about the Corrupted Blood incident in World of Warcraft. Use Google for additional information.",
+  });
+
+  assert.equal(
+    plan.searchQueries.some((query) => /\buse google\b|\badditional information\b/i.test(query)),
+    false,
+  );
+  assert.ok(plan.searchQueries.some((query) => /corrupted blood/i.test(query)));
 });
 
 test("builds organization-focused coverage goals for company-overview prompts", () => {

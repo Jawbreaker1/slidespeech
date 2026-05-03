@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import {
   resolvePresentationTheme,
   type PresentationTheme,
@@ -11,6 +13,7 @@ import {
 interface VisualSlideCanvasProps {
   slide: Slide;
   compact?: boolean;
+  thumbnail?: boolean;
   dark?: boolean;
   theme?: PresentationTheme | undefined;
   illustrationAsset?: SlideIllustrationAsset | undefined;
@@ -44,6 +47,27 @@ const normalizeComparableText = (value: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const GENERIC_CARD_TITLE_PATTERN =
+  /^(?:key\s*(?:point|idea)|point|main\s*idea)\s*\d+$/i;
+
+const deriveCardTitle = (card: SlideVisualCard): string => {
+  if (card.title.trim() && !GENERIC_CARD_TITLE_PATTERN.test(card.title.trim())) {
+    return card.title;
+  }
+
+  const source = card.body.replace(/\s+/g, " ").trim();
+  const title = source
+    .replace(/^[^\p{L}\p{N}]+/gu, "")
+    .replace(/\b(?:which|that|where|who|whose)\b.*$/i, "")
+    .replace(/[.,:!?]+$/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(" ");
+
+  return title || "Main idea";
+};
 
 const shouldRenderIllustration = (
   illustrationAsset: SlideIllustrationAsset | undefined,
@@ -269,19 +293,23 @@ const renderCard = (
   dark: boolean,
   compact: boolean,
   theme: PresentationTheme,
-) => (
-  <div
-    className={`rounded-[20px] border p-3 ${toneToSurface(card.tone, dark, theme)}`}
-    key={card.id}
-  >
-    <p className={`font-semibold tracking-[-0.01em] ${compact ? "text-sm" : "text-[15px]"}`}>
-      {card.title}
-    </p>
-    <p className={`mt-2 leading-6 ${compact ? "text-xs" : "text-sm"}`}>
-      {card.body}
-    </p>
-  </div>
-);
+) => {
+  const title = deriveCardTitle(card);
+
+  return (
+    <div
+      className={`rounded-[20px] border p-3 ${toneToSurface(card.tone, dark, theme)}`}
+      key={card.id}
+    >
+      <p className={`font-semibold tracking-[-0.01em] ${compact ? "text-sm" : "text-[15px]"}`}>
+        {title}
+      </p>
+      <p className={`mt-2 leading-6 ${compact ? "text-xs" : "text-sm"}`}>
+        {card.body}
+      </p>
+    </div>
+  );
+};
 
 const renderCallout = (
   callout: SlideCallout,
@@ -412,13 +440,246 @@ const renderIllustrationFrame = (input: {
   </div>
 );
 
-export const VisualSlideCanvas = ({
+const renderThumbnailCard = (
+  card: SlideVisualCard,
+  dark: boolean,
+  theme: PresentationTheme,
+) => (
+  <div
+    className={`min-h-0 rounded-[14px] border px-2 py-1.5 ${toneToSurface(card.tone, dark, theme)}`}
+    key={card.id}
+  >
+    <p className="line-clamp-2 text-[10px] font-semibold leading-tight tracking-[-0.01em]">
+      {deriveCardTitle(card)}
+    </p>
+    <p className="mt-1 line-clamp-2 text-[9px] leading-snug opacity-75">
+      {card.body}
+    </p>
+  </div>
+);
+
+const renderThumbnailFallbackPanel = (
+  slide: Slide,
+  dark: boolean,
+  theme: PresentationTheme,
+) => (
+  <div
+    className={`min-h-0 rounded-[14px] border px-2 py-2 ${
+      dark
+        ? "border-white/10 bg-white/7 text-white/78"
+        : theme === "editorial"
+          ? "border-[#e6d7c3] bg-[#fffaf2] text-[#3b2d20]"
+          : "border-slate-200 bg-white text-slate-700"
+    }`}
+  >
+    <p className="text-[8px] font-semibold uppercase tracking-[0.16em] opacity-55">
+      Main point
+    </p>
+    <p className="mt-1 line-clamp-4 text-[10px] font-semibold leading-snug">
+      {slide.keyPoints[0] ?? slide.learningGoal}
+    </p>
+  </div>
+);
+
+const renderThumbnailImage = (input: {
+  illustration: SlideIllustrationAsset | null;
+  slide: Slide;
+  dark: boolean;
+  theme: PresentationTheme;
+  accent: string;
+}) => {
+  if (!input.illustration) {
+    return renderThumbnailFallbackPanel(input.slide, input.dark, input.theme);
+  }
+
+  return (
+    <div
+      className={`min-h-0 overflow-hidden rounded-[14px] border p-1 ${
+        input.dark
+          ? "border-white/10 bg-white/7"
+          : input.theme === "editorial"
+            ? "border-[#e6d7c3] bg-[#fffaf2]"
+            : "border-slate-200 bg-white"
+      }`}
+    >
+      <img
+        alt={input.illustration.altText ?? input.slide.title}
+        className={`h-full w-full rounded-[10px] ${
+          input.illustration.sourceImageUrl ? "object-contain" : "object-cover"
+        }`}
+        src={input.illustration.dataUri}
+      />
+    </div>
+  );
+};
+
+const renderThumbnailCanvas = (input: {
+  slide: Slide;
+  visuals: Slide["visuals"];
+  nodes: Array<{ id: string; label: string; tone: SlideVisualTone }>;
+  audienceCallouts: SlideCallout[];
+  illustration: SlideIllustrationAsset | null;
+  accent: string;
+  dark: boolean;
+  theme: PresentationTheme;
+  themeStyles: ReturnType<typeof getCanvasThemeStyles>;
+  headingText: string;
+}) => {
+  const header = (
+    <div className="flex min-h-0 items-start justify-between gap-2">
+      <div className="min-w-0">
+        <p
+          className={`truncate text-[8px] font-semibold uppercase tracking-[0.18em] ${input.themeStyles.eyebrowClass}`}
+        >
+          {input.visuals.eyebrow ?? input.slide.learningGoal}
+        </p>
+        <p className="mt-1 line-clamp-2 text-[13px] font-semibold leading-tight tracking-[-0.02em]">
+          {input.headingText}
+        </p>
+      </div>
+      <span
+        className="shrink-0 rounded-full px-2 py-0.5 text-[8px] font-semibold"
+        style={{
+          backgroundColor: `${input.accent}22`,
+          color: input.themeStyles.badgeTextColor,
+        }}
+      >
+        {templateBadgeLabel(input.visuals.layoutTemplate)}
+      </span>
+    </div>
+  );
+
+  const firstCallout = input.audienceCallouts[0];
+  const sidePanel = firstCallout ? (
+    <div
+      className={`min-h-0 rounded-[14px] border px-2 py-2 ${toneToSurface(
+        firstCallout.tone,
+        input.dark,
+        input.theme,
+      )}`}
+    >
+      <p className="truncate text-[8px] font-semibold uppercase tracking-[0.16em] opacity-60">
+        {firstCallout.label}
+      </p>
+      <p className="mt-1 line-clamp-4 text-[10px] font-semibold leading-snug">
+        {firstCallout.text}
+      </p>
+    </div>
+  ) : (
+    renderThumbnailImage(input)
+  );
+
+  const cards = input.visuals.cards.slice(0, 3);
+
+  if (input.visuals.layoutTemplate === "three-step-flow") {
+    return (
+      <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
+        {header}
+        <div className="grid min-h-0 grid-cols-[minmax(0,1.2fr)_minmax(0,0.75fr)] gap-2">
+          <div className="grid min-h-0 grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1">
+            {input.nodes.slice(0, 3).map((node, index) => (
+              <div className="contents" key={node.id}>
+                <div
+                  className={`min-h-0 rounded-[13px] border px-2 py-2 text-center ${toneToSurface(
+                    node.tone,
+                    input.dark,
+                    input.theme,
+                  )}`}
+                >
+                  <p className="line-clamp-3 text-[10px] font-semibold leading-tight">
+                    {node.label}
+                  </p>
+                </div>
+                {index < Math.min(input.nodes.length, 3) - 1 ? (
+                  <span
+                    className={`text-center text-sm font-semibold ${
+                      input.dark ? "text-white/45" : "text-slate-400"
+                    }`}
+                  >
+                    →
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          {sidePanel}
+        </div>
+      </div>
+    );
+  }
+
+  if (input.visuals.layoutTemplate === "hero-focus") {
+    return (
+      <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
+        {header}
+        <div className="grid min-h-0 grid-cols-[minmax(0,1.1fr)_minmax(0,0.8fr)] gap-2">
+          <div className="grid min-h-0 gap-2">
+            <div
+              className={`min-h-0 rounded-[16px] border px-2.5 py-2 ${
+                input.dark
+                  ? "border-white/10 bg-white/7 text-white"
+                  : input.theme === "editorial"
+                    ? "border-[#e6d7c3] bg-[#fffaf2] text-[#3b2d20]"
+                    : "border-slate-200 bg-white text-slate-900"
+              }`}
+              style={{ backgroundImage: `linear-gradient(135deg, ${input.accent}15 0%, transparent 58%)` }}
+            >
+              <p className="line-clamp-3 text-[11px] font-semibold leading-tight tracking-[-0.02em]">
+                {input.slide.beginnerExplanation || input.slide.learningGoal}
+              </p>
+            </div>
+            <div className="grid min-h-0 grid-cols-2 gap-2">
+              {cards.slice(0, 2).map((card) =>
+                renderThumbnailCard(card, input.dark, input.theme),
+              )}
+            </div>
+          </div>
+          {renderThumbnailImage(input)}
+        </div>
+      </div>
+    );
+  }
+
+  if (input.visuals.layoutTemplate === "summary-board") {
+    return (
+      <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
+        {header}
+        <div className="grid min-h-0 grid-cols-[minmax(0,1.2fr)_minmax(0,0.75fr)] gap-2">
+          <div className="grid min-h-0 grid-cols-2 gap-2">
+            {cards.slice(0, 3).map((card) =>
+              renderThumbnailCard(card, input.dark, input.theme),
+            )}
+            {cards.length < 2 ? renderThumbnailFallbackPanel(input.slide, input.dark, input.theme) : null}
+          </div>
+          {sidePanel}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
+      {header}
+      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_minmax(0,0.78fr)] gap-2">
+        <div className="grid min-h-0 gap-2">
+          {cards.slice(0, 2).map((card) =>
+            renderThumbnailCard(card, input.dark, input.theme),
+          )}
+        </div>
+        {renderThumbnailImage(input)}
+      </div>
+    </div>
+  );
+};
+
+export const VisualSlideCanvas = memo(function VisualSlideCanvas({
   slide,
   compact = false,
+  thumbnail = false,
   dark = false,
   theme,
   illustrationAsset,
-}: VisualSlideCanvasProps) => {
+}: VisualSlideCanvasProps) {
   const visuals = slide.visuals;
   const accent = normalizeAccent(visuals.accentColor);
   const resolvedTheme = resolvePresentationTheme(theme);
@@ -430,12 +691,36 @@ export const VisualSlideCanvas = ({
       ? visuals.diagramNodes
       : visuals.cards.slice(0, 3).map((card, index) => ({
           id: `${slide.id}-node-${index + 1}`,
-          label: card.title,
+          label: deriveCardTitle(card),
           tone: card.tone,
         }));
   const audienceCallouts = buildAudienceCallouts(slide);
   const keyPointChips = slide.keyPoints.slice(0, compact ? 2 : 3);
   const headingText = visuals.heroStatement ?? slide.learningGoal;
+
+  if (thumbnail) {
+    return (
+      <div
+        className={`h-full overflow-hidden rounded-[20px] border p-3 ${themeStyles.baseSurface}`}
+        style={{
+          backgroundImage: themeStyles.backgroundImage,
+        }}
+      >
+        {renderThumbnailCanvas({
+          slide,
+          visuals,
+          nodes,
+          audienceCallouts,
+          illustration,
+          accent,
+          dark,
+          theme: resolvedTheme,
+          themeStyles,
+          headingText,
+        })}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -645,4 +930,4 @@ export const VisualSlideCanvas = ({
       ) : null}
     </div>
   );
-};
+});

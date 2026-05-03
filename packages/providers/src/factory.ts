@@ -226,7 +226,6 @@ export const createTextToSpeechProvider = (
         defaultRateWpm:
           config.systemTtsRateWpm || SYSTEM_TTS_DEFAULTS.defaultRateWpm,
       });
-    case "piper":
     case "hosted":
     case "mock":
     default:

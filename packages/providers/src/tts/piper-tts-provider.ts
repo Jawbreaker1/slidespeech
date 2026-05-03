@@ -24,8 +24,8 @@ const FALLBACK_MODEL_CANDIDATES = [
   "models/tts/en_US-lessac-medium.onnx",
 ] as const;
 const WORKER_PATH = join(
-  process.cwd(),
-  "packages/providers/src/tts/piper-tts-worker.py",
+  __dirname,
+  "piper-tts-worker.py",
 );
 
 type PendingRequest = {

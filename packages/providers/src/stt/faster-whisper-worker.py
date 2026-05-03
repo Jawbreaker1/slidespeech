@@ -21,7 +21,7 @@ def main():
     model_name = sys.argv[1]
     compute_type = sys.argv[2] if len(sys.argv) > 2 else "int8"
     beam_size = int(sys.argv[3]) if len(sys.argv) > 3 else 3
-    language = sys.argv[4] if len(sys.argv) > 4 else "en"
+    language = sys.argv[4] if len(sys.argv) > 4 else "auto"
 
     model = WhisperModel(model_name, compute_type=compute_type)
 
@@ -56,13 +56,19 @@ def main():
             if not audio_file.exists():
                 raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
+            transcribe_kwargs = {
+                "beam_size": beam_size,
+                "vad_filter": False,
+                "word_timestamps": False,
+                "condition_on_previous_text": False,
+            }
+
+            if language and language != "auto":
+                transcribe_kwargs["language"] = language
+
             segments, info = model.transcribe(
                 str(audio_file),
-                beam_size=beam_size,
-                language=language,
-                vad_filter=False,
-                word_timestamps=False,
-                condition_on_previous_text=False,
+                **transcribe_kwargs,
             )
 
             text = " ".join(segment.text.strip() for segment in segments).strip()
@@ -76,7 +82,11 @@ def main():
                 "text": text,
                 "confidence": max(0.0, min(confidence, 1.0)),
                 "isFinal": True,
-                "language": getattr(info, "language", language),
+                "language": getattr(
+                    info,
+                    "language",
+                    None if not language or language == "auto" else language,
+                ),
             }
             print(json.dumps(make_response(request_id, True, payload)), flush=True)
         except Exception as error:

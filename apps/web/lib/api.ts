@@ -2,6 +2,7 @@ import type {
   DeletePresentationResponse,
   GeneratePresentationResponse,
   GeneratePresentationRequest,
+  PresentationTheme,
   ListSavedPresentationsResponse,
   NarrationProgressResponse,
   PresentationGenerationJobStatusResponse,
@@ -41,6 +42,7 @@ export const generatePresentation = async (
     useWebResearch?: boolean;
     targetDurationMinutes?: number;
     targetSlideCount?: number;
+    theme?: PresentationTheme;
   },
 ): Promise<GeneratePresentationResponse> => {
   const response = await fetch(`${API_BASE_URL}/api/presentations/generate`, {
@@ -67,6 +69,7 @@ const buildGeneratePresentationPayload = (
     useWebResearch?: boolean;
     targetDurationMinutes?: number;
     targetSlideCount?: number;
+    theme?: PresentationTheme;
   },
 ): GeneratePresentationRequest => ({
   topic,
@@ -79,6 +82,7 @@ const buildGeneratePresentationPayload = (
   ...(options?.targetSlideCount !== undefined
     ? { targetSlideCount: options.targetSlideCount }
     : {}),
+  ...(options?.theme !== undefined ? { theme: options.theme } : {}),
 });
 
 export const enqueuePresentationGeneration = async (
@@ -87,6 +91,7 @@ export const enqueuePresentationGeneration = async (
     useWebResearch?: boolean;
     targetDurationMinutes?: number;
     targetSlideCount?: number;
+    theme?: PresentationTheme;
   },
 ): Promise<PresentationGenerationJobStatusResponse> => {
   const response = await fetch(`${API_BASE_URL}/api/presentations/generate-jobs`, {

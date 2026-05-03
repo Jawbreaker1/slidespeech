@@ -21,6 +21,19 @@ const normalizeIntentSentence = (sentence: string): string => {
   return trimmed;
 };
 
+const stripLeadingResearchInstructionClause = (value: string): string =>
+  value
+    .replace(
+      /^(?:googla|google|search(?:\s+for)?|look\s+up)\b[^.?!]*?\band\s+(?=(?:create|make|build|generate|write|prepare|present)\b)/i,
+      "",
+    )
+    .replace(
+      /^(?:please\s+)?(?:googla|google|search(?:\s+for)?|look\s+up)\b[^.?!]*?(?=(?:create|make|build|generate|write|prepare|present)\b)/i,
+      "",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+
 const GENERIC_COMPANY_REFERENCE_PATTERN =
   /\b(?:our|my|the)\s+(?:company|organisation|organization|business|employer|client)\b/i;
 
@@ -75,6 +88,22 @@ const deriveFocusAnchor = (input: {
   }
 
   return undefined;
+};
+
+const extractLeadingResearchInstructionSubject = (topic: string): string | undefined => {
+  const match = topic.match(
+    /^(?:please\s+)?(?:googla|google|search(?:\s+for)?|look\s+up)\s+(?:information\s+about\s+|about\s+)?(.+?)\s+and\s+(?=(?:create|make|build|generate|write|prepare|present)\b)/i,
+  );
+  const candidate = match?.[1]
+    ?.replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.,;:!?]+$/g, "");
+
+  if (!candidate || candidate.length < 2) {
+    return undefined;
+  }
+
+  return normalizePresentationSubject(candidate);
 };
 
 const inferPresentationFrame = (input: {
@@ -261,12 +290,22 @@ export const extractExplicitSourceUrls = (topic: string): string[] => {
 export const stripExplicitSourceUrls = (topic: string): string =>
   topic.replace(EXPLICIT_URL_PATTERN, " ").replace(/\s+/g, " ").trim();
 
-const stripInstructionalSuffixes = (value: string): string =>
+export const stripInstructionalSuffixes = (value: string): string =>
   value
+    .replace(
+      /^(?:googla|google|search(?:\s+for)?|look\s+up)\b[^.?!]*?\band\s+(?=(?:create|make|build|generate|write|prepare|present)\b)/i,
+      "",
+    )
+    .replace(
+      /^(?:please\s+)?(?:googla|google|search(?:\s+for)?|look\s+up)\b[^.?!]*?(?=(?:create|make|build|generate|write|prepare|present)\b)/i,
+      "",
+    )
     .replace(/\bmore information is available at\b.*$/i, " ")
     .replace(/\bmore info\b.*$/i, " ")
     .replace(/\bfor additional information\b.*$/i, " ")
     .replace(/\buse google\b.*$/i, " ")
+    .replace(/\bgoogla\b.*$/i, " ")
+    .replace(/\bgoogle for additional information\b.*$/i, " ")
     .replace(/\buse [^.?!]*\bfor additional information\b.*$/i, " ")
     .replace(/\bsee also\b.*$/i, " ")
     .replace(/\s+/g, " ")
@@ -277,7 +316,7 @@ export const extractPresentationBrief = (topic: string): string => {
   const stripped = stripInstructionalSuffixes(stripExplicitSourceUrls(topic) || topic.trim());
   const normalizedSentences = splitIntoSentences(stripped)
     .map((sentence) =>
-      sentence
+      stripLeadingResearchInstructionClause(sentence)
         .replace(/^(create|make|build|generate|write|prepare|present)\b/gi, " ")
         .replace(/\s+/g, " ")
         .trim()
@@ -293,13 +332,31 @@ export const extractPresentationBrief = (topic: string): string => {
 export const extractPresentationSubject = (topic: string): string => {
   const cleaned = extractPresentationBrief(topic);
   const firstSentence = splitIntoSentences(cleaned)[0] ?? cleaned;
+  const audiencePresentationSubjectMatch = firstSentence.match(
+    /^(?:a\s+|an\s+)?(?:workshop\s+)?presentation\s+for\s+.+?\s+(in\s+using|using|about|on)\s+(.+)$/i,
+  );
+  const presentationExplainingSubjectMatch = firstSentence.match(
+    /^(?:a\s+|an\s+)?(?:short\s+)?presentation\s+(?:explaining|describing|showing|teaching)\s+(.+?)(?:\s+\bfor\b.+)?$/i,
+  );
+  const overviewSubjectMatch = firstSentence.match(
+    /^(?:\d+\s*-\s*slide\s+)?(?:onboarding\s+|introductory\s+)?(?:overview|introduction|intro)\s+of\s+(.+?)(?:\s+\bfor\b.+)?$/i,
+  );
   const aboutMatch = cleaned.match(
     /\b(?:about|on|regarding)\s+(.+?)(?:$|[.,;:!?]|\s+\bfor\b|\s+\busing\b|\s+\bwith\b)/i,
   );
   const howMatch = cleaned.match(
     /\b(?:explain|describe|show|teach|understand|walk me through)\s+(.+?)(?:,\s+and\s+(?:it\s+must|the presentation should)\b|$)/i,
   );
-  const candidate = aboutMatch?.[1] ?? howMatch?.[1] ?? firstSentence;
+  const candidate =
+    audiencePresentationSubjectMatch?.[1] && audiencePresentationSubjectMatch[2]
+      ? /using/i.test(audiencePresentationSubjectMatch[1])
+        ? `Using ${audiencePresentationSubjectMatch[2]}`
+        : audiencePresentationSubjectMatch[2]
+      : presentationExplainingSubjectMatch?.[1]
+        ? presentationExplainingSubjectMatch[1]
+      : overviewSubjectMatch?.[1]
+        ? overviewSubjectMatch[1]
+      : aboutMatch?.[1] ?? howMatch?.[1] ?? firstSentence;
 
   return normalizePresentationSubject(
     candidate
@@ -382,6 +439,7 @@ const extractAudienceCues = (brief: string): string[] => {
 
   const start = forIndex + 5;
   const boundaries = [
+    " in using ",
     " that ",
     " which ",
     " who ",
@@ -526,6 +584,7 @@ const extractActivityRequirement = (
 export const derivePresentationIntent = (topic: string): PresentationIntent => {
   const explicitSourceUrls = extractExplicitSourceUrls(topic);
   const brief = extractPresentationBrief(topic);
+  const leadingResearchInstructionSubject = extractLeadingResearchInstructionSubject(topic);
   const extractedSubject = extractPresentationSubject(topic) || brief || topic.trim();
   const coverageRequirements = extractCoverageRequirements(topic);
   const audienceCues = extractAudienceCues(brief);
@@ -539,6 +598,11 @@ export const derivePresentationIntent = (topic: string): PresentationIntent => {
   });
   const organization =
     explicitOrganization ??
+    (presentationFrame === "organization" &&
+    leadingResearchInstructionSubject &&
+    !subjectIsGenericEntityReference(leadingResearchInstructionSubject)
+      ? leadingResearchInstructionSubject
+      : undefined) ??
     (presentationFrame === "organization" &&
     extractedSubject.length >= 2 &&
     !subjectIsGenericEntityReference(extractedSubject)

@@ -1,7 +1,30 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
-loadDotEnv({ path: ".env" });
+const findDotEnv = (startDirectory: string): string | undefined => {
+  let currentDirectory = startDirectory;
+
+  while (true) {
+    const candidate = join(currentDirectory, ".env");
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+
+    const parentDirectory = dirname(currentDirectory);
+    if (parentDirectory === currentDirectory) {
+      return undefined;
+    }
+
+    currentDirectory = parentDirectory;
+  }
+};
+
+const dotEnvPath = findDotEnv(process.cwd());
+export const envRoot = dotEnvPath ? dirname(dotEnvPath) : process.cwd();
+loadDotEnv(dotEnvPath ? { path: dotEnvPath } : undefined);
 
 const EnvSchema = z.object({
   API_PORT: z.coerce.number().default(4000),
@@ -27,10 +50,10 @@ const EnvSchema = z.object({
   WEB_RESEARCH_TIMEOUT_MS: z.coerce.number().default(15000),
   VOICE_MAX_AUDIO_BYTES: z.coerce.number().default(5_000_000),
   FASTER_WHISPER_PYTHON_BIN: z.string().default(".venv-stt/bin/python"),
-  FASTER_WHISPER_MODEL: z.string().default("base.en"),
+  FASTER_WHISPER_MODEL: z.string().default("base"),
   FASTER_WHISPER_COMPUTE_TYPE: z.string().default("int8"),
   FASTER_WHISPER_BEAM_SIZE: z.coerce.number().default(3),
-  FASTER_WHISPER_LANGUAGE: z.string().default("en"),
+  FASTER_WHISPER_LANGUAGE: z.string().default("auto"),
   PIPER_TTS_PYTHON_BIN: z.string().default(".venv-tts/bin/python"),
   PIPER_TTS_MODEL_PATH: z
     .string()

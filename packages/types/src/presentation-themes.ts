@@ -4,7 +4,49 @@ export const PRESENTATION_THEME_IDS = [
   "signal",
 ] as const;
 
-type PresentationThemeId = (typeof PRESENTATION_THEME_IDS)[number];
+export type PresentationThemeId = (typeof PRESENTATION_THEME_IDS)[number];
+
+export const PRESENTATION_THEME_OPTIONS: Array<{
+  id: PresentationThemeId;
+  label: string;
+  description: string;
+  preview: {
+    background: string;
+    accent: string;
+    text: string;
+  };
+}> = [
+  {
+    id: "paper",
+    label: "Paper",
+    description: "Clean, neutral and presentation-safe.",
+    preview: {
+      background: "#F8FAFC",
+      accent: "#1C7C7D",
+      text: "#0F172A",
+    },
+  },
+  {
+    id: "editorial",
+    label: "Editorial",
+    description: "Warm, magazine-like and more distinctive.",
+    preview: {
+      background: "#FAF4EA",
+      accent: "#B7791F",
+      text: "#20180F",
+    },
+  },
+  {
+    id: "signal",
+    label: "Signal",
+    description: "Crisp, technical and high-contrast.",
+    preview: {
+      background: "#EFF6FF",
+      accent: "#0284C7",
+      text: "#0F172A",
+    },
+  },
+];
 
 const hashSeed = (value: string) => {
   let hash = 0;

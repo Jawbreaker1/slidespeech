@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildDiscoveredKnowledgeUrls,
   buildGuessedKnowledgeUrls,
   buildExplicitSourceFallbackQuery,
+  buildSupportingExplicitSourceUrls,
   sanitizeFetchedFinding,
 } from "../apps/api/src/services/web-research-service";
 
@@ -51,6 +53,20 @@ test("sanitizeFetchedFinding drops low-signal Q&A pages for specialized research
   assert.equal(finding, null);
 });
 
+test("sanitizeFetchedFinding drops answers.com maintenance pages for entity research", () => {
+  const finding = sanitizeFetchedFinding(
+    "Volvo Cars official",
+    {
+      url: "https://www.answers.com/european-cars/How_do_you_replace_a_fuel_pump_on_a_Volvo_s80",
+      title: "How do you replace a fuel pump on a Volvo s80? - Answers",
+      content:
+        "To replace the fuel pump on a Volvo S80, first disconnect the battery and relieve fuel system pressure. The 2015 Volvo S80 runs on regular unleaded.",
+    },
+  );
+
+  assert.equal(finding, null);
+});
+
 test("sanitizeFetchedFinding keeps informative explicit-source organization content with relaxed matching", () => {
   const finding = sanitizeFetchedFinding(
     "Using AI tools in daily work",
@@ -87,6 +103,26 @@ test("sanitizeFetchedFinding keeps trusted explicit-source content even when the
   assert.match(finding.content, /hälso- och sjukvård|hållbar utveckling|folkhälsa/i);
 });
 
+test("sanitizeFetchedFinding decodes numeric HTML entities before grounding text is reused", () => {
+  const finding = sanitizeFetchedFinding(
+    "Västra Götalandsregionen protocols",
+    {
+      url: "https://www.vgregion.se/politik/protokoll-och-handlingar",
+      title: "Protokoll och handlingar V&#xE4;stra G&#xF6;talandsregionen",
+      content:
+        "Protokoll och handlingar V&#xE4;stra G&#xF6;talandsregionen styrs genom politiska beslut. Handlingar publiceras inf&#xF6;r sammantr&#xE4;den och protokoll publiceras efter beslut.",
+    },
+    {
+      allowTrustedExplicitSource: true,
+    },
+  );
+
+  assert.ok(finding);
+  assert.match(finding.title, /Västra Götalandsregionen/);
+  assert.match(finding.content, /Västra Götalandsregionen/);
+  assert.doesNotMatch(`${finding.title} ${finding.content}`, /&#x/i);
+});
+
 test("sanitizeFetchedFinding trims navigation-heavy trusted explicit sources before extracting content", () => {
   const finding = sanitizeFetchedFinding(
     "Using AI tools in daily work",
@@ -104,6 +140,27 @@ test("sanitizeFetchedFinding trims navigation-heavy trusted explicit sources bef
   assert.ok(finding);
   assert.doesNotMatch(finding.content, /Till huvudinnehåll|Gå till startsidan|Change language/i);
   assert.match(finding.content, /hälso- och sjukvård|hållbar utveckling|folkhälsa/i);
+});
+
+test("sanitizeFetchedFinding removes scraped counters and faq questions from trusted explicit organization sources", () => {
+  const finding = sanitizeFetchedFinding(
+    "System Verification",
+    {
+      url: "https://www.systemverification.com/about-us",
+      title: "System Verification - About us",
+      content:
+        "SYSTEM VERIFICATION IN NUMBERS 0 Years in QA-bussiness 0 Locations 0 Employees 0 Consultant rating. Our History 2002 – In 2002, System Verification is founded as Sweden’s first company dedicated exclusively to quality assurance. System Verification is the leading QA network in the Nordics, combining deep technical knowledge with a commitment to collaboration and innovation. What delivery models does System Verification offer?",
+    },
+    {
+      allowTrustedExplicitSource: true,
+    },
+  );
+
+  assert.ok(finding);
+  assert.match(finding.content, /founded as Sweden’s first company dedicated exclusively to quality assurance/i);
+  assert.match(finding.content, /leading QA network in the Nordics/i);
+  assert.doesNotMatch(finding.content, /0 Years|0 Locations|0 Employees|consultant rating/i);
+  assert.doesNotMatch(finding.content, /What delivery models does System Verification offer/i);
 });
 
 test("sanitizeFetchedFinding keeps short acronym intent and drops unrelated 'using' language matches", () => {
@@ -189,6 +246,34 @@ test("buildGuessedKnowledgeUrls generates encyclopedic candidates for specialize
   assert.ok(urls.includes("https://en.wikipedia.org/wiki/World_of_Warcraft"));
 });
 
+test("buildGuessedKnowledgeUrls generates episode-list candidates for premiere queries", () => {
+  const urls = buildGuessedKnowledgeUrls(
+    "SpongeBob SquarePants first episode aired in 1999",
+  );
+
+  assert.ok(urls.includes("https://en.wikipedia.org/wiki/SpongeBob_SquarePants"));
+  assert.ok(urls.includes("https://en.wikipedia.org/wiki/List_of_SpongeBob_SquarePants_episodes"));
+  assert.ok(urls.includes("https://en.wikipedia.org/wiki/SpongeBob_SquarePants_(season_1)"));
+});
+
+test("buildDiscoveredKnowledgeUrls follows episode page references from encyclopedic findings", () => {
+  const urls = buildDiscoveredKnowledgeUrls(
+    "SpongeBob SquarePants first episode aired in 1999",
+    [
+      {
+        url: "https://en.wikipedia.org/wiki/SpongeBob_SquarePants_(season_1)",
+        title: "SpongeBob SquarePants season 1",
+        content:
+          "Production details. See also: History of SpongeBob SquarePants and Help Wanted (SpongeBob SquarePants). Stephen Hillenburg developed the show.",
+      },
+    ],
+  );
+
+  assert.ok(
+    urls.includes("https://en.wikipedia.org/wiki/Help_Wanted_(SpongeBob_SquarePants)"),
+  );
+});
+
 test("buildExplicitSourceFallbackQuery prefers site-scoped search terms over raw host concatenation", () => {
   const query = buildExplicitSourceFallbackQuery({
     topic: "Using AI tools in their daily work",
@@ -198,4 +283,49 @@ test("buildExplicitSourceFallbackQuery prefers site-scoped search terms over raw
   assert.match(query, /site:vgregion\.se/i);
   assert.match(query, /AI tools in their daily work/i);
   assert.doesNotMatch(query, /^Using\b/);
+});
+
+test("buildExplicitSourceFallbackQuery adds organization support terms for company-grounded prompts", () => {
+  const query = buildExplicitSourceFallbackQuery({
+    topic: "System Verification",
+    urls: ["https://www.systemverification.com/"],
+    organization: "System Verification",
+    presentationFrame: "organization",
+    deliveryFormat: "presentation",
+  });
+
+  assert.match(query, /site:systemverification\.com/i);
+  assert.match(query, /"System Verification"/);
+  assert.match(query, /\babout\b/i);
+  assert.match(query, /\bservices\b/i);
+  assert.match(query, /\blocations\b|\boffices\b/i);
+});
+
+test("buildExplicitSourceFallbackQuery prefers the quoted organization name over malformed duplicate topic text", () => {
+  const query = buildExplicitSourceFallbackQuery({
+    topic: "Systemverification",
+    urls: ["https://www.systemverification.com/"],
+    organization: "System Verification",
+    presentationFrame: "organization",
+    deliveryFormat: "presentation",
+  });
+
+  assert.match(query, /"System Verification"/);
+  assert.doesNotMatch(query, /\bSystemverification\b/);
+});
+
+test("buildSupportingExplicitSourceUrls guesses same-domain support pages for organization prompts", () => {
+  const urls = buildSupportingExplicitSourceUrls({
+    urls: ["https://www.systemverification.com/"],
+    presentationFrame: "organization",
+    deliveryFormat: "presentation",
+  });
+
+  assert.deepEqual(urls, [
+    "https://www.systemverification.com/about",
+    "https://www.systemverification.com/about-us",
+    "https://www.systemverification.com/services",
+    "https://www.systemverification.com/locations",
+    "https://www.systemverification.com/offices",
+  ]);
 });

@@ -33,7 +33,18 @@ class FileRepositoryBase {
       const values = await Promise.all(
         entries
           .filter((entry) => entry.endsWith(".json"))
-          .map((entry) => readJsonFile<T>(join(directory, entry))),
+          .map(async (entry) => {
+            const filePath = join(directory, entry);
+
+            try {
+              return await readJsonFile<T>(filePath);
+            } catch (error) {
+              console.warn(
+                `[slidespeech] skipping malformed ${collection} file ${filePath}: ${(error as Error).message}`,
+              );
+              return null;
+            }
+          }),
       );
 
       const result: T[] = [];

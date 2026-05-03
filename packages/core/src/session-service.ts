@@ -3,8 +3,11 @@ import type {
   ConversationTurnEngine,
   DeckRepository,
   Deck,
+  GenerateDeckInput,
+  GroundingFact,
   LLMProvider,
   PedagogicalProfile,
+  PresentationTheme,
   PresentationIntent,
   PresentationPlan,
   PresentationReview,
@@ -13,20 +16,20 @@ import type {
   Session,
   SessionRepository,
   SlideNarration,
+  SlideBrief,
   Slide,
   TranscriptRepository,
   TranscriptTurn,
   UserInterruption,
   WebResearchProvider,
 } from "@slidespeech/types";
-import { pickPresentationTheme } from "@slidespeech/types";
 
 import { DEFAULT_PEDAGOGICAL_PROFILE } from "./defaults";
 import {
+  buildDeterministicDeck,
+  buildDeterministicNarration,
   buildDeterministicPresentationPlan,
-  buildDeterministicReview,
 } from "./deterministic-generation";
-import { evaluateDeckQuality } from "./evaluation";
 import { RuleBasedConversationTurnEngine } from "./conversation-turn-engine";
 import {
   NarrationEngine,
@@ -35,10 +38,33 @@ import {
 } from "./planners";
 import { QuestionAnswerService } from "./question-answer-service";
 import { SimpleResumePlanner } from "./resume-planner";
+import {
+  buildDeckRevisionGuidance,
+  buildDeckSemanticReviewAssessment,
+  ensureDeckTheme,
+  ensureNarrationSegments,
+  evaluateDeckCandidateForRetry,
+  MAX_DECK_GENERATION_ATTEMPTS,
+  mergeDeckCandidateAssessments,
+  tryAcceptDeckAfterLocalRepair,
+  type BackgroundEnrichmentInput,
+  type DeckCandidateAssessment,
+  type ValidationIssue,
+} from "./session-deck-quality";
+import {
+  applyLocalNarrationRepairsFromReview,
+  buildDeterministicPresentationReview,
+  buildGenerationStatus,
+  countReadySlides,
+  finalizeDeckMetadata,
+  mergeNewNarrationsPreservingExisting,
+  mergeReviewedNarrations,
+  mergeValidationMetadata,
+  shouldPreferDeterministicReview,
+} from "./session-review-helpers";
 import { transitionSessionState } from "./state-machine";
 import { createId, nowIso } from "./utils";
 import {
-  rebuildNarrationFromSlideAnchors,
   validateAndRepairDeck,
   validateAndRepairNarrations,
 } from "./validation";
@@ -53,9 +79,12 @@ export interface CreatePresentationSessionInput {
   groundingExcerpts?: string[] | undefined;
   groundingCoverageGoals?: string[] | undefined;
   groundingSourceIds?: string[] | undefined;
+  groundingFacts?: GroundingFact[] | undefined;
+  slideBriefs?: SlideBrief[] | undefined;
   groundingSourceType?: "topic" | "document" | "pptx" | "mixed" | undefined;
   targetDurationMinutes?: number | undefined;
   targetSlideCount?: number | undefined;
+  theme?: PresentationTheme | undefined;
 }
 
 export interface CreatePresentationSessionResult {
@@ -86,347 +115,6 @@ export interface SessionSnapshotResult {
   transcripts: TranscriptTurn[];
 }
 
-const ensureDeckTheme = (deck: Deck): Deck => ({
-  ...deck,
-  metadata: {
-    ...deck.metadata,
-    theme:
-      deck.metadata.theme ??
-      pickPresentationTheme(`${deck.id}:${deck.topic}`),
-  },
-});
-
-type ValidationIssue = {
-  code: string;
-  message: string;
-  severity: "info" | "warning" | "error";
-  slideId?: string | undefined;
-};
-
-type DeckCandidateAssessment = {
-  retryable: boolean;
-  fatal: boolean;
-  score: number;
-  reasons: string[];
-  revisionNotes: string[];
-  failingCoreChecks: string[];
-};
-
-const REVIEW_NARRATION_REPAIR_CODE_PATTERN =
-  /(?:VERBATIM|CONTENT_DRIFT|GROUNDING_WEAK|GROUNDING_MISMATCH|SEGMENT_COUNT_VIOLATION|NARR_VERBATIM)/i;
-
-const DECK_PROMPT_CONTAMINATION_PATTERNS = [
-  /\bcreate (?:an?|the)?\s*(?:onboarding\s+)?presentation\b/i,
-  /\bmore information is available at\b/i,
-  /\buse google\b/i,
-];
-
-const DECK_INSTRUCTIONAL_PATTERNS = [
-  /^\s*(walk through|review|direct new hires|show the audience|tell the audience|emphasize|map out|validate that|highlight)\b/i,
-  /\binternal portal\b/i,
-  /\bcore messaging\b/i,
-  /^\s*how do i\b/i,
-  /\bslides?\b/i,
-  /\bdeck\b/i,
-];
-
-const DECK_WORKSHOP_ALLOWED_INSTRUCTIONAL_PATTERNS = new Set([
-  /^\s*use\b/i.source,
-]);
-
-const getDeckInstructionalPatterns = (
-  intent?: PresentationIntent,
-): RegExp[] => {
-  const allowsParticipantActionLanguage =
-    intent?.deliveryFormat === "workshop" || Boolean(intent?.activityRequirement);
-
-  if (!allowsParticipantActionLanguage) {
-    return DECK_INSTRUCTIONAL_PATTERNS;
-  }
-
-  return DECK_INSTRUCTIONAL_PATTERNS.filter(
-    (pattern) => !DECK_WORKSHOP_ALLOWED_INSTRUCTIONAL_PATTERNS.has(pattern.source),
-  );
-};
-
-type BackgroundEnrichmentInput = {
-  deck: Deck;
-  sessionId: string;
-  pedagogicalProfile: PedagogicalProfile;
-  initialNarrations: SlideNarration[];
-  topic: string;
-};
-
-const splitNarrationIntoSegments = (text: string): string[] => {
-  const normalized = text.replace(/\s+/g, " ").trim();
-
-  if (!normalized) {
-    return [];
-  }
-
-  const sentenceLikeSegments = normalized
-    .split(/(?<=[.!?])\s+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-
-  const splitLongSegment = (segment: string, maxLength = 260): string[] => {
-    if (segment.length <= maxLength) {
-      return [segment];
-    }
-
-    const clausePieces = segment
-      .split(/(?<=[,;:])\s+/)
-      .map((piece) => piece.trim())
-      .filter(Boolean);
-
-    if (clausePieces.length > 1) {
-      const grouped: string[] = [];
-      let current = "";
-
-      for (const piece of clausePieces) {
-        const next = current ? `${current} ${piece}` : piece;
-        if (current && next.length > maxLength) {
-          grouped.push(current);
-          current = piece;
-        } else {
-          current = next;
-        }
-      }
-
-      if (current) {
-        grouped.push(current);
-      }
-
-      if (grouped.every((piece) => piece.length < segment.length)) {
-        return grouped.flatMap((piece) => splitLongSegment(piece, maxLength));
-      }
-    }
-
-    const words = segment.split(/\s+/).filter(Boolean);
-    if (words.length < 8) {
-      return [segment];
-    }
-
-    const midpoint = Math.max(1, Math.floor(words.length / 2));
-    return [
-      words.slice(0, midpoint).join(" "),
-      words.slice(midpoint).join(" "),
-    ].flatMap((piece) => splitLongSegment(piece, maxLength));
-  };
-
-  const rebalanceSegments = (segments: string[]): string[] =>
-    segments
-      .flatMap((segment) => splitLongSegment(segment))
-      .map((segment) => segment.trim())
-      .filter(Boolean);
-
-  if (sentenceLikeSegments.length > 1) {
-    return rebalanceSegments(sentenceLikeSegments);
-  }
-
-  const clauseSegments = normalized
-    .split(/,\s+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-
-  return clauseSegments.length > 1
-    ? rebalanceSegments(clauseSegments)
-    : rebalanceSegments([normalized]);
-};
-
-const evaluateDeckCandidateForRetry = (
-  deck: Deck,
-  intent?: PresentationIntent,
-): DeckCandidateAssessment => {
-  const reasons: string[] = [];
-  const revisionNotes: string[] = [];
-  const validationProbe = validateAndRepairDeck(deck);
-  const evaluation = evaluateDeckQuality(deck, []);
-  const activeInstructionalPatterns = getDeckInstructionalPatterns(intent);
-  const metaRepairCount = validationProbe.issues.filter(
-    (issue) => issue.code === "meta_presentation_slide_repaired",
-  ).length;
-
-  if (
-    validationProbe.issues.some(
-      (issue) => issue.code === "deck_wide_meta_presentation_repaired",
-    ) ||
-    metaRepairCount >= 2
-  ) {
-    reasons.push(
-      "The draft drifted into presentation-making or instructional language on multiple slides.",
-    );
-  }
-
-  for (const issue of validationProbe.issues.filter(
-    (candidateIssue) => candidateIssue.code === "meta_presentation_slide_repaired",
-  )) {
-    const offendingSlide = deck.slides.find((slide) => slide.id === issue.slideId);
-    if (offendingSlide) {
-      revisionNotes.push(
-        `Replace slide "${offendingSlide.title}" with concrete subject content about ${deck.topic}. Do not summarize the presentation or tell the presenter what to do.`,
-      );
-    }
-  }
-
-  const promptContaminationCheck = evaluation.checks.find(
-    (check) => check.code === "prompt_contamination",
-  );
-  if (promptContaminationCheck && promptContaminationCheck.status !== "pass") {
-    reasons.push(
-      "Titles or learning goals still contain prompt/instruction leakage instead of a clean subject framing.",
-    );
-  }
-
-  const introSlide = deck.slides[0];
-  if (introSlide) {
-    const abstractIntro =
-      /\b(critical need|foundations|why this matters|importance of|introduction to)\b/i.test(
-        introSlide.title,
-      ) && !introSlide.title.toLowerCase().includes(deck.topic.toLowerCase());
-    const thinIntro =
-      introSlide.keyPoints.length < 3 ||
-      (introSlide.beginnerExplanation.trim().length < 90 &&
-        introSlide.learningGoal.trim().length < 70);
-
-    if (abstractIntro || thinIntro) {
-      reasons.push(
-        "The opening slide needs to introduce the subject more concretely with a stronger title and more substance.",
-      );
-      revisionNotes.push(
-        `Rewrite slide "${introSlide.title}" into a concrete opening to ${deck.topic}. Name the subject directly and state one memorable fact or responsibility in plain language.`,
-      );
-    }
-  }
-
-  const contaminatedSlides = deck.slides.filter((slide) =>
-    [slide.title, slide.learningGoal, ...slide.keyPoints].some((value) =>
-      DECK_PROMPT_CONTAMINATION_PATTERNS.some((pattern) => pattern.test(value)),
-    ),
-  );
-  if (contaminatedSlides.length > 0) {
-    reasons.push(
-      "At least one slide still leaks prompt text such as creation instructions or external-information hints.",
-    );
-    for (const slide of contaminatedSlides) {
-      revisionNotes.push(
-        `Remove prompt leakage from slide "${slide.title}". Do not mention creation instructions, external-information hints, or brief text in titles or learning goals.`,
-      );
-    }
-  }
-
-  const instructionalSlides = deck.slides.filter((slide) =>
-    slide.keyPoints.some((point) =>
-      activeInstructionalPatterns.some((pattern) => pattern.test(point)),
-    ),
-  );
-  if (instructionalSlides.length > 0) {
-    reasons.push(
-      "At least one slide still uses imperative or instructional bullet points instead of audience-facing claims.",
-    );
-    for (const slide of instructionalSlides) {
-      revisionNotes.push(
-        `Rewrite the bullet points on slide "${slide.title}" as complete declarative claims about ${deck.topic}.`,
-      );
-    }
-  }
-
-  const severeEvaluationWarnings = evaluation.checks.filter(
-    (check) =>
-      (check.code === "meta_slide_language" ||
-        check.code === "topic_alignment" ||
-        check.code === "intro_slide_substance" ||
-        check.code === "source_noise_contamination" ||
-        check.code === "cross_slide_distinctness" ||
-        check.code === "language_quality") &&
-      check.status === "fail",
-  );
-  const failingCoreChecks = severeEvaluationWarnings.map((check) => check.code);
-  if (severeEvaluationWarnings.length > 0) {
-    reasons.push(
-      "The generated deck still fails one or more core quality checks for topic focus or opening quality.",
-    );
-  }
-
-  const fatal =
-    promptContaminationCheck?.status !== "pass" ||
-    contaminatedSlides.length > 0 ||
-    instructionalSlides.length > 0;
-
-  return {
-    retryable: reasons.length > 0,
-    fatal,
-    score: reasons.length + (fatal ? 10 : 0),
-    reasons,
-    revisionNotes: [...new Set(revisionNotes)],
-    failingCoreChecks,
-  };
-};
-
-const buildDeckRevisionGuidance = (topic: string, assessment: DeckCandidateAssessment): string =>
-  [
-    `Revise the deck so it becomes a clean audience-facing presentation about ${topic}.`,
-    ...assessment.reasons,
-    ...assessment.revisionNotes,
-    "Every slide must teach the subject itself through concrete, complete claims.",
-    "Use declarative sentences, not presenter instructions.",
-    "Make slide 1 a strong introduction to the actual subject, not an abstract framing slide.",
-  ].join(" ");
-
-const CORE_DECK_QUALITY_FAILURE_CODES = new Set([
-  "meta_slide_language",
-  "topic_alignment",
-  "intro_slide_substance",
-  "source_noise_contamination",
-  "cross_slide_distinctness",
-  "language_quality",
-  "prompt_contamination",
-]);
-
-const tryAcceptDeckAfterLocalRepair = (
-  deck: Deck,
-): Deck | null => {
-  const validation = validateAndRepairDeck(deck);
-  if (!validation.repaired) {
-    return null;
-  }
-
-  const heavyRepairIssueCount = validation.issues.filter(
-    (issue) =>
-      issue.code === "deck_wide_meta_presentation_repaired" ||
-      issue.code === "meta_presentation_slide_repaired" ||
-      issue.code === "slide_language_repaired",
-  ).length;
-
-  if (
-    validation.issues.some((issue) => issue.code === "deck_wide_meta_presentation_repaired") ||
-    heavyRepairIssueCount > Math.ceil(validation.value.slides.length / 2)
-  ) {
-    return null;
-  }
-
-  const repairedEvaluation = evaluateDeckQuality(validation.value, []);
-  const stillFailsCoreChecks = repairedEvaluation.checks.some(
-    (check) =>
-      check.status === "fail" && CORE_DECK_QUALITY_FAILURE_CODES.has(check.code),
-  );
-
-  return stillFailsCoreChecks ? null : validation.value;
-};
-
-const ensureNarrationSegments = (narration: SlideNarration): SlideNarration => ({
-  ...narration,
-  segments: (
-    narration.segments.length > 0
-      ? narration.segments
-      : splitNarrationIntoSegments(narration.narration)
-  )
-    .flatMap((segment) =>
-      segment.length > 260 ? splitNarrationIntoSegments(segment) : [segment.trim()],
-    )
-    .filter(Boolean),
-});
-
 export class PresentationSessionService {
   private readonly planner: PresentationPlanner;
   private readonly narrationEngine: NarrationEngine;
@@ -441,7 +129,7 @@ export class PresentationSessionService {
     private readonly transcriptRepository: TranscriptRepository,
     private readonly conversationTurnEngine: ConversationTurnEngine = new RuleBasedConversationTurnEngine(),
     private readonly resumePlanner: ResumePlanner = new SimpleResumePlanner(),
-    private readonly webResearchProvider?: WebResearchProvider,
+    webResearchProvider?: WebResearchProvider,
   ) {
     this.planner = new PresentationPlanner(llmProvider);
     this.narrationEngine = new NarrationEngine(llmProvider);
@@ -470,6 +158,7 @@ export class PresentationSessionService {
         input.groundingSummary,
         input.groundingHighlights,
         input.groundingExcerpts,
+        input.groundingCoverageGoals,
         input.targetDurationMinutes,
         input.targetSlideCount,
       );
@@ -511,6 +200,10 @@ export class PresentationSessionService {
       ...(input.groundingSourceIds
         ? { groundingSourceIds: input.groundingSourceIds }
         : {}),
+      ...(input.groundingFacts?.length
+        ? { groundingFacts: input.groundingFacts }
+        : {}),
+      ...(input.slideBriefs?.length ? { slideBriefs: input.slideBriefs } : {}),
       ...(input.groundingSourceType
         ? { groundingSourceType: input.groundingSourceType }
         : {}),
@@ -523,10 +216,18 @@ export class PresentationSessionService {
     };
 
     let generatedDeck: Deck | undefined;
+    let usedDeterministicDeckFallback = false;
     let bestGeneratedDeck: Deck | null = null;
     let bestDeckAssessment: DeckCandidateAssessment | null = null;
+    let lastGenerationError: Error | null = null;
+    let deckGenerationAttemptCount = 0;
 
-    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+    for (
+      let attemptIndex = 0;
+      attemptIndex < MAX_DECK_GENERATION_ATTEMPTS;
+      attemptIndex += 1
+    ) {
+      deckGenerationAttemptCount += 1;
       const deckAttemptInput =
         attemptIndex === 0
           ? generationInput
@@ -544,33 +245,47 @@ export class PresentationSessionService {
                   revisionNotes: [],
                   failingCoreChecks: [],
                 },
+                generationInput.intent,
               ),
             };
 
       try {
         const candidateDeck = await this.planner.generateDeck(deckAttemptInput);
         const locallyAcceptedDeck = tryAcceptDeckAfterLocalRepair(candidateDeck);
-        if (locallyAcceptedDeck) {
-          generatedDeck = locallyAcceptedDeck;
-          break;
-        }
+        const deckForAssessment = locallyAcceptedDeck ?? candidateDeck;
 
-        const candidateAssessment = evaluateDeckCandidateForRetry(
-          candidateDeck,
+        const deterministicAssessment = evaluateDeckCandidateForRetry(
+          deckForAssessment,
           input.intent,
         );
+        const semanticAssessment = await this.reviewDeckSemanticsForRetry({
+          deck: deckForAssessment,
+          generationInput: deckAttemptInput,
+          pedagogicalProfile,
+          topic: input.topic,
+          shouldReview:
+            Boolean(locallyAcceptedDeck) ||
+            !deterministicAssessment.retryable ||
+            attemptIndex === MAX_DECK_GENERATION_ATTEMPTS - 1,
+        });
+        const candidateAssessment = semanticAssessment
+          ? mergeDeckCandidateAssessments(
+              deterministicAssessment,
+              semanticAssessment,
+            )
+          : deterministicAssessment;
 
         if (
           !bestGeneratedDeck ||
           !bestDeckAssessment ||
           candidateAssessment.score < bestDeckAssessment.score
         ) {
-          bestGeneratedDeck = candidateDeck;
+          bestGeneratedDeck = deckForAssessment;
           bestDeckAssessment = candidateAssessment;
         }
 
         if (!candidateAssessment.retryable) {
-          generatedDeck = candidateDeck;
+          generatedDeck = deckForAssessment;
           break;
         }
 
@@ -582,6 +297,7 @@ export class PresentationSessionService {
           }`,
         );
       } catch (error) {
+        lastGenerationError = error as Error;
         console.warn(
           `[slidespeech] deck generation attempt ${attemptIndex + 1} failed for topic "${input.topic}": ${(error as Error).message}`,
         );
@@ -589,16 +305,28 @@ export class PresentationSessionService {
     }
 
     if (!bestGeneratedDeck) {
-      throw new Error(
-        `No usable LLM-generated deck was produced for "${input.topic}".`,
+      console.warn(
+        `[slidespeech] no usable LLM-generated deck was produced for "${input.topic}" after ${deckGenerationAttemptCount} attempt(s); using deterministic fallback.${
+          lastGenerationError ? ` Last error: ${lastGenerationError.message}` : ""
+        }`,
       );
+      generatedDeck = buildDeterministicDeck(generationInput);
+      usedDeterministicDeckFallback = true;
     } else if (!generatedDeck) {
-      if (bestDeckAssessment?.fatal || bestDeckAssessment?.retryable) {
-        throw new Error(
-          `No acceptable LLM-generated deck was produced for "${input.topic}". The best draft still relied on repair-heavy cleanup: ${bestDeckAssessment.reasons.join(" | ")}`,
+      if (bestDeckAssessment?.fatal) {
+        console.warn(
+          `[slidespeech] best LLM-generated deck for "${input.topic}" still had fatal quality issues; using deterministic fallback: ${bestDeckAssessment.reasons.join(" | ")}`,
         );
+        generatedDeck = buildDeterministicDeck(generationInput);
+        usedDeterministicDeckFallback = true;
+      } else if (bestDeckAssessment?.retryable) {
+        console.warn(
+          `[slidespeech] using best available LLM-generated deck for "${input.topic}" after retries: ${bestDeckAssessment.reasons.join(" | ")}`,
+        );
+        generatedDeck = bestGeneratedDeck;
+      } else {
+        generatedDeck = bestGeneratedDeck;
       }
-      generatedDeck = bestGeneratedDeck;
     }
 
     const deckValidation = validateAndRepairDeck(generatedDeck);
@@ -612,24 +340,34 @@ export class PresentationSessionService {
           backgroundEnrichmentPending: deckValidation.value.slides.length > 1,
         },
       },
-    });
+    }, input.theme);
 
     const introSlide = deck.slides[0];
     const initialNarrations: SlideNarration[] = [];
 
     if (introSlide) {
-      try {
+      if (usedDeterministicDeckFallback) {
         initialNarrations.push(
-          await this.narrationEngine.generateNarration({
+          buildDeterministicNarration({
             deck,
             slide: introSlide,
             pedagogicalProfile,
           }),
         );
-      } catch (error) {
-        console.warn(
-          `[slidespeech] intro narration fallback for slide "${introSlide.title}": ${(error as Error).message}`,
-        );
+      } else {
+        try {
+          initialNarrations.push(
+            await this.narrationEngine.generateNarration({
+              deck,
+              slide: introSlide,
+              pedagogicalProfile,
+            }),
+          );
+        } catch (error) {
+          console.warn(
+            `[slidespeech] intro narration fallback for slide "${introSlide.title}": ${(error as Error).message}`,
+          );
+        }
       }
     }
 
@@ -649,8 +387,8 @@ export class PresentationSessionService {
       ...deck,
       metadata: {
         ...deck.metadata,
-        validation: this.mergeValidationMetadata(deck, introNarrationIssues),
-        generation: this.buildGenerationStatus(
+        validation: mergeValidationMetadata(deck, introNarrationIssues),
+        generation: buildGenerationStatus(
           deck,
           introNarration ? 1 : 0,
           deck.slides.length > (introNarration ? 1 : 0),
@@ -719,7 +457,7 @@ export class PresentationSessionService {
         topic: input.topic,
       });
 
-      const finalNarrations = this.mergeReviewedNarrations(
+      const finalNarrations = mergeReviewedNarrations(
         [introNarration],
         review.repairedNarrations,
       );
@@ -728,12 +466,12 @@ export class PresentationSessionService {
         finalNarrations,
         { generateMissing: false },
       );
-      const locallyRepairedNarrations = this.applyLocalNarrationRepairsFromReview(
+      const locallyRepairedNarrations = applyLocalNarrationRepairsFromReview(
         deck,
         reviewedNarrationValidation.value,
         review,
       );
-      const finalizedDeck = this.finalizeDeckMetadata(
+      const finalizedDeck = finalizeDeckMetadata(
         deck,
         locallyRepairedNarrations.narrations,
         review,
@@ -747,11 +485,9 @@ export class PresentationSessionService {
 
       await this.sessionRepository.save({
         ...persistedSession,
-        narrationBySlideId: Object.fromEntries(
-          locallyRepairedNarrations.narrations.map((narration) => [
-            narration.slideId,
-            ensureNarrationSegments(narration),
-          ]),
+        narrationBySlideId: mergeNewNarrationsPreservingExisting(
+          persistedSession.narrationBySlideId,
+          locallyRepairedNarrations.narrations,
         ),
         updatedAt: nowIso(),
       });
@@ -796,10 +532,16 @@ export class PresentationSessionService {
       }),
     );
 
+    const latestSession = (await this.sessionRepository.getById(sessionId)) ?? session;
+    const existingAfterGeneration = latestSession.narrationBySlideId[slideId];
+    if (existingAfterGeneration) {
+      return ensureNarrationSegments(existingAfterGeneration);
+    }
+
     const updatedSession: Session = {
-      ...session,
+      ...latestSession,
       narrationBySlideId: {
-        ...session.narrationBySlideId,
+        ...latestSession.narrationBySlideId,
         [slideId]: narration,
       },
       updatedAt: nowIso(),
@@ -1192,7 +934,7 @@ export class PresentationSessionService {
         topic: input.topic,
       });
 
-      const finalNarrations = this.mergeReviewedNarrations(
+      const finalNarrations = mergeReviewedNarrations(
         narrationValidation.value,
         review.repairedNarrations,
       );
@@ -1201,12 +943,12 @@ export class PresentationSessionService {
         finalNarrations,
         { generateMissing: false },
       );
-      const locallyRepairedNarrations = this.applyLocalNarrationRepairsFromReview(
+      const locallyRepairedNarrations = applyLocalNarrationRepairsFromReview(
         latestDeck,
         reviewedNarrationValidation.value,
         review,
       );
-      const finalizedDeck = this.finalizeDeckMetadata(
+      const finalizedDeck = finalizeDeckMetadata(
         latestDeck,
         locallyRepairedNarrations.narrations,
         review,
@@ -1222,12 +964,10 @@ export class PresentationSessionService {
         (await this.sessionRepository.getById(input.sessionId)) ?? latestSession;
       await this.sessionRepository.save({
         ...refreshedSession,
-        narrationBySlideId: {
-          ...refreshedSession.narrationBySlideId,
-          ...Object.fromEntries(
-            locallyRepairedNarrations.narrations.map((narration) => [narration.slideId, narration]),
-          ),
-        },
+        narrationBySlideId: mergeNewNarrationsPreservingExisting(
+          refreshedSession.narrationBySlideId,
+          locallyRepairedNarrations.narrations,
+        ),
         updatedAt: nowIso(),
       });
     })()
@@ -1248,10 +988,10 @@ export class PresentationSessionService {
           updatedAt: nowIso(),
           metadata: {
             ...deck.metadata,
-            validation: this.mergeValidationMetadata(deck, [issue]),
-            generation: this.buildGenerationStatus(
+            validation: mergeValidationMetadata(deck, [issue]),
+            generation: buildGenerationStatus(
               deck,
-              this.countReadySlides(
+              countReadySlides(
                 deck,
                 session?.narrationBySlideId ?? {},
               ),
@@ -1268,117 +1008,6 @@ export class PresentationSessionService {
     this.backgroundEnrichmentTasks.set(input.sessionId, task);
   }
 
-  private countReadySlides(
-    deck: Deck,
-    narrationBySlideId: Record<string, SlideNarration>,
-  ): number {
-    return deck.slides.reduce(
-      (count, slide) => count + (narrationBySlideId[slide.id] ? 1 : 0),
-      0,
-    );
-  }
-
-  private buildGenerationStatus(
-    deck: Deck,
-    narrationReadySlides: number,
-    backgroundEnrichmentPending: boolean,
-    lastCompletedAt?: string,
-  ): NonNullable<Deck["metadata"]["generation"]> {
-    return {
-      narrationReadySlides,
-      totalSlides: deck.slides.length,
-      backgroundEnrichmentPending,
-      ...(lastCompletedAt ? { lastCompletedAt } : {}),
-    };
-  }
-
-  private dedupeValidationIssues(issues: ValidationIssue[]): ValidationIssue[] {
-    const seen = new Set<string>();
-    const deduped: ValidationIssue[] = [];
-
-    for (const issue of issues) {
-      const key = `${issue.code}:${issue.slideId ?? ""}:${issue.message}`;
-      if (seen.has(key)) {
-        continue;
-      }
-
-      seen.add(key);
-      deduped.push(issue);
-    }
-
-    return deduped;
-  }
-
-  private mergeValidationMetadata(
-    deck: Deck,
-    additionalIssues: ValidationIssue[],
-    summary?: string,
-    overallScore?: number,
-  ): NonNullable<Deck["metadata"]["validation"]> {
-    const combinedIssues = this.dedupeValidationIssues([
-      ...(deck.metadata.validation?.issues ?? []),
-      ...additionalIssues,
-    ]);
-
-    return {
-      passed: !combinedIssues.some((issue) => issue.severity === "error"),
-      repaired:
-        Boolean(deck.metadata.validation?.repaired) || additionalIssues.length > 0,
-      validatedAt: nowIso(),
-      ...((summary ?? deck.metadata.validation?.summary) !== undefined
-        ? { summary: summary ?? deck.metadata.validation?.summary }
-        : {}),
-      ...((overallScore ?? deck.metadata.validation?.overallScore) !== undefined
-        ? {
-            overallScore:
-              overallScore ?? deck.metadata.validation?.overallScore,
-          }
-        : {}),
-      issues: combinedIssues,
-    };
-  }
-
-  private buildDeterministicPresentationReview(
-    deck: Deck,
-    validationIssues: ValidationIssue[],
-    repairedNarrations: SlideNarration[],
-    note?: string,
-  ): PresentationReview {
-    return buildDeterministicReview({
-      deck,
-      validationIssues: validationIssues.map((issue) => ({
-        code: issue.code,
-        message: issue.message,
-        severity: issue.severity,
-        ...(issue.slideId ? { slideId: issue.slideId } : {}),
-      })),
-      repairedNarrations,
-      ...(note ? { note } : {}),
-    });
-  }
-
-  private shouldPreferDeterministicReview(
-    llmReview: PresentationReview,
-    deterministicReview: PresentationReview,
-  ): boolean {
-    if (llmReview.repairedNarrations.length > 0) {
-      return false;
-    }
-
-    const scoreGap = deterministicReview.overallScore - llmReview.overallScore;
-    const issueGap = llmReview.issues.length - deterministicReview.issues.length;
-    const llmIsMuchHarsher =
-      deterministicReview.approved &&
-      !llmReview.approved &&
-      scoreGap >= 0.15;
-
-    return (
-      llmIsMuchHarsher ||
-      scoreGap >= 0.25 ||
-      (scoreGap >= 0.15 && issueGap >= 2)
-    );
-  }
-
   private async reviewPresentationWithFallback(input: {
     deck: Deck;
     narrations: SlideNarration[];
@@ -1387,7 +1016,7 @@ export class PresentationSessionService {
     fallbackNote: string;
     topic: string;
   }): Promise<PresentationReview> {
-    const deterministicReview = this.buildDeterministicPresentationReview(
+    const deterministicReview = buildDeterministicPresentationReview(
       input.deck,
       input.validationIssues,
       input.narrations,
@@ -1401,7 +1030,7 @@ export class PresentationSessionService {
         pedagogicalProfile: input.pedagogicalProfile,
       });
 
-      if (this.shouldPreferDeterministicReview(llmReview, deterministicReview)) {
+      if (shouldPreferDeterministicReview(llmReview, deterministicReview)) {
         console.warn(
           `[slidespeech] review reconciliation fallback for topic "${input.topic}": LLM review contradicted the stronger deterministic baseline (llm_score=${llmReview.overallScore.toFixed(2)}, deterministic_score=${deterministicReview.overallScore.toFixed(2)}).`,
         );
@@ -1417,129 +1046,74 @@ export class PresentationSessionService {
     }
   }
 
-  private mergeReviewedNarrations(
-    narrations: SlideNarration[],
-    repairedNarrations: SlideNarration[],
-  ): SlideNarration[] {
-    const repairedBySlideId = new Map(
-      repairedNarrations.map((narration) => [
-        narration.slideId,
-        ensureNarrationSegments(narration),
-      ]),
-    );
-
-    return narrations.map((narration) =>
-      repairedBySlideId.get(narration.slideId) ??
-      ensureNarrationSegments(narration),
-    );
-  }
-
-  private resolveSlideIdFromReviewIssue(
-    deck: Deck,
-    issue: PresentationReview["issues"][number],
-  ): string | null {
-    if (issue.slideId && deck.slides.some((slide) => slide.id === issue.slideId)) {
-      return issue.slideId;
-    }
-
-    const slideIdNumberMatch = issue.slideId?.match(/\bSlide\s+(\d+)\b/i);
-    if (slideIdNumberMatch) {
-      const slideIndex = Number(slideIdNumberMatch[1]) - 1;
-      return deck.slides[slideIndex]?.id ?? null;
-    }
-
-    const slideNumberMatch = issue.message.match(/\bSlide\s+(\d+)\b/i);
-    if (!slideNumberMatch) {
+  private async reviewDeckSemanticsForRetry(input: {
+    deck: Deck;
+    generationInput: GenerateDeckInput;
+    pedagogicalProfile: PedagogicalProfile;
+    topic: string;
+    shouldReview: boolean;
+  }): Promise<DeckCandidateAssessment | null> {
+    if (!input.shouldReview) {
       return null;
     }
 
-    const slideIndex = Number(slideNumberMatch[1]) - 1;
-    return deck.slides[slideIndex]?.id ?? null;
-  }
-
-  private applyLocalNarrationRepairsFromReview(
-    deck: Deck,
-    narrations: SlideNarration[],
-    review: PresentationReview,
-  ): { narrations: SlideNarration[]; issues: ValidationIssue[] } {
-    const narrationBySlideId = new Map(
-      narrations.map((narration) => [narration.slideId, ensureNarrationSegments(narration)]),
-    );
-    const issues: ValidationIssue[] = [];
-
-    for (const reviewIssue of review.issues) {
-      if (!REVIEW_NARRATION_REPAIR_CODE_PATTERN.test(reviewIssue.code)) {
-        continue;
-      }
-
-      const slideId = this.resolveSlideIdFromReviewIssue(deck, reviewIssue);
-      if (!slideId) {
-        continue;
-      }
-
-      const slide = deck.slides.find((candidate) => candidate.id === slideId);
-      if (!slide) {
-        continue;
-      }
-
-      narrationBySlideId.set(
-        slide.id,
-        rebuildNarrationFromSlideAnchors(deck, slide, narrationBySlideId.get(slide.id)),
-      );
-      issues.push({
-        code: "narration_review_repaired",
-        message: `Narration for "${slide.title}" was rebuilt locally after review flagged ${reviewIssue.code.toLowerCase()}.`,
-        severity: "warning",
-        slideId: slide.id,
-      });
-    }
-
-    return {
-      narrations: deck.slides
-        .map((slide) => narrationBySlideId.get(slide.id))
-        .filter((narration): narration is SlideNarration => Boolean(narration)),
-      issues,
-    };
-  }
-
-  private finalizeDeckMetadata(
-    deck: Deck,
-    narrations: SlideNarration[],
-    review: PresentationReview,
-    additionalValidationIssues: ValidationIssue[] = [],
-  ): Deck {
-    const evaluation = evaluateDeckQuality(deck, narrations);
-    const reviewIssues: ValidationIssue[] = review.issues.map((issue) => ({
-      code: issue.code,
-      message: issue.message,
-      severity: issue.severity,
-      ...(issue.slideId ? { slideId: issue.slideId } : {}),
-    }));
-    const validation = this.mergeValidationMetadata(
-      deck,
-      [...additionalValidationIssues, ...reviewIssues],
-      review.summary,
-      review.overallScore,
-    );
-
-    return ensureDeckTheme({
-      ...deck,
-      updatedAt: nowIso(),
-      metadata: {
-        ...deck.metadata,
-        validation: {
-          ...validation,
-          passed: validation.passed && review.approved,
+    try {
+      const review = await this.qualityReviewer.reviewDeckSemantics({
+        deck: input.deck,
+        generationInput: {
+          topic: input.generationInput.topic,
+          ...(input.generationInput.presentationBrief
+            ? { presentationBrief: input.generationInput.presentationBrief }
+            : {}),
+          ...(input.generationInput.intent
+            ? { intent: input.generationInput.intent }
+            : {}),
+          ...(input.generationInput.revisionGuidance
+            ? { revisionGuidance: input.generationInput.revisionGuidance }
+            : {}),
+          ...(input.generationInput.plan ? { plan: input.generationInput.plan } : {}),
+          pedagogicalProfile: input.pedagogicalProfile,
+          ...(input.generationInput.groundingSummary
+            ? { groundingSummary: input.generationInput.groundingSummary }
+            : {}),
+          ...(input.generationInput.groundingHighlights
+            ? { groundingHighlights: input.generationInput.groundingHighlights }
+            : {}),
+          ...(input.generationInput.groundingExcerpts
+            ? { groundingExcerpts: input.generationInput.groundingExcerpts }
+            : {}),
+          ...(input.generationInput.groundingCoverageGoals
+            ? { groundingCoverageGoals: input.generationInput.groundingCoverageGoals }
+            : {}),
+          ...(input.generationInput.groundingSourceIds
+            ? { groundingSourceIds: input.generationInput.groundingSourceIds }
+            : {}),
+          ...(input.generationInput.groundingSourceType
+            ? { groundingSourceType: input.generationInput.groundingSourceType }
+            : {}),
+          ...(input.generationInput.targetDurationMinutes
+            ? { targetDurationMinutes: input.generationInput.targetDurationMinutes }
+            : {}),
+          ...(input.generationInput.targetSlideCount
+            ? { targetSlideCount: input.generationInput.targetSlideCount }
+            : {}),
         },
-        evaluation,
-        generation: this.buildGenerationStatus(
-          deck,
-          narrations.length,
-          false,
-          nowIso(),
-        ),
-      },
-    });
+        pedagogicalProfile: input.pedagogicalProfile,
+      });
+
+      const assessment = buildDeckSemanticReviewAssessment(review);
+      if (assessment.retryable) {
+        console.warn(
+          `[slidespeech] semantic deck review for topic "${input.topic}" requested revision: ${assessment.reasons.join(" | ")}`,
+        );
+      }
+      return assessment;
+    } catch (error) {
+      console.warn(
+        `[slidespeech] semantic deck review fallback for topic "${input.topic}": ${(error as Error).message}`,
+      );
+      return null;
+    }
   }
 
   private requireCurrentSlide(deck: Deck, session: Session): Slide {

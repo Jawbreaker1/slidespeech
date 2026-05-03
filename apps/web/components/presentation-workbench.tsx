@@ -13,10 +13,14 @@ import type {
   SlideIllustrationAsset,
   TranscriptTurn,
   SlideNarration,
+  PresentationTheme,
   VoiceTurnResponse,
   WebResearchQueryResponse,
 } from "@slidespeech/types";
-import { resolvePresentationTheme } from "@slidespeech/types";
+import {
+  PRESENTATION_THEME_OPTIONS,
+  resolvePresentationTheme,
+} from "@slidespeech/types";
 import {
   DebugPanel,
   PresenterControls,
@@ -172,6 +176,8 @@ export const PresentationWorkbench = () => {
   const [selectedLengthId, setSelectedLengthId] = useState<
     (typeof lengthPresets)[number]["id"]
   >("medium");
+  const [selectedThemeId, setSelectedThemeId] =
+    useState<PresentationTheme>("paper");
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
   const [commandInput, setCommandInput] = useState("");
   const [interactionLog, setInteractionLog] = useState<
@@ -571,6 +577,7 @@ export const PresentationWorkbench = () => {
           useWebResearch: forceWebResearch,
           targetDurationMinutes: selectedLength.durationMinutes,
           targetSlideCount: selectedLength.slideCount,
+          theme: selectedThemeId,
         });
         setResponse(nextResponse);
         if (autoPlaySpeech && nextResponse.session.currentSlideId) {
@@ -1031,6 +1038,44 @@ export const PresentationWorkbench = () => {
                   Target about {selectedLength.durationMinutes} minutes and roughly{" "}
                   {selectedLength.slideCount} slides.
                 </p>
+              </div>
+              <div className="mt-4 rounded-[18px] border border-slate-200 bg-white px-4 py-3">
+                <p className="text-sm font-semibold text-slate-800">
+                  Theme
+                </p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  {PRESENTATION_THEME_OPTIONS.map((themeOption) => {
+                    const selected = themeOption.id === selectedThemeId;
+
+                    return (
+                      <button
+                        className={`rounded-[16px] border p-3 text-left transition ${
+                          selected
+                            ? "border-coral bg-coral/10 shadow-[0_12px_30px_rgba(255,91,78,0.12)]"
+                            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                        }`}
+                        key={themeOption.id}
+                        onClick={() => setSelectedThemeId(themeOption.id)}
+                        type="button"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            className="inline-flex h-7 w-7 rounded-full border border-white shadow-sm"
+                            style={{
+                              background: `linear-gradient(135deg, ${themeOption.preview.background} 0%, ${themeOption.preview.background} 55%, ${themeOption.preview.accent} 56%, ${themeOption.preview.accent} 100%)`,
+                            }}
+                          />
+                          <span className="text-sm font-semibold text-slate-900">
+                            {themeOption.label}
+                          </span>
+                        </span>
+                        <span className="mt-2 block text-xs leading-5 text-slate-500">
+                          {themeOption.description}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 

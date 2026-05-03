@@ -115,3 +115,23 @@ test("ranking drops low-trust domains entirely when better sources exist", () =>
     ["https://en.wikipedia.org/wiki/Corrupted_Blood_incident"],
   );
 });
+
+test("ranking drops answers.com Q&A pages for company/entity lookups", () => {
+  const ranked = rankSearchResults("Volvo Cars official", [
+    {
+      title: "How do you replace a fuel pump on a Volvo s80? - Answers",
+      url: "https://www.answers.com/european-cars/How_do_you_replace_a_fuel_pump_on_a_Volvo_s80",
+      snippet: "Maintenance answer about replacing a fuel pump on a Volvo S80.",
+    },
+    {
+      title: "Volvo Cars - Wikipedia",
+      url: "https://en.wikipedia.org/wiki/Volvo_Cars",
+      snippet: "Volvo Cars is a Swedish multinational manufacturer of luxury vehicles.",
+    },
+  ]);
+
+  assert.deepEqual(
+    ranked.map((result) => result.url),
+    ["https://en.wikipedia.org/wiki/Volvo_Cars"],
+  );
+});

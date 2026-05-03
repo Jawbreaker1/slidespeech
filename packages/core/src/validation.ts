@@ -70,6 +70,26 @@ const audienceFacingSlideText = (slide: Slide): string =>
     ...slide.likelyQuestions,
   ].join(" ");
 
+const makeVisualCardTitle = (point: string): string => {
+  const normalized = point.replace(/\s+/g, " ").trim();
+  const [head, ...rest] = normalized.split(":");
+  const explicitHead = rest.length > 0 ? (head ?? "").trim() : "";
+  const source = explicitHead.length >= 8 ? explicitHead : normalized;
+  const title = source
+    .replace(/^[^\p{L}\p{N}]+/gu, "")
+    .replace(/\b(?:which|that|where|who|whose)\b.*$/i, "")
+    .replace(/[.,:!?]+$/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(" ");
+
+  return title || "Main idea";
+};
+
+const GENERIC_VISUAL_CARD_TITLE_PATTERN =
+  /^(?:key\s*(?:point|idea)|point|main\s*idea)\s*\d+$/i;
+
 const PRESENTATION_META_PATTERNS = [
   /\bfor every slide\b/i,
   /\bthis slide\b/i,
@@ -156,6 +176,10 @@ const META_REPAIR_AVOID_PATTERNS = [
   /^a concrete example, consequence, or real-world application of\b/i,
   /^the main services, products, or focus areas connected to\b/i,
   /^the main systems, parts, or focus areas that define\b/i,
+  /\bframes the concrete case within\b/i,
+  /&#x?[0-9a-f]+;?/i,
+  /\bUsing [^.]+ works in practice\b/,
+  /\bshapes how Using [^.]+ works\b/,
   /\bthis session\b/i,
   /\bto wrap up\b/i,
   /\bnext steps?\b/i,
@@ -281,6 +305,37 @@ const normalizeNarrationSourceStatement = (value: string): string => {
   }
 
   return ensureSentence(normalized);
+};
+
+const isSwedishDeckLanguage = (deck: Pick<Deck, "metadata">): boolean =>
+  /^sv\b/i.test(deck.metadata.language);
+
+const buildOpeningNarrationIntro = (deck: Pick<Deck, "metadata" | "topic">): string =>
+  isSwedishDeckLanguage(deck)
+    ? `Välkomna. Vi börjar med att rama in ${deck.topic} så att resten av genomgången får en tydlig kontext.`
+    : `Welcome everyone. We will start by framing ${deck.topic} so the rest of this talk has a clear context.`;
+
+const hasOpeningNarrationIntro = (value: string | undefined): boolean =>
+  Boolean(
+    value &&
+      /\b(?:welcome everyone|welcome|today we|we will start|we'll start|let's start|välkomna|idag|vi börjar)\b/i.test(
+        value,
+      ),
+  );
+
+const withOpeningNarrationIntro = (
+  segments: string[],
+  deck: Pick<Deck, "metadata" | "topic">,
+): string[] => {
+  const cleanedSegments = segments
+    .map((segment) => segment.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  if (hasOpeningNarrationIntro(cleanedSegments[0])) {
+    return cleanedSegments.slice(0, 6);
+  }
+
+  return [buildOpeningNarrationIntro(deck), ...cleanedSegments].slice(0, 6);
 };
 
 const buildNarrationSupportStatements = (deck: Deck, slide: Slide): string[] => {
@@ -712,7 +767,9 @@ const slideNeedsLanguageRepair = (deck: Deck, slide: Slide): boolean => {
     (/^why\b/i.test(normalizedTitle) && /\bcontributes to\b/i.test(learningGoal)) ||
     (/^what\b/i.test(normalizedTitle) && /\bcontributes to\b/i.test(learningGoal)) ||
     (/^core systems and focus areas$/i.test(normalizedTitle) &&
-      /\bcontributes to\b/i.test(learningGoal));
+      /\bcontributes to\b/i.test(learningGoal)) ||
+    /\bframes the concrete case within\b/i.test(learningGoal) ||
+    /&#x?[0-9a-f]+;?/i.test(learningGoal);
   const weakKeyPoints = slide.keyPoints.filter(
     (point) =>
       META_REPAIR_AVOID_PATTERNS.some((pattern) => pattern.test(point)) ||
@@ -790,7 +847,7 @@ const repairMetaPresentationSlide = (deck: Deck, slide: Slide): Slide => {
       heroStatement: repairedKeyPoints[0],
       cards: repairedKeyPoints.slice(0, 3).map((point, index) => ({
         id: `${slide.id}-meta-repair-card-${index + 1}`,
-        title: `Key point ${index + 1}`,
+        title: makeVisualCardTitle(point),
         body: point,
         tone:
           index === 0
@@ -865,10 +922,12 @@ export const rebuildNarrationFromSlideAnchors = (
     segments.push(candidate);
   }
 
+  const finalSegments = isIntro ? withOpeningNarrationIntro(segments, deck) : segments;
+
   return {
     slideId: slide.id,
-    narration: segments.join(" "),
-    segments,
+    narration: finalSegments.join(" "),
+    segments: finalSegments,
     summaryLine: existing?.summaryLine ?? slide.learningGoal,
     promptsForPauses:
       existing?.promptsForPauses.length
@@ -915,7 +974,7 @@ export const validateAndRepairDeck = (deck: Deck): ValidationResult<Deck> => {
           ...nextSlide.visuals,
           cards: nextSlide.keyPoints.slice(0, 3).map((point, keyPointIndex) => ({
             id: `${slide.id}-auto-card-${keyPointIndex + 1}`,
-            title: `Key point ${keyPointIndex + 1}`,
+            title: makeVisualCardTitle(point),
             body: point,
             tone:
               keyPointIndex === 0
@@ -924,6 +983,39 @@ export const validateAndRepairDeck = (deck: Deck): ValidationResult<Deck> => {
                   ? "neutral"
                   : "success",
           })),
+        },
+      };
+    }
+
+    const cardsWithAudienceTitles = nextSlide.visuals.cards.map((card) => {
+      if (!GENERIC_VISUAL_CARD_TITLE_PATTERN.test(card.title.trim())) {
+        return card;
+      }
+
+      repaired = true;
+      return {
+        ...card,
+        title: makeVisualCardTitle(card.body || nextSlide.keyPoints[0] || nextSlide.learningGoal),
+      };
+    });
+
+    if (
+      cardsWithAudienceTitles.some(
+        (card, cardIndex) =>
+          card.title !== nextSlide.visuals.cards[cardIndex]?.title,
+      )
+    ) {
+      issues.push({
+        code: "generic_visual_card_titles_repaired",
+        message: `Slide "${slide.title}" had generic visual card titles and was repaired from card content.`,
+        severity: "info",
+        slideId: slide.id,
+      });
+      nextSlide = {
+        ...nextSlide,
+        visuals: {
+          ...nextSlide.visuals,
+          cards: cardsWithAudienceTitles,
         },
       };
     }
@@ -1043,13 +1135,18 @@ export const validateAndRepairNarrations = (
     const readsVisualTextTooClosely =
       nearLiteralSegmentMatches >= 2 ||
       exactVisiblePhraseMatches >= 2;
+    const lacksOpeningIntro =
+      Boolean(existing) &&
+      slide.order === 0 &&
+      !hasOpeningNarrationIntro(existing?.segments[0] ?? existing?.narration);
     const needsRepair =
       !existing ||
       existing.segments.length < minSegments ||
       existing.segments.length > maxSegments ||
       existing.narration.trim().length < (slide.order === 0 ? 180 : 110) ||
       overlap.length < Math.min(3, Math.max(1, Math.floor(slideTokens.length / 6))) ||
-      readsVisualTextTooClosely;
+      readsVisualTextTooClosely ||
+      lacksOpeningIntro;
 
     if (!needsRepair) {
       return existing;

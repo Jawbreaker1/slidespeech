@@ -51,6 +51,7 @@ const normalizeGeneratePresentationInput = (
   ...(payload.targetSlideCount !== undefined
     ? { targetSlideCount: payload.targetSlideCount }
     : {}),
+  ...(payload.theme !== undefined ? { theme: payload.theme } : {}),
 });
 
 presentationsRouter.get("/example", async (_request, response, next) => {

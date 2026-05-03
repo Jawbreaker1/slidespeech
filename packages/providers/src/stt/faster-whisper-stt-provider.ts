@@ -11,13 +11,13 @@ import { healthy, unhealthy } from "../shared";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_PYTHON_BIN = ".venv-stt/bin/python";
-const DEFAULT_MODEL = "base.en";
+const DEFAULT_MODEL = "base";
 const DEFAULT_COMPUTE_TYPE = "int8";
 const DEFAULT_BEAM_SIZE = 3;
 const FFMPEG_BIN = "ffmpeg";
 const WORKER_PATH = join(
-  process.cwd(),
-  "packages/providers/src/stt/faster-whisper-worker.py",
+  __dirname,
+  "faster-whisper-worker.py",
 );
 
 type PendingRequest = {
@@ -159,7 +159,7 @@ export class FasterWhisperSTTProvider implements SpeechToTextProvider {
         this.config.model || DEFAULT_MODEL,
         this.config.computeType || DEFAULT_COMPUTE_TYPE,
         String(this.config.beamSize ?? DEFAULT_BEAM_SIZE),
-        this.config.language || "en",
+        this.config.language || "auto",
       ],
       {
         stdio: ["pipe", "pipe", "pipe"],

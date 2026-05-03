@@ -7,6 +7,7 @@ export {
   extractExplicitSourceUrls,
   extractPresentationBrief,
   extractPresentationSubject,
+  stripInstructionalSuffixes,
   subjectIsGenericEntityReference,
   stripExplicitSourceUrls,
 } from "./presentation-intent";
@@ -15,6 +16,7 @@ import {
   extractExplicitSourceUrls,
   extractPresentationBrief,
   extractPresentationSubject,
+  stripInstructionalSuffixes,
   subjectIsGenericEntityReference,
   stripExplicitSourceUrls,
 } from "./presentation-intent";
@@ -180,6 +182,9 @@ const normalizeSubjectKey = (value: string): string =>
     .toLocaleLowerCase()
     .normalize("NFKC")
     .replace(/[^\p{L}\p{N}]+/gu, "");
+
+const subjectTokenCount = (value: string): number =>
+  tokenizeResearchText(value).length;
 
 const deriveHostnameResearchAnchor = (url: string): string | null => {
   try {
@@ -573,7 +578,12 @@ const buildGuessedOfficialUrls = (query: string): string[] => {
   const urls = [`https://www.${slug}.com/`, `https://${slug}.com/`];
 
   if (/\b(car|cars|vehicle|vehicles|automotive|truck|trucks)\b/i.test(query)) {
-    urls.push(`https://www.${slug}cars.com/`);
+    if (/cars?$/.test(slug)) {
+      urls.push(`https://www.${slug}.com/intl/`);
+    } else {
+      urls.push(`https://www.${slug}cars.com/`);
+      urls.push(`https://www.${slug}cars.com/intl/`);
+    }
   }
 
   return [...new Set(urls)];
@@ -587,18 +597,23 @@ export const buildResearchPlan = (input: {
   const intent = input.intent ?? derivePresentationIntent(input.topic);
   const explicitSourceUrls = intent.explicitSourceUrls;
   const strippedTopic = stripExplicitSourceUrls(input.topic) || input.topic.trim();
-  const extractedSubject = intent.subject || extractPresentationSubject(strippedTopic) || strippedTopic;
+  const cleanedTopic = stripInstructionalSuffixes(strippedTopic) || strippedTopic;
+  const extractedSubject =
+    intent.subject || extractPresentationSubject(cleanedTopic) || cleanedTopic;
   const subject = resolveResearchSubject({
     subject: extractedSubject,
     explicitSourceUrls,
     intent,
   });
-  const freshnessSensitive = topicLooksTimeSensitive(strippedTopic);
+  const freshnessSensitive = topicLooksTimeSensitive(cleanedTopic);
   const entitySpecific =
-    intent.presentationFrame === "organization" || topicLooksEntitySpecific(strippedTopic);
-  const researchSpecific = topicLooksResearchSpecific(strippedTopic);
+    intent.presentationFrame === "organization" || topicLooksEntitySpecific(cleanedTopic);
+  const researchSpecific = topicLooksResearchSpecific(cleanedTopic);
   const requiresGroundedFacts =
-    explicitSourceUrls.length > 0 || topicRequiresGroundedFacts(strippedTopic);
+    explicitSourceUrls.length > 0 ||
+    input.requestedUseWebResearch === true ||
+    (input.requestedUseWebResearch !== false &&
+      topicRequiresGroundedFacts(cleanedTopic));
   const searchQueries: string[] = [];
   const rationale: string[] = [];
 
@@ -631,7 +646,7 @@ export const buildResearchPlan = (input: {
   }
 
   const specializedFocusQuery = buildSpecializedFocusQuery({
-    topic: strippedTopic,
+    topic: cleanedTopic,
     subject,
   });
   const subjectAnchoredSpecializedQuery = buildSubjectAnchoredSpecializedQuery({
@@ -676,9 +691,9 @@ export const buildResearchPlan = (input: {
     requestedCoverageGoals,
     specializedCoverageGoal:
       requestedCoverageGoals.length > 0
-        ? null
-        : buildSpecializedCoverageGoal({
-            topic: strippedTopic,
+          ? null
+          : buildSpecializedCoverageGoal({
+            topic: cleanedTopic,
             subject,
           }),
   });
@@ -691,8 +706,7 @@ export const buildResearchPlan = (input: {
     coverageGoals,
     maxResults: freshnessSensitive ? 4 : 3,
     freshnessSensitive,
-    requiresGroundedFacts:
-      requiresGroundedFacts || input.requestedUseWebResearch === true,
+    requiresGroundedFacts,
     rationale,
     planningMode: "heuristic",
   };
@@ -706,6 +720,16 @@ export const mergeResearchPlanWithSuggestion = (input: {
   const normalizedSuggestedSubject = input.suggestion.subject
     ? normalizeResearchSubjectCandidate(input.suggestion.subject)
     : null;
+  const explicitSourceHostnameAnchorMatch =
+    normalizedSuggestedSubject &&
+    input.basePlan.explicitSourceUrls.length > 0 &&
+    normalizeSubjectKey(normalizedSuggestedSubject) ===
+      normalizeSubjectKey(input.basePlan.subject) &&
+    (
+      subjectTokenCount(normalizedSuggestedSubject) >
+        subjectTokenCount(input.basePlan.subject) ||
+      normalizedSuggestedSubject.length > input.basePlan.subject.length + 1
+    );
   const suggestedSubjectMatchesProvisionalAnchor =
     normalizedSuggestedSubject &&
     normalizedSuggestedSubject !== input.basePlan.subject &&
@@ -718,7 +742,8 @@ export const mergeResearchPlanWithSuggestion = (input: {
     normalizedSuggestedSubject &&
     !subjectIsGenericEntityReference(normalizedSuggestedSubject) &&
     (subjectIsGenericEntityReference(input.basePlan.subject) ||
-      suggestedSubjectMatchesProvisionalAnchor)
+      suggestedSubjectMatchesProvisionalAnchor ||
+      explicitSourceHostnameAnchorMatch)
       ? normalizedSuggestedSubject
       : input.basePlan.subject;
   const upgradedGenericSubject =

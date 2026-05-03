@@ -1,8 +1,10 @@
 import type {
   AnswerQuestionInput,
+  ClassifyGroundingInput,
   ConversationTurnPlan,
   GenerateDeckInput,
   GenerateNarrationInput,
+  GroundingClassificationResult,
   LLMProvider,
   PedagogicalResponse,
   PlanConversationTurnInput,
@@ -10,11 +12,13 @@ import type {
   PlanPresentationInput,
   PresentationReview,
   ResearchPlanningSuggestion,
+  ReviewDeckSemanticsInput,
   SummarizeSectionInput,
   TransformExplanationInput,
   PresentationPlan,
   ReviewPresentationInput,
   Deck,
+  DeckSemanticReviewResult,
   SlideNarration,
 } from "@slidespeech/types";
 
@@ -56,10 +60,20 @@ const makeCards = (
 ) =>
   points.slice(0, 3).map((point, index) => {
     const [head, ...rest] = point.split(":");
+    const fallbackTitle = point
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^[^\p{L}\p{N}]+/gu, "")
+      .replace(/\b(?:which|that|where|who|whose)\b.*$/i, "")
+      .replace(/[.,:!?]+$/g, "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(" ");
     const title =
       rest.length > 0 && typeof head === "string" && head.trim().length > 0
         ? head.trim()
-        : `Point ${index + 1}`;
+        : fallbackTitle || "Main idea";
     const body = (rest.length > 0 ? rest.join(":") : point).trim();
 
     return {
@@ -529,6 +543,40 @@ export class MockLLMProvider implements LLMProvider {
     };
   }
 
+  async classifyGrounding(
+    input: ClassifyGroundingInput,
+  ): Promise<GroundingClassificationResult> {
+    const relevantFindings = input.findings.slice(0, 4);
+    const highlights = relevantFindings
+      .map((finding) => finding.content.split(/(?<=[.!?])\s+/)[0]?.trim())
+      .filter((value): value is string => Boolean(value))
+      .slice(0, 4);
+    const excerpts = relevantFindings
+      .flatMap((finding) =>
+        finding.content
+          .split(/(?<=[.!?])\s+/)
+          .map((value) => value.trim())
+          .filter((value) => value.length >= 30),
+      )
+      .slice(0, 6);
+
+    return {
+      highlights,
+      excerpts,
+      relevantSourceUrls: relevantFindings.map((finding) => finding.url),
+      sourceAssessments: input.findings.map((finding, index) => ({
+        url: finding.url,
+        title: finding.title,
+        role: index === 0 ? "identity" : "reference",
+        relevance: index < relevantFindings.length ? "high" : "low",
+        notes:
+          index < relevantFindings.length
+            ? "Kept as a mock high-signal grounding source."
+            : "Not selected by the mock grounding classifier.",
+      })),
+    };
+  }
+
   async planPresentation(input: PlanPresentationInput): Promise<PresentationPlan> {
     return makePlan(input.topic, {
       ...(input.targetDurationMinutes !== undefined
@@ -592,6 +640,17 @@ export class MockLLMProvider implements LLMProvider {
         .map((slide) => `${slide.title}: ${slide.learningGoal}`)
         .join(" "),
       followUpPrompt: "Do you want to continue or revisit a slide?",
+    };
+  }
+
+  async reviewDeckSemantics(
+    input: ReviewDeckSemanticsInput,
+  ): Promise<DeckSemanticReviewResult> {
+    return {
+      approved: true,
+      score: 0.9,
+      summary: `Mock semantic review accepted ${input.deck.title}.`,
+      issues: [],
     };
   }
 

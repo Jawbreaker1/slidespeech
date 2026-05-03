@@ -10,15 +10,15 @@ import {
   SlideIllustrationResponseSchema,
   SlideNarrationSchema,
 } from "@slidespeech/types";
-import type { Deck, PedagogicalProfile } from "@slidespeech/types";
+import type { Deck, PedagogicalProfile, PresentationTheme } from "@slidespeech/types";
 
 import { GeneratePresentationResponseSchema } from "@slidespeech/types";
 
 import { appContext } from "../lib/context";
 import {
   compactPresentationBrief,
-  deriveGroundingHighlights,
 } from "./presentation-context";
+import { buildGroundingBundle } from "./grounding-selection";
 import {
   buildResearchPlan,
   derivePresentationIntent,
@@ -33,6 +33,7 @@ import {
 } from "./research-policy";
 import {
   buildExplicitSourceFallbackQuery,
+  buildSupportingExplicitSourceUrls,
   collectFetchedFindingUrls,
   fetchAndSummarizeExplicitSources,
   searchAndSummarizeWebResearch,
@@ -41,6 +42,9 @@ import {
 const fetchedFindingLooksUsable = (content: string): boolean =>
   !content.startsWith("Failed to fetch source content:") &&
   !content.startsWith("Search snippet fallback:");
+
+const uniqueNonEmptyStrings = (values: Array<string | null | undefined>): string[] =>
+  [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
 
 const deckIsReadyForReuse = (deck: Deck): boolean => {
   const generation = deck.metadata.generation;
@@ -161,66 +165,19 @@ const directSourceGroundingLooksSufficient = (input: {
   });
 };
 
-const uniqueNonEmptyStrings = (values: Array<string | null | undefined>): string[] => {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const value of values) {
-    const normalized = value?.replace(/\s+/g, " ").trim();
-    if (!normalized) {
-      continue;
-    }
-
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    result.push(normalized);
-  }
-
-  return result;
-};
-
-const deriveGroundingExcerpts = (input: {
-  subject: string;
-  coverageGoals: string[];
-  findings: Array<{ title: string; url: string; content: string }>;
-}): string[] => {
-  const anchors = uniqueNonEmptyStrings([input.subject, ...input.coverageGoals]).join(" ");
-  const anchorTokens = tokenizeForGrounding(anchors);
-
-  const candidates = input.findings
-    .filter((finding) => fetchedFindingLooksUsable(finding.content))
-    .flatMap((finding) =>
-      finding.content
-        .split(/(?<=[.!?])\s+/)
-        .map((value) => value.replace(/\s+/g, " ").trim())
-        .filter((value) => value.length >= 40 && value.length <= 260)
-        .map((value, index) => ({
-          value,
-          index,
-          score:
-            anchorTokens.filter((token) => value.toLowerCase().includes(token)).length * 2 +
-            (/\b\d{2,4}\b/.test(value) ? 2 : 0) +
-            (/[,:;]/.test(value) ? 1 : 0),
-        })),
-    )
-    .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .map((candidate) => candidate.value);
-
-  return uniqueNonEmptyStrings(candidates).slice(0, 8);
-};
-
 export const createPresentation = async (input: {
   topic: string;
   pedagogicalProfile?: Partial<PedagogicalProfile> | undefined;
   useWebResearch?: boolean | undefined;
   targetDurationMinutes?: number | undefined;
   targetSlideCount?: number | undefined;
+  theme?: PresentationTheme | undefined;
 }) => {
+  const llmHealth = await appContext.llmProvider.healthCheck();
+  if (!llmHealth.ok) {
+    throw new Error(`LLM provider is not ready: ${llmHealth.detail}`);
+  }
+
   const presentationIntent = derivePresentationIntent(input.topic);
   const explicitSourceUrls = presentationIntent.explicitSourceUrls;
   const normalizedTopic = stripExplicitSourceUrls(input.topic) || input.topic.trim();
@@ -235,7 +192,8 @@ export const createPresentation = async (input: {
     requestedUseWebResearch: input.useWebResearch,
   });
   const requiresGroundedFacts =
-    explicitSourceUrls.length > 0 || topicRequiresGroundedFacts(normalizedTopic);
+    explicitSourceUrls.length > 0 ||
+    (input.useWebResearch !== false && topicRequiresGroundedFacts(normalizedTopic));
 
   if (shouldUseWebResearch || researchPlan.requiresGroundedFacts) {
     try {
@@ -275,7 +233,7 @@ export const createPresentation = async (input: {
   const directSourceResearch =
     researchPlan.directUrls.length > 0
       ? await fetchAndSummarizeExplicitSources({
-          query: researchPlan.subject,
+          query: presentationIntent.organization ?? researchPlan.subject,
           urls: researchPlan.directUrls,
         })
       : null;
@@ -283,30 +241,55 @@ export const createPresentation = async (input: {
     directSourceResearch
       ? collectFetchedFindingUrls(directSourceResearch.findings)
       : [];
-  const directSourceGroundingSufficient =
-    directSourceResearch &&
+  const supportingExplicitSourceUrls = buildSupportingExplicitSourceUrls({
+    urls: researchPlan.explicitSourceUrls,
+    presentationFrame: presentationIntent.presentationFrame,
+    deliveryFormat: presentationIntent.deliveryFormat,
+  }).filter((url) => !researchPlan.directUrls.includes(url));
+  const supportingExplicitSourceResearch =
+    supportingExplicitSourceUrls.length > 0
+      ? await fetchAndSummarizeExplicitSources({
+          query: presentationIntent.organization ?? researchPlan.subject,
+          urls: supportingExplicitSourceUrls,
+        })
+      : null;
+  const successfulSupportingExplicitSourceUrls =
+    supportingExplicitSourceResearch
+      ? collectFetchedFindingUrls(supportingExplicitSourceResearch.findings)
+      : [];
+  const combinedExplicitFindings = [
+    ...(directSourceResearch?.findings ?? []),
+    ...(supportingExplicitSourceResearch?.findings ?? []),
+  ];
+  const explicitSourceGroundingSufficient =
+    combinedExplicitFindings.length > 0 &&
     directSourceGroundingLooksSufficient({
       subject: researchPlan.subject,
       coverageGoals: researchPlan.coverageGoals,
-      findings: directSourceResearch.findings,
+      findings: combinedExplicitFindings,
     });
 
   const shouldRunSupportingExplicitSourceSearch =
     researchPlan.explicitSourceUrls.length > 0 &&
     (
-      successfulDirectSourceUrls.length === 0 ||
-      !directSourceGroundingSufficient ||
-      presentationIntent.presentationFrame === "organization"
+      successfulDirectSourceUrls.length + successfulSupportingExplicitSourceUrls.length === 0 ||
+      !explicitSourceGroundingSufficient
     );
   const explicitSourceFallbackResearch =
     shouldRunSupportingExplicitSourceSearch
-      ? await searchAndSummarizeWebResearch({
-          query: buildExplicitSourceFallbackQuery({
-            topic: researchPlan.subject,
-            urls: researchPlan.explicitSourceUrls,
-          }),
-          maxResults: 3,
-        })
+        ? await searchAndSummarizeWebResearch({
+            query: buildExplicitSourceFallbackQuery({
+              topic: researchPlan.subject,
+              urls: researchPlan.explicitSourceUrls,
+              presentationFrame: presentationIntent.presentationFrame,
+              deliveryFormat: presentationIntent.deliveryFormat,
+              ...(presentationIntent.organization
+                ? { organization: presentationIntent.organization }
+                : {}),
+            }),
+            maxResults: 3,
+            allowedHostnames: researchPlan.explicitSourceUrls,
+          })
       : null;
   const successfulExplicitFallbackUrls =
     explicitSourceFallbackResearch
@@ -315,13 +298,15 @@ export const createPresentation = async (input: {
   const resolvedSubjectFromFetchedSources = resolvePresentationSubject({
     prompt: input.topic,
     researchSubject: researchPlan.subject,
-    directFindings: directSourceResearch?.findings ?? [],
+    directFindings: combinedExplicitFindings,
     fallbackFindings: explicitSourceFallbackResearch?.findings ?? [],
     searchFindings: [],
   });
 
   const hasExplicitGroundingSuccess =
-    successfulDirectSourceUrls.length > 0 || successfulExplicitFallbackUrls.length > 0;
+    successfulDirectSourceUrls.length > 0 ||
+    successfulSupportingExplicitSourceUrls.length > 0 ||
+    successfulExplicitFallbackUrls.length > 0;
   const searchQueries = hasExplicitGroundingSuccess
     ? []
     : subjectIsGenericEntityReference(researchPlan.subject) &&
@@ -357,6 +342,7 @@ export const createPresentation = async (input: {
   const successfulGroundingUrls =
     [
       ...successfulDirectSourceUrls,
+      ...successfulSupportingExplicitSourceUrls,
       ...successfulExplicitFallbackUrls,
       ...searchResearches.flatMap((research) =>
         collectFetchedFindingUrls(research.findings),
@@ -365,17 +351,17 @@ export const createPresentation = async (input: {
       .filter((value, index, values) => values.indexOf(value) === index)
       .filter((value) => !LOW_VALUE_GROUNDING_URL_PATTERN.test(value));
 
-  if (requiresGroundedFacts && successfulGroundingUrls.length === 0) {
+  if (researchPlan.requiresGroundedFacts && successfulGroundingUrls.length === 0) {
     throw new Error(
       `No trustworthy web sources could be fetched for "${normalizedTopic}". Refusing to generate an ungrounded deck.`,
     );
   }
-  const groundingSummary = [
-    researchPlan.coverageGoals.length > 0
-      ? `Research coverage goals: ${researchPlan.coverageGoals.join("; ")}`
-      : null,
+  const researchSummary = [
     directSourceResearch
       ? `Direct source grounding: ${directSourceResearch.summary}`
+      : null,
+    supportingExplicitSourceResearch
+      ? `Supporting same-domain source grounding: ${supportingExplicitSourceResearch.summary}`
       : null,
     explicitSourceFallbackResearch
       ? `Fallback web search after explicit source fetch failure: ${explicitSourceFallbackResearch.summary}`
@@ -389,31 +375,58 @@ export const createPresentation = async (input: {
   const presentationSubject = resolvePresentationSubject({
     prompt: input.topic,
     researchSubject: researchPlan.subject,
-    directFindings: directSourceResearch?.findings ?? [],
+    directFindings: combinedExplicitFindings,
     fallbackFindings: explicitSourceFallbackResearch?.findings ?? [],
     searchFindings: searchResearches.flatMap((research) => research.findings),
   });
   const presentationBrief =
     compactPresentationBrief(extractedBrief, presentationSubject) ?? undefined;
-  const groundingHighlights = deriveGroundingHighlights({
+  const allGroundingFindings = [
+    ...combinedExplicitFindings,
+    ...(explicitSourceFallbackResearch?.findings ?? []),
+    ...searchResearches.flatMap((research) => research.findings),
+  ].filter((finding) => fetchedFindingLooksUsable(finding.content));
+  let groundingClassification = null;
+
+  if (allGroundingFindings.length > 0) {
+    try {
+      groundingClassification = await appContext.llmProvider.classifyGrounding({
+        topic: presentationSubject,
+        ...(presentationBrief ? { presentationBrief } : {}),
+        intent: {
+          ...effectiveIntent,
+          subject: presentationSubject,
+          framing: presentationBrief ?? effectiveIntent.framing,
+        },
+        coverageGoals: researchPlan.coverageGoals,
+        findings: allGroundingFindings,
+      });
+    } catch (error) {
+      console.warn(
+        `[slidespeech] grounding classification fallback for "${presentationSubject}": ${(error as Error).message}`,
+      );
+    }
+  }
+
+  const {
+    groundingHighlights,
+    groundingExcerpts,
+    groundingCoverageGoals,
+    groundingSourceIds,
+    groundingFacts,
+  } = buildGroundingBundle({
     subject: presentationSubject,
     coverageGoals: researchPlan.coverageGoals,
-    freshnessSensitive: researchPlan.freshnessSensitive,
-    findings: [
-      ...(directSourceResearch?.findings ?? []),
-      ...(explicitSourceFallbackResearch?.findings ?? []),
-      ...searchResearches.flatMap((research) => research.findings),
-    ],
+    findings: allGroundingFindings,
+    classification: groundingClassification,
   });
-  const groundingExcerpts = deriveGroundingExcerpts({
-    subject: presentationSubject,
-    coverageGoals: researchPlan.coverageGoals,
-    findings: [
-      ...(directSourceResearch?.findings ?? []),
-      ...(explicitSourceFallbackResearch?.findings ?? []),
-      ...searchResearches.flatMap((research) => research.findings),
-    ],
-  });
+  const groundingSummary =
+    groundingClassification?.highlights.length
+      ? uniqueNonEmptyStrings([
+          ...groundingHighlights,
+          ...groundingExcerpts.slice(0, 4),
+        ]).join("\n")
+      : researchSummary;
 
   const result = await appContext.sessionService.createSession(
     {
@@ -432,10 +445,14 @@ export const createPresentation = async (input: {
             groundingSummary,
             ...(groundingHighlights.length > 0 ? { groundingHighlights } : {}),
             ...(groundingExcerpts.length > 0 ? { groundingExcerpts } : {}),
-            ...(researchPlan.coverageGoals.length > 0
-              ? { groundingCoverageGoals: researchPlan.coverageGoals }
+            ...(groundingCoverageGoals.length > 0
+              ? { groundingCoverageGoals }
               : {}),
-            groundingSourceIds: successfulGroundingUrls,
+            ...(groundingFacts.length > 0 ? { groundingFacts } : {}),
+            groundingSourceIds:
+              groundingSourceIds.length > 0
+                ? groundingSourceIds
+                : successfulGroundingUrls,
             groundingSourceType: "mixed" as const,
           }
         : {}),
@@ -443,6 +460,7 @@ export const createPresentation = async (input: {
         ? { targetDurationMinutes: input.targetDurationMinutes }
         : {}),
       ...(input.targetSlideCount ? { targetSlideCount: input.targetSlideCount } : {}),
+      ...(input.theme ? { theme: input.theme } : {}),
     },
   );
 

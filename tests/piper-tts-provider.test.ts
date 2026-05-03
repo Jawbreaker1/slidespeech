@@ -6,10 +6,10 @@ import { resolvePiperModelSelection } from "../packages/providers/src/tts/piper-
 test("falls back to an installed piper voice when the preferred default is missing", () => {
   const selection = resolvePiperModelSelection({});
 
-  assert.equal(selection.modelPath, "models/tts/en_US-bryce-medium.onnx");
+  assert.equal(selection.modelPath, "models/tts/en_US-hfc_male-medium.onnx");
   assert.equal(
     selection.configPath,
-    "models/tts/en_US-bryce-medium.onnx.json",
+    "models/tts/en_US-hfc_male-medium.onnx.json",
   );
 });
 

@@ -4,7 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import type { PresentationGenerationJobStatusResponse } from "@slidespeech/types";
+import type {
+  PresentationGenerationJobStatusResponse,
+  PresentationTheme,
+} from "@slidespeech/types";
+import { PRESENTATION_THEME_OPTIONS } from "@slidespeech/types";
 
 import {
   enqueuePresentationGeneration,
@@ -18,10 +22,10 @@ const suggestedTopics = [
 ];
 
 const statusMessages = [
-  "Planning the presentation structure",
-  "Gathering and grounding source material",
-  "Generating slides and teaching flow",
-  "Preparing presenter mode",
+  "Starting the generation job",
+  "Researching and planning the deck",
+  "Generating and validating slides",
+  "Still working through local model retries",
 ];
 
 const lengthPresets = [
@@ -55,6 +59,8 @@ export const PresentationLaunchpad = () => {
   const [selectedLengthId, setSelectedLengthId] = useState<
     (typeof lengthPresets)[number]["id"]
   >("medium");
+  const [selectedThemeId, setSelectedThemeId] =
+    useState<PresentationTheme>("paper");
   const [error, setError] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -92,7 +98,7 @@ export const PresentationLaunchpad = () => {
         : `Queued behind ${generationJob.jobsAhead} presentation${generationJob.jobsAhead === 1 ? "" : "s"}`;
     }
 
-    return statusMessages[Math.min(Math.floor(elapsedSeconds / 12), statusMessages.length - 1)];
+    return statusMessages[Math.min(Math.floor(elapsedSeconds / 20), statusMessages.length - 1)];
   }, [elapsedSeconds, generationJob]);
 
   useEffect(() => {
@@ -162,6 +168,7 @@ export const PresentationLaunchpad = () => {
           useWebResearch: forceWebResearch,
           targetDurationMinutes: selectedLength.durationMinutes,
           targetSlideCount: selectedLength.slideCount,
+          theme: selectedThemeId,
         });
         setGenerationJob(result);
       } catch (generationError) {
@@ -299,6 +306,48 @@ export const PresentationLaunchpad = () => {
               </p>
             </div>
 
+            <div className="mt-5 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+              <p className="text-sm font-semibold text-slate-800">
+                Theme
+              </p>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                Pick the visual direction for presenter mode and the saved deck.
+              </p>
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                {PRESENTATION_THEME_OPTIONS.map((themeOption) => {
+                  const selected = themeOption.id === selectedThemeId;
+
+                  return (
+                    <button
+                      className={`rounded-[18px] border p-3 text-left transition ${
+                        selected
+                          ? "border-coral bg-white shadow-[0_14px_36px_rgba(255,91,78,0.12)]"
+                          : "border-slate-200 bg-white/70 hover:border-coral hover:bg-white"
+                      }`}
+                      key={themeOption.id}
+                      onClick={() => setSelectedThemeId(themeOption.id)}
+                      type="button"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="inline-flex h-7 w-7 rounded-full border border-white shadow-sm"
+                          style={{
+                            background: `linear-gradient(135deg, ${themeOption.preview.background} 0%, ${themeOption.preview.background} 55%, ${themeOption.preview.accent} 56%, ${themeOption.preview.accent} 100%)`,
+                          }}
+                        />
+                        <span className="text-sm font-semibold text-slate-900">
+                          {themeOption.label}
+                        </span>
+                      </span>
+                      <span className="mt-2 block text-xs leading-5 text-slate-500">
+                        {themeOption.description}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {error ? (
               <div className="mt-4 rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
                 {error}
@@ -319,7 +368,9 @@ export const PresentationLaunchpad = () => {
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   {isQueued
                     ? "Only one heavy generation runs at a time in this demo. The page keeps polling until your turn starts."
-                    : "Local models can take several minutes. When generation completes, the app opens presenter mode automatically."}
+                    : elapsedSeconds >= 90
+                      ? "This is taking longer than expected. That usually means the local model is retrying or repairing difficult slide output; the app will open presenter mode as soon as the first usable session is saved."
+                      : "Local models can take several minutes. When generation completes, the app opens presenter mode automatically."}
                 </p>
                 <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
                   <div

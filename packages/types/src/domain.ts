@@ -428,6 +428,7 @@ export const GeneratePresentationRequestSchema = z.object({
   useWebResearch: z.boolean().optional(),
   targetDurationMinutes: z.number().int().positive().max(60).optional(),
   targetSlideCount: z.number().int().positive().max(30).optional(),
+  theme: PresentationThemeSchema.optional(),
 });
 
 export type GeneratePresentationRequest = z.infer<

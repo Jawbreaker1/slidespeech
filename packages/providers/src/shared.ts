@@ -28,6 +28,49 @@ export const unhealthy = (
   checkedAt: nowIso(),
 });
 
+const HTML_ENTITY_MAP: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"',
+};
+
+const decodeHtmlEntitiesOnce = (value: string): string =>
+  value
+    .replace(/&([a-z][a-z0-9]+);/gi, (match, entity: string) => {
+      return HTML_ENTITY_MAP[entity.toLowerCase()] ?? match;
+    })
+    .replace(/&#x([0-9a-f]+);?/gi, (match, codePoint: string) => {
+      const parsed = Number.parseInt(codePoint, 16);
+      if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 0x10ffff) {
+        return match;
+      }
+      return String.fromCodePoint(parsed);
+    })
+    .replace(/&#([0-9]+);?/g, (match, codePoint: string) => {
+      const parsed = Number.parseInt(codePoint, 10);
+      if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 0x10ffff) {
+        return match;
+      }
+      return String.fromCodePoint(parsed);
+    });
+
+export const decodeHtmlEntities = (value: string): string => {
+  let current = value;
+
+  for (let index = 0; index < 3; index += 1) {
+    const next = decodeHtmlEntitiesOnce(current);
+    if (next === current) {
+      return next;
+    }
+    current = next;
+  }
+
+  return current;
+};
+
 export const ensureDirForFile = async (filePath: string): Promise<void> => {
   await mkdir(dirname(filePath), { recursive: true });
 };

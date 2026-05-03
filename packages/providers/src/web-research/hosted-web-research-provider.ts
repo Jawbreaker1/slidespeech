@@ -5,7 +5,7 @@ import type {
   WebSearchResult,
 } from "@slidespeech/types";
 
-import { healthy, unhealthy } from "../shared";
+import { decodeHtmlEntities, healthy, unhealthy } from "../shared";
 
 interface HostedWebResearchConfig {
   timeoutMs?: number | undefined;
@@ -57,6 +57,7 @@ const TRUSTED_DOMAIN_PATTERNS = [
 const LOW_TRUST_DOMAIN_PATTERNS = [
   /(^|\.)zhihu\.com$/i,
   /(^|\.)quora\.com$/i,
+  /(^|\.)answers\.com$/i,
   /(^|\.)pinterest\./i,
   /(^|\.)reddit\.com$/i,
   /(^|\.)redd\.it$/i,
@@ -75,16 +76,8 @@ const CURRENT_TOPIC_PATTERNS = [
 const SPECIALIZED_RESEARCH_QUERY_PATTERN =
   /\b(outbreak|incident|plague|research(?:er|ers)?|stud(?:y|ied|ies)|epidemi\w*|pandemic|contagion|disease spread|infection spread)\b/i;
 
-const decodeHtml = (value: string): string =>
-  value
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-
 const stripTags = (html: string): string =>
-  decodeHtml(
+  decodeHtmlEntities(
     html
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")

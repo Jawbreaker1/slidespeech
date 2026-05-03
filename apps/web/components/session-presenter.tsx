@@ -4,24 +4,14 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import type {
-  Deck,
-  NarrationProgressResponse,
-  SelectSlideResponse,
-  Session,
   SessionInteractionResponse as SessionInteractionPayload,
-  SessionSnapshotResponse,
   SlideIllustrationAsset,
   SlideNarration,
   SpeechSynthesisResponse,
-  TranscriptTurn,
   VoiceTurnResponse,
 } from "@slidespeech/types";
 import { resolvePresentationTheme } from "@slidespeech/types";
-import {
-  PresenterControls,
-  SlidePreviewCard,
-  VisualSlideCanvas,
-} from "@slidespeech/ui";
+import { VisualSlideCanvas } from "@slidespeech/ui";
 
 import {
   fetchSessionSnapshot,
@@ -38,175 +28,34 @@ import {
   createBrowserSpeechToTextProvider,
   type BrowserSpeechToTextProvider,
 } from "../lib/browser-speech";
-
-type InteractionEntry = {
-  role: "user" | "assistant";
-  text: string;
-};
-
-type PresenterState = {
-  deck: Deck;
-  session: Session;
-  provider: string;
-  transcripts: TranscriptTurn[];
-  narrationsBySlideId: Record<string, SlideNarration>;
-};
-
-type PresenterUpdate =
-  | SelectSlideResponse
-  | NarrationProgressResponse
-  | SpeechSynthesisResponse
-  | SessionInteractionPayload
-  | VoiceTurnResponse;
-
-type VoiceTranscriptSummary = {
-  source: "browser" | "backend";
-  provider: string;
-  text: string;
-  confidence?: number;
-  hadSpeech: boolean;
-  transcriptAvailable: boolean;
-};
-
-type AnswerReadyNotice = {
-  question: string | null;
-  answer: string;
-};
-
-type BackendVoiceRecordingSupport = {
-  available: boolean;
-  reason: string | null;
-};
-
-const VOICE_WORD_TOKEN_PATTERN = /[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu;
-
-const tokenizeVoiceTranscript = (value: string): string[] =>
-  Array.from(value.normalize("NFKC").matchAll(VOICE_WORD_TOKEN_PATTERN))
-    .map((match) => match[0]?.trim() ?? "")
-    .filter(Boolean);
-
-const isLowSignalBrowserVoiceTranscript = (value: string): boolean => {
-  const tokens = tokenizeVoiceTranscript(value);
-
-  if (tokens.length === 0) {
-    return true;
-  }
-
-  return tokens.length === 1 && tokens[0]!.length <= 3;
-};
-
-const toInteractionLog = (
-  transcripts: TranscriptTurn[],
-): InteractionEntry[] =>
-  transcripts
-    .filter(
-      (turn): turn is TranscriptTurn & { role: "user" | "assistant" } =>
-        turn.role === "user" || turn.role === "assistant",
-    )
-    .map((turn) => ({
-      role: turn.role,
-      text: turn.text,
-    }));
-
-const getNarrationSegments = (
-  narration: SlideNarration | undefined,
-  fallbackText: string | undefined,
-): string[] => {
-  const explicitSegments = narration?.segments ?? [];
-
-  if (explicitSegments.length > 0) {
-    return explicitSegments;
-  }
-
-  const baseText = narration?.narration ?? fallbackText ?? "";
-  const normalized = baseText.replace(/\s+/g, " ").trim();
-
-  if (!normalized) {
-    return [];
-  }
-
-  const sentenceLikeSegments = normalized
-    .split(/(?<=[.!?])\s+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-
-  return sentenceLikeSegments.length > 0 ? sentenceLikeSegments : [normalized];
-};
-
-const fromSnapshot = (snapshot: SessionSnapshotResponse): PresenterState => ({
-  deck: snapshot.deck,
-  session: snapshot.session,
-  provider: snapshot.provider,
-  transcripts: snapshot.transcripts,
-  narrationsBySlideId: {
-    ...snapshot.session.narrationBySlideId,
-    ...(snapshot.narration ? { [snapshot.narration.slideId]: snapshot.narration } : {}),
-  },
-});
-
-const applyUpdate = (
-  previous: PresenterState,
-  next: PresenterUpdate,
-): PresenterState => {
-  const updatedNarrations = {
-    ...previous.narrationsBySlideId,
-    ...next.session.narrationBySlideId,
-    ...(next.narration ? { [next.narration.slideId]: next.narration } : {}),
-  };
-
-  return {
-    ...previous,
-    deck: next.deck,
-    session: {
-      ...next.session,
-      narrationBySlideId: updatedNarrations,
-    },
-    provider: next.provider,
-    narrationsBySlideId: updatedNarrations,
-  };
-};
-
-const getBackendVoiceRecordingSupport = (): BackendVoiceRecordingSupport => {
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return {
-      available: false,
-      reason:
-        "Microphone recording is not available before the presenter finishes loading.",
-    };
-  }
-
-  if (!window.isSecureContext) {
-    return {
-      available: false,
-      reason:
-        "Microphone recording requires a secure browser context. Open the presenter on http://localhost:3000 or HTTPS.",
-    };
-  }
-
-  if (
-    !navigator.mediaDevices ||
-    typeof navigator.mediaDevices.getUserMedia !== "function"
-  ) {
-    return {
-      available: false,
-      reason:
-        "This browser/context does not expose microphone recording APIs for backend STT.",
-    };
-  }
-
-  if (typeof MediaRecorder === "undefined") {
-    return {
-      available: false,
-      reason:
-        "This browser does not support in-browser audio recording for backend STT.",
-    };
-  }
-
-  return {
-    available: true,
-    reason: null,
-  };
-};
+import {
+  assessVoiceQuestionTranscript,
+  getSpeechRecognitionLanguage,
+  type VoiceQuestionSource,
+} from "../lib/question-flow";
+import { ActiveSlideStage } from "./active-slide-stage";
+import { AskNaturallyPanel } from "./ask-naturally-panel";
+import { GroundingPanel } from "./grounding-panel";
+import { PresenterControlsPanel } from "./presenter-controls-panel";
+import { PresenterHeader } from "./presenter-header";
+import { QuestionFlowOverlay } from "./question-flow-overlay";
+import {
+  applyUpdate,
+  fromSnapshot,
+  getBackendVoiceRecordingSupport,
+  getNarrationSegments,
+  toInteractionLog,
+  type AnswerReadyNotice,
+  type BackendVoiceRecordingSupport,
+  type InteractionEntry,
+  type PresenterState,
+  type QuestionFlowSource,
+  type QuestionFlowStage,
+  type QuestionFlowState,
+  type VoiceTranscriptSummary,
+} from "./session-presenter-state";
+import { SlideOverview } from "./slide-overview";
+import { WorkingOverlay } from "./working-overlay";
 
 export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [state, setState] = useState<PresenterState | null>(null);
@@ -230,7 +79,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [lastSpokenText, setLastSpokenText] = useState<string | null>(null);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isListeningBrowserVoice, setIsListeningBrowserVoice] = useState(false);
-  const [browserInterimTranscript, setBrowserInterimTranscript] = useState("");
   const [browserSpeechSupported, setBrowserSpeechSupported] = useState(false);
   const [backendVoiceRecordingSupport, setBackendVoiceRecordingSupport] =
     useState<BackendVoiceRecordingSupport>({
@@ -246,6 +94,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const [showBlockingOverlay, setShowBlockingOverlay] = useState(false);
   const [latestAnswerNotice, setLatestAnswerNotice] =
     useState<AnswerReadyNotice | null>(null);
+  const [questionFlow, setQuestionFlow] = useState<QuestionFlowState | null>(null);
   const [isPending, startTransition] = useTransition();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playbackSequenceRef = useRef(0);
@@ -259,6 +108,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const liveVoiceModeRef = useRef(false);
   const voiceLoopRunningRef = useRef(false);
   const speechRequestVersionRef = useRef(0);
+  const questionRequestVersionRef = useRef(0);
   const answerSpeechCacheRef = useRef<
     Map<string, Promise<SpeechSynthesisResponse> | SpeechSynthesisResponse>
   >(new Map());
@@ -302,7 +152,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     if (!liveVoiceMode) {
       browserSpeechProviderRef.current?.stop();
       setIsListeningBrowserVoice(false);
-      setBrowserInterimTranscript("");
       voiceLoopRunningRef.current = false;
     }
   }, [liveVoiceMode]);
@@ -352,8 +201,8 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const activeSlide = slides[currentSlideIndex];
   const narration = activeSlide ? state?.narrationsBySlideId[activeSlide.id] : undefined;
   const narrationSegments = useMemo(
-    () => getNarrationSegments(narration, activeSlide?.beginnerExplanation),
-    [activeSlide?.beginnerExplanation, narration],
+    () => getNarrationSegments(narration, undefined),
+    [narration],
   );
   const currentNarrationIndex = Math.max(
     0,
@@ -365,11 +214,27 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   const currentNarrationText =
     narrationSegments[currentNarrationIndex] ??
     narration?.narration ??
-    activeSlide?.beginnerExplanation ??
     "";
+  const currentNarrationDisplayText =
+    narrationLoadingSlideId === activeSlide?.id
+      ? "Generating narration for this slide..."
+      : narration
+        ? currentNarrationText
+        : "Narration is being prepared for this slide.";
   const activeIllustration = activeSlide
     ? illustrationsBySlideId[activeSlide.id]
     : undefined;
+  const activeSlideCanvas = useMemo(
+    () =>
+      activeSlide ? (
+        <VisualSlideCanvas
+          slide={activeSlide}
+          illustrationAsset={activeIllustration}
+          theme={deckTheme}
+        />
+      ) : null,
+    [activeIllustration, activeSlide, deckTheme],
+  );
   const isPresenting =
     state?.session.state === "presenting" || state?.session.state === "resuming";
   const narrationAutoPlay = true;
@@ -380,6 +245,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   ).length;
   const missingNarrationCount = Math.max(slides.length - narrationReadySlideCount, 0);
   const isDeckNarrationReady = slides.length > 0 && missingNarrationCount === 0;
+  const activeSlideNarrationReady = Boolean(activeSlide && narration);
   const isWaitingForNarrationDuringPlayback =
     isPresenting && isSynthesizingSpeech && !isPlayingSpeech;
   const backendVoiceRecordingAvailable = backendVoiceRecordingSupport.available;
@@ -391,16 +257,20 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     Boolean(pendingUserTurn) ||
     isInteracting ||
     (isSubmittingVoice && !isRecordingVoice);
+  const isGeneratingNarrationAudio =
+    !isBuildingAnswer && isSynthesizingSpeech && !isPlayingSpeech;
   const rawBlockingPresenterWork =
-    pendingPresentationStart || isWaitingForNarrationDuringPlayback || isBuildingAnswer;
+    pendingPresentationStart || isWaitingForNarrationDuringPlayback;
   const latestAssistantMessage =
     [...interactionLog].reverse().find((entry) => entry.role === "assistant")?.text ??
     null;
   const workingOverlayTitle = isBuildingAnswer
     ? "Generating answer"
     : pendingPresentationStart
-      ? "Preparing full narration"
-      : "Generating content";
+      ? "Preparing presenter mode"
+      : isGeneratingNarrationAudio
+        ? "Generating voice"
+        : "Generating content";
   const workingOverlayMessage = isBuildingAnswer
     ? pendingUserTurn
       ? `Generating a spoken answer to “${pendingUserTurn}”.`
@@ -408,15 +278,73 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         ? "Transcribing your question and generating the answer."
         : "Generating the next spoken answer for the presentation."
     : pendingPresentationStart
-      ? `Getting the remaining slide narration ready before presentation starts. ${narrationReadySlideCount} of ${slides.length} slides are ready.`
-      : activeSlide
-        ? `Generating the next spoken segment for “${activeSlide.title}”.`
-        : "Generating the next spoken segment for the presentation.";
+      ? activeSlide
+        ? activeSlideNarrationReady
+          ? `The first spoken point for “${activeSlide.title}” is ready. Starting playback now.`
+          : `Preparing the first spoken point for “${activeSlide.title}”. ${narrationReadySlideCount} of ${slides.length} slide narrations are already cached; the rest continues in the background.`
+        : "Preparing the first spoken point before presentation starts."
+      : isGeneratingNarrationAudio
+        ? activeSlide
+          ? `Rendering spoken audio for “${activeSlide.title}”. Playback starts automatically when the voice clip is ready.`
+          : "Rendering spoken audio for the presentation. Playback starts automatically when the voice clip is ready."
+        : activeSlide
+          ? `Generating the next spoken segment for “${activeSlide.title}”.`
+          : "Generating the next spoken segment for the presentation.";
   const presentButtonLabel = pendingPresentationStart
     ? "Preparing..."
-    : isPresenting
-      ? "Pause"
-      : "Present";
+    : isGeneratingNarrationAudio
+      ? "Generating voice..."
+      : isPresenting
+        ? "Pause"
+        : "Present";
+
+  const createQuestionRequest = (
+    input: Omit<QuestionFlowState, "requestId">,
+  ): number => {
+    const requestId = questionRequestVersionRef.current + 1;
+    questionRequestVersionRef.current = requestId;
+    setQuestionFlow({
+      requestId,
+      ...input,
+    });
+    return requestId;
+  };
+
+  const isCurrentQuestionRequest = (requestId: number): boolean =>
+    questionRequestVersionRef.current === requestId;
+
+  const updateQuestionFlow = (
+    requestId: number,
+    next:
+      | Partial<Omit<QuestionFlowState, "requestId">>
+      | ((current: QuestionFlowState) => Partial<Omit<QuestionFlowState, "requestId">>),
+  ) => {
+    setQuestionFlow((current) => {
+      if (!current || current.requestId !== requestId) {
+        return current;
+      }
+
+      const partial = typeof next === "function" ? next(current) : next;
+      return {
+        ...current,
+        ...partial,
+      };
+    });
+  };
+
+  const clearQuestionFlow = (requestId?: number) => {
+    setQuestionFlow((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (requestId !== undefined && current.requestId !== requestId) {
+        return current;
+      }
+
+      return null;
+    });
+  };
 
   const mergeNarrationIntoState = (nextNarration: SlideNarration) => {
     setState((previous) =>
@@ -557,7 +485,12 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   }, [activeSlide, narration, narrationLoadingSlideId, sessionId, state]);
 
   useEffect(() => {
-    if (!state) {
+    if (
+      !state ||
+      pendingPresentationStart ||
+      isPlayingSpeech ||
+      isSynthesizingSpeech
+    ) {
       return;
     }
 
@@ -594,46 +527,41 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, state]);
+  }, [
+    isPlayingSpeech,
+    isSynthesizingSpeech,
+    pendingPresentationStart,
+    sessionId,
+    state,
+  ]);
 
   useEffect(() => {
-    if (!pendingPresentationStart || isDeckNarrationReady) {
+    if (!pendingPresentationStart || !activeSlide || activeSlideNarrationReady) {
       return;
     }
 
     let cancelled = false;
 
-    void (async () => {
-      for (const slide of slides) {
-        if (cancelled) {
-          return;
-        }
-
-        if (state?.narrationsBySlideId[slide.id]) {
-          continue;
-        }
-
-        try {
-          await loadNarration(slide.id, {
-            foreground: slide.id === activeSlide?.id,
-            suppressError: true,
-          });
-        } catch {
-          // Let the overlay stay visible and allow the user to retry explicitly.
-        }
+    void loadNarration(activeSlide.id, {
+      foreground: true,
+      suppressError: true,
+    }).catch((loadError) => {
+      if (cancelled) {
+        return;
       }
-    })();
+
+      setError((loadError as Error).message);
+      setPendingPresentationStart(false);
+    });
 
     return () => {
       cancelled = true;
     };
   }, [
     activeSlide?.id,
-    isDeckNarrationReady,
+    activeSlideNarrationReady,
     pendingPresentationStart,
     sessionId,
-    slides,
-    state,
   ]);
 
   useEffect(() => {
@@ -789,7 +717,6 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     browserSpeechProviderRef.current?.stop();
     setLiveVoiceMode(false);
     setIsListeningBrowserVoice(false);
-    setBrowserInterimTranscript("");
     voiceLoopRunningRef.current = false;
   };
 
@@ -801,6 +728,23 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     mediaStreamRef.current = null;
+  };
+
+  const cancelQuestionFlow = () => {
+    questionRequestVersionRef.current += 1;
+    browserSpeechProviderRef.current?.stop();
+    setIsListeningBrowserVoice(false);
+
+    if (mediaRecorderRef.current && isRecordingVoice) {
+      mediaRecorderRef.current.stop();
+    }
+
+    stopActiveMediaStream();
+    setIsRecordingVoice(false);
+    setIsSubmittingVoice(false);
+    setIsInteracting(false);
+    setPendingUserTurn(null);
+    setQuestionFlow(null);
   };
 
   const blobToBase64 = async (blob: Blob): Promise<string> => {
@@ -841,11 +785,72 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     );
   };
 
+  const submitQuestionText = async (input: {
+    requestId: number;
+    userText: string;
+    source: QuestionFlowSource;
+    wasPresenting: boolean;
+  }) => {
+    const trimmedText = input.userText.trim();
+
+    if (!trimmedText || !isCurrentQuestionRequest(input.requestId)) {
+      return;
+    }
+
+    setLatestAnswerNotice(null);
+    setPendingUserTurn(trimmedText);
+    updateQuestionFlow(input.requestId, {
+      stage: "generating_answer",
+      promptText: trimmedText,
+      transcriptText: trimmedText,
+      interimTranscript: "",
+      warning: null,
+      note:
+        input.source === "typed"
+          ? "Generating an answer to your question."
+          : "Transcript accepted. Generating an answer now.",
+    });
+    setInteractionLog((previous) => [
+      ...previous,
+      { role: "user", text: trimmedText },
+    ]);
+    setIsInteracting(true);
+
+    try {
+      const result = await interactWithSession(sessionId, trimmedText);
+
+      if (!isCurrentQuestionRequest(input.requestId)) {
+        return;
+      }
+
+      await applyInteractionResponse(result, {
+        userText: trimmedText,
+        wasPresenting: input.wasPresenting,
+        questionRequestId: input.requestId,
+      });
+    } catch (interactionError) {
+      if (!isCurrentQuestionRequest(input.requestId)) {
+        return;
+      }
+
+      clearQuestionFlow(input.requestId);
+      setError((interactionError as Error).message);
+    } finally {
+      if (!isCurrentQuestionRequest(input.requestId)) {
+        return;
+      }
+
+      setPendingUserTurn(null);
+      setIsInteracting(false);
+    }
+  };
+
   const applyInteractionResponse = async (
     result: SessionInteractionPayload | VoiceTurnResponse,
     options?: {
       userText?: string;
       wasPresenting?: boolean;
+      questionRequestId?: number;
     },
   ) => {
     setState((previous) => (previous ? applyUpdate(previous, result) : previous));
@@ -869,6 +874,9 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     if (!assistantMessage || !answerLikeResponse) {
+      if (options?.questionRequestId !== undefined) {
+        clearQuestionFlow(options.questionRequestId);
+      }
       return;
     }
 
@@ -876,6 +884,9 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       await playSpeech({
         text: assistantMessage,
         style: "answer",
+        ...(options?.questionRequestId !== undefined
+          ? { questionRequestId: options.questionRequestId }
+          : {}),
       });
       return;
     }
@@ -886,6 +897,9 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     await playSpeech({
       text: `${assistantMessage} ${autoResumeBridge}`,
       style: "answer",
+      ...(options?.questionRequestId !== undefined
+        ? { questionRequestId: options.questionRequestId }
+        : {}),
       onEnded: async () => {
         try {
           if (!resumeSlideId) {
@@ -949,9 +963,21 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
     startTransition(async () => {
       try {
+        const wasPresenting = isPresenting;
+        const requestId = createQuestionRequest({
+          source: "record",
+          stage: "listening",
+          promptText: "",
+          interimTranscript: "",
+          transcriptText: "",
+          answerText: "",
+          warning: null,
+          note: "Recording your question. Finish when you are done speaking.",
+          wasPresentingAtStart: wasPresenting,
+        });
         setError(null);
         disarmLiveVoiceMode();
-        stopActiveAudio();
+        pauseForVoiceInterruption();
         const support = getBackendVoiceRecordingSupport();
         setBackendVoiceRecordingSupport(support);
 
@@ -981,8 +1007,15 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         };
 
         recorder.onstop = async () => {
-          const wasPresenting = isPresenting;
           try {
+            if (!isCurrentQuestionRequest(requestId)) {
+              return;
+            }
+
+            updateQuestionFlow(requestId, {
+              stage: "transcribing",
+              note: "Transcribing the recorded question and checking the transcript.",
+            });
             setIsSubmittingVoice(true);
             disarmLiveVoiceMode();
             const blob = new Blob(chunksRef.current, {
@@ -993,6 +1026,10 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
               mimeType: blob.type || "audio/webm",
               dataBase64,
             });
+
+            if (!isCurrentQuestionRequest(requestId)) {
+              return;
+            }
 
             setLastVoiceTranscript({
               source: "backend",
@@ -1007,30 +1044,54 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
             const transcriptText = result.transcript?.text.trim();
             if (transcriptText) {
-              setLatestAnswerNotice(null);
-              setPendingUserTurn(transcriptText);
-              setInteractionLog((previous) => [
-                ...previous,
-                { role: "user", text: transcriptText },
-              ]);
+              updateQuestionFlow(requestId, {
+                promptText: transcriptText,
+                transcriptText,
+                interimTranscript: "",
+              });
             }
 
             if (result.interactionApplied) {
+              updateQuestionFlow(requestId, {
+                stage: "generating_answer",
+                note: "Generating an answer to the recorded question.",
+              });
+              if (transcriptText) {
+                setPendingUserTurn(transcriptText);
+                setInteractionLog((previous) => [
+                  ...previous,
+                  { role: "user", text: transcriptText },
+                ]);
+              }
               await applyInteractionResponse(result, {
                 ...(transcriptText ? { userText: transcriptText } : {}),
                 wasPresenting,
+                questionRequestId: requestId,
+              });
+            } else if (transcriptText) {
+              updateQuestionFlow(requestId, {
+                stage: "transcript_review",
+                warning:
+                  "The recorded transcript may be wrong. Cancel it or send it anyway.",
+                note: "Review the transcript before it is sent to Q&A.",
               });
             } else {
               setState((previous) => (previous ? applyUpdate(previous, result) : previous));
+              clearQuestionFlow(requestId);
               setPendingUserTurn(null);
             }
           } catch (voiceError) {
+            if (isCurrentQuestionRequest(requestId)) {
+              clearQuestionFlow(requestId);
+            }
             setError((voiceError as Error).message);
           } finally {
             stopActiveMediaStream();
             mediaRecorderRef.current = null;
             chunksRef.current = [];
-            setIsSubmittingVoice(false);
+            if (isCurrentQuestionRequest(requestId)) {
+              setIsSubmittingVoice(false);
+            }
             setIsRecordingVoice(false);
           }
         };
@@ -1038,6 +1099,8 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         recorder.start();
         setIsRecordingVoice(true);
       } catch (recordingError) {
+        questionRequestVersionRef.current += 1;
+        setQuestionFlow(null);
         setError((recordingError as Error).message);
         stopActiveMediaStream();
         mediaRecorderRef.current = null;
@@ -1060,7 +1123,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     if (browserSpeechSupported) {
-      void handleBrowserVoiceInput();
+      void handleBrowserVoiceInput("record");
       return;
     }
 
@@ -1070,7 +1133,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     );
   };
 
-  const handleBrowserVoiceInput = async () => {
+  const handleBrowserVoiceInput = async (source: VoiceQuestionSource = "live") => {
     const provider = browserSpeechProviderRef.current;
 
     if (!provider || isSubmittingVoice) {
@@ -1079,29 +1142,75 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
     try {
       const wasPresenting = isPresenting;
+      let requestId: number | null = null;
+      const ensureQuestionFlow = (stage: QuestionFlowStage = "listening") => {
+        if (requestId !== null) {
+          return requestId;
+        }
+
+        requestId = createQuestionRequest({
+          source,
+          stage,
+          promptText: "",
+          interimTranscript: "",
+          transcriptText: "",
+          answerText: "",
+          warning: null,
+          note:
+            source === "record"
+              ? "Listening for your spoken question."
+              : "Listening for a spoken interruption.",
+          wasPresentingAtStart: wasPresenting,
+        });
+        return requestId;
+      };
+
       setError(null);
       const transcript = await provider.listenOnce({
-        lang: "en-US",
+        lang: getSpeechRecognitionLanguage(state?.deck.metadata.language),
         onStart: () => {
           setIsListeningBrowserVoice(true);
-          setBrowserInterimTranscript("");
+          if (source === "record") {
+            ensureQuestionFlow("listening");
+          }
         },
         onSpeechStart: () => {
+          const activeRequestId = ensureQuestionFlow("listening");
           pauseForVoiceInterruption();
+          updateQuestionFlow(activeRequestId, {
+            note: "Speech detected. Listening to the question now.",
+          });
         },
         onEnd: () => {
           setIsListeningBrowserVoice(false);
         },
         onInterimResult: (text) => {
           if (text.trim()) {
+            const activeRequestId = ensureQuestionFlow("listening");
             pauseForVoiceInterruption();
+            updateQuestionFlow(activeRequestId, {
+              promptText: text,
+              interimTranscript: text,
+              note: "Transcribing your question in real time.",
+            });
           }
-          setBrowserInterimTranscript(text);
         },
       });
 
+      const activeRequestId = ensureQuestionFlow("transcribing");
+      if (!isCurrentQuestionRequest(activeRequestId)) {
+        return;
+      }
+
       pauseForVoiceInterruption();
       disarmLiveVoiceMode();
+      updateQuestionFlow(activeRequestId, {
+        stage: "transcribing",
+        promptText: transcript.text,
+        transcriptText: transcript.text,
+        interimTranscript: "",
+        note: "Finalizing the transcript before sending the question.",
+      });
 
       setLastVoiceTranscript({
         source: "browser",
@@ -1115,25 +1224,34 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       });
 
       if (!transcript.text.trim()) {
+        clearQuestionFlow(activeRequestId);
         return;
       }
 
-      if (isLowSignalBrowserVoiceTranscript(transcript.text)) {
-        setPendingUserTurn(null);
-        setError("Voice input was too short or unclear. Try again.");
-        return;
-      }
+	      const transcriptAssessment = assessVoiceQuestionTranscript({
+	        source,
+	        text: transcript.text,
+	        ...(typeof transcript.confidence === "number"
+	          ? { confidence: transcript.confidence }
+	          : {}),
+	      });
 
-      setLatestAnswerNotice(null);
-      setPendingUserTurn(transcript.text);
-      setInteractionLog((previous) => [
-        ...previous,
-        { role: "user", text: transcript.text },
-      ]);
-      setIsInteracting(true);
-      const result = await interactWithSession(sessionId, transcript.text);
-      await applyInteractionResponse(result, {
+	      if (transcriptAssessment.decision === "review") {
+	        updateQuestionFlow(activeRequestId, {
+	          stage: "transcript_review",
+	          promptText: transcript.text,
+	          transcriptText: transcript.text,
+	          interimTranscript: "",
+	          warning: transcriptAssessment.warning ?? null,
+	          note: transcriptAssessment.note ?? null,
+	        });
+	        return;
+	      }
+
+      await submitQuestionText({
+        requestId: activeRequestId,
         userText: transcript.text,
+        source,
         wasPresenting,
       });
     } catch (voiceError) {
@@ -1145,9 +1263,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
         setError(message);
       }
     } finally {
-      setIsInteracting(false);
       setIsListeningBrowserVoice(false);
-      setBrowserInterimTranscript("");
     }
   };
 
@@ -1158,14 +1274,15 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       isSynthesizingSpeech ||
       isPlayingSpeech ||
       isSubmittingVoice ||
-      isInteracting
+      isInteracting ||
+      questionFlow !== null
     ) {
       return;
     }
 
     voiceLoopRunningRef.current = true;
     try {
-      await handleBrowserVoiceInput();
+      await handleBrowserVoiceInput("live");
     } finally {
       voiceLoopRunningRef.current = false;
 
@@ -1190,6 +1307,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     isSubmittingVoice,
     isSynthesizingSpeech,
     liveVoiceMode,
+    questionFlow,
   ]);
 
   const playSpeech = async (input: {
@@ -1197,6 +1315,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     slideId?: string;
     narrationIndex?: number;
     style?: "narration" | "answer" | "summary";
+    questionRequestId?: number;
     continueSequence?: boolean;
     advanceSlides?: boolean;
     onEnded?: () => Promise<void> | void;
@@ -1226,6 +1345,14 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       audio.onended = async () => {
         setIsPlayingSpeech(false);
         audioRef.current = null;
+
+        if (
+          input.style === "answer" &&
+          input.questionRequestId !== undefined &&
+          isCurrentQuestionRequest(input.questionRequestId)
+        ) {
+          clearQuestionFlow(input.questionRequestId);
+        }
 
         if (
           !input.continueSequence ||
@@ -1316,14 +1443,39 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
       audio.onerror = () => {
         setIsPlayingSpeech(false);
         audioRef.current = null;
+        if (
+          input.style === "answer" &&
+          input.questionRequestId !== undefined &&
+          isCurrentQuestionRequest(input.questionRequestId)
+        ) {
+          clearQuestionFlow(input.questionRequestId);
+        }
         setError("Audio playback failed in the browser.");
       };
 
       audioRef.current = audio;
       setLastSpokenText(result.text);
+      if (
+        input.style === "answer" &&
+        input.questionRequestId !== undefined &&
+        isCurrentQuestionRequest(input.questionRequestId)
+      ) {
+        updateQuestionFlow(input.questionRequestId, {
+          stage: "speaking_answer",
+          answerText: result.text,
+          note: "Answer generated. Speaking now.",
+        });
+      }
       setIsPlayingSpeech(true);
       await audio.play();
     } catch (speechError) {
+      if (
+        input.style === "answer" &&
+        input.questionRequestId !== undefined &&
+        isCurrentQuestionRequest(input.questionRequestId)
+      ) {
+        clearQuestionFlow(input.questionRequestId);
+      }
       setError((speechError as Error).message);
       setIsPlayingSpeech(false);
     } finally {
@@ -1385,32 +1537,35 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     }
 
     const userText = commandInput.trim();
+    const wasPresenting = isPresenting;
+    const requestId = createQuestionRequest({
+      source: "typed",
+      stage: "generating_answer",
+      promptText: userText,
+      interimTranscript: "",
+      transcriptText: userText,
+      answerText: "",
+      warning: null,
+      note: "Generating an answer to your typed question.",
+      wasPresentingAtStart: wasPresenting,
+    });
 
     startTransition(async () => {
-      const wasPresenting = isPresenting;
       try {
         setError(null);
-        setIsInteracting(true);
         disarmLiveVoiceMode();
         stopActiveAudio();
-        setLatestAnswerNotice(null);
-        setPendingUserTurn(userText);
-        setInteractionLog((previous) => [
-          ...previous,
-          { role: "user", text: userText },
-        ]);
-        const result = await interactWithSession(sessionId, userText);
-        await applyInteractionResponse(result, {
+        await submitQuestionText({
+          requestId,
           userText,
+          source: "typed",
           wasPresenting,
         });
-        setPendingUserTurn(null);
-        setCommandInput("");
+        if (isCurrentQuestionRequest(requestId)) {
+          setCommandInput("");
+        }
       } catch (interactionError) {
         setError((interactionError as Error).message);
-      } finally {
-        setPendingUserTurn(null);
-        setIsInteracting(false);
       }
     });
   };
@@ -1442,7 +1597,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   };
 
   useEffect(() => {
-    if (!pendingPresentationStart || !isDeckNarrationReady || isPresenting) {
+    if (!pendingPresentationStart || !activeSlideNarrationReady || isPresenting) {
       return;
     }
 
@@ -1465,7 +1620,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
     return () => {
       cancelled = true;
     };
-  }, [isDeckNarrationReady, isPresenting, pendingPresentationStart, sessionId]);
+  }, [activeSlideNarrationReady, isPresenting, pendingPresentationStart, sessionId]);
 
   const togglePresenting = () => {
     startTransition(async () => {
@@ -1491,7 +1646,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           return;
         }
 
-        if (!isDeckNarrationReady) {
+        if (!activeSlideNarrationReady) {
           setPendingPresentationStart(true);
           return;
         }
@@ -1537,7 +1692,7 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           previous ? applyUpdate(previous, progressResult) : previous,
         );
 
-        if (!isDeckNarrationReady) {
+        if (!state?.narrationsBySlideId[firstSlide.id]) {
           setPendingPresentationStart(true);
           return;
         }
@@ -1582,68 +1737,40 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
   return (
     <main className="min-h-screen bg-ink px-4 py-5 text-paper md:px-8 md:py-8">
       {showBlockingOverlay ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/72 px-6 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-slate-950/90 px-6 py-6 shadow-2xl">
-            <div className="flex items-center gap-4">
-              <span className="inline-flex h-10 w-10 animate-spin rounded-full border-[3px] border-white/15 border-t-coral" />
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-paper/55">
-                  Working
-                </p>
-                <p className="mt-1 text-xl font-semibold text-paper">
-                  {workingOverlayTitle}
-                </p>
-              </div>
-            </div>
-            <p className="mt-4 text-sm leading-6 text-paper/75">
-              {workingOverlayMessage}
-            </p>
-            {!isBuildingAnswer && slides.length > 0 ? (
-              <div className="mt-5">
-                <div className="h-2 overflow-hidden rounded-full bg-white/8">
-                  <div
-                    className="h-full rounded-full bg-coral transition-[width] duration-300"
-                    style={{
-                      width: `${Math.round(
-                        (narrationReadySlideCount / Math.max(slides.length, 1)) * 100,
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <p className="mt-3 text-xs uppercase tracking-[0.18em] text-paper/45">
-                  {narrationReadySlideCount} / {slides.length} slides ready
-                </p>
-              </div>
-            ) : null}
-          </div>
-        </div>
+        <WorkingOverlay
+          firstSlideReady={activeSlideNarrationReady}
+          hasSlides={slides.length > 0}
+          isGeneratingNarrationAudio={isGeneratingNarrationAudio}
+          message={workingOverlayMessage}
+          pendingPresentationStart={pendingPresentationStart}
+          title={workingOverlayTitle}
+        />
+      ) : null}
+      {questionFlow ? (
+        <QuestionFlowOverlay
+          isRecordingVoice={isRecordingVoice}
+          onCancel={cancelQuestionFlow}
+          onFinishRecording={() => {
+            mediaRecorderRef.current?.stop();
+            setIsRecordingVoice(false);
+          }}
+          onSendAnyway={() =>
+            void submitQuestionText({
+              requestId: questionFlow.requestId,
+              userText: questionFlow.transcriptText,
+              source: questionFlow.source,
+              wasPresenting: questionFlow.wasPresentingAtStart,
+            })
+          }
+          questionFlow={questionFlow}
+        />
       ) : null}
       <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex flex-col gap-4 rounded-[30px] border border-white/10 bg-white/5 p-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-paper/55">
-              Presenter mode
-            </p>
-            <h1 className="mt-2 text-2xl font-semibold md:text-3xl">{state.deck.title}</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-paper/70">
-              {state.deck.summary}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <Link
-              className="rounded-full border border-white/20 px-4 py-2 text-sm font-semibold text-paper transition hover:border-white/40"
-              href="/workbench"
-            >
-              Open workbench
-            </Link>
-            <a
-              className="rounded-full bg-coral px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-              href={getPresentationPptxExportUrl(sessionId)}
-            >
-              Download PPTX
-            </a>
-          </div>
-        </div>
+        <PresenterHeader
+          pptxExportUrl={getPresentationPptxExportUrl(sessionId)}
+          summary={state.deck.summary}
+          title={state.deck.title}
+        />
 
         {error ? (
           <div className="mb-5 rounded-[20px] border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
@@ -1660,445 +1787,112 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
 
         {activeSlide ? (
           <section className="grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_360px]">
-            <div className="rounded-[32px] bg-white p-4 text-ink shadow-2xl md:p-6">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                    Slide {currentSlideIndex + 1} of {slides.length}
-                  </p>
-                  <h2 className="mt-2 text-3xl font-semibold md:text-4xl">
-                    {activeSlide.title}
-                  </h2>
-                  <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
-                    {activeSlide.learningGoal}
-                  </p>
-                </div>
-                <div className="rounded-[22px] bg-slate-100 px-4 py-3 text-sm text-slate-700">
-                  <p>
-                    Narration point {currentNarrationIndex + 1} /{" "}
-                    {Math.max(narrationSegments.length, 1)}
-                  </p>
-                  <p className="mt-1">Provider: {state.provider}</p>
-                </div>
-              </div>
-
-              <div className="mt-5 rounded-[28px] border border-slate-200 bg-slate-50 p-3 md:p-5">
-                <VisualSlideCanvas
-                  slide={activeSlide}
-                  illustrationAsset={activeIllustration}
-                  theme={deckTheme}
-                />
-                {illustrationLoadingSlideId === activeSlide.id ? (
-                  <p className="mt-3 text-sm text-slate-500">Resolving slide illustration...</p>
-                ) : null}
-              </div>
-
-              <div className="mt-6 rounded-[26px] bg-ink px-5 py-5 text-paper">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-paper/55">
-                  Current narration
-                </p>
-                <p className="mt-3 text-lg leading-8">
-                  {narrationLoadingSlideId === activeSlide.id
-                    ? "Generating narration for this slide..."
-                    : currentNarrationText}
-                </p>
-                {narrationSegments.length > 1 ? (
-                  <div className="mt-4 grid gap-2">
-                    {narrationSegments.map((segment, index) => (
-                      <div
-                        className={`rounded-[16px] border px-3 py-2 text-sm leading-6 ${
-                          index === currentNarrationIndex
-                            ? "border-coral bg-coral/15 text-paper"
-                            : "border-white/10 bg-white/5 text-paper/70"
-                        }`}
-                        key={`${activeSlide.id}-${index}`}
-                      >
-                        <span className="mr-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-paper/50">
-                          {index + 1}
-                        </span>
-                        {segment}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
+            <ActiveSlideStage
+              activeSlide={activeSlide}
+              activeSlideCanvas={activeSlideCanvas}
+              currentNarrationDisplayText={currentNarrationDisplayText}
+              currentNarrationIndex={currentNarrationIndex}
+              currentSlideIndex={currentSlideIndex}
+              isGeneratingNarrationAudio={isGeneratingNarrationAudio}
+              isIllustrationLoading={illustrationLoadingSlideId === activeSlide.id}
+              narrationSegments={narrationSegments}
+              provider={state.provider}
+              totalSlides={slides.length}
+            />
 
             <aside className="space-y-5">
-              <section className="rounded-[28px] border border-white/10 bg-white/5 p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-paper/55">
-                  Controls
-                </p>
-                <div className="mt-4 rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm text-paper/75">
-                  <p>
-                    Session:{" "}
-                    <span className="font-semibold text-paper">{state.session.state}</span>
-                  </p>
-                  <p className="mt-1">
-                    Speech:{" "}
-                    <span className="font-semibold text-paper">
-                      {isPlayingSpeech
-                        ? "playing"
-                        : isSynthesizingSpeech
-                          ? "synthesizing"
-                          : "idle"}
-                    </span>
-                  </p>
-                  <p className="mt-1">
-                    Response:{" "}
-                    <span className="font-semibold text-paper">
-                      {isListeningBrowserVoice || isRecordingVoice
-                        ? "listening"
-                        : isSubmittingVoice && !pendingUserTurn
-                          ? "processing voice"
-                          : isInteracting
-                            ? "generating answer"
-                            : isSynthesizingSpeech
-                              ? "generating speech"
-                              : isPlayingSpeech
-                                ? "speaking"
-                                : "idle"}
-                    </span>
-                  </p>
-                </div>
-                <div className="mt-4">
-                  <PresenterControls
-                    canGoBack={currentSlideIndex > 0}
-                    canGoForward={currentSlideIndex < slides.length - 1}
-                    isBusy={pendingPresentationStart}
-                    isPresenting={isPresenting}
-                    onBack={() => handleSelectSlide(Math.max(currentSlideIndex - 1, 0))}
-                    onForward={() =>
-                      handleSelectSlide(Math.min(currentSlideIndex + 1, slides.length - 1))
-                    }
-                    onTogglePresenting={togglePresenting}
-                    presentLabel={presentButtonLabel}
-                  />
-                  <p className="mt-3 text-sm leading-6 text-paper/60">
-                    Slide controls move between slides. Point controls below only move within
-                    the current slide&apos;s narration.
-                  </p>
-                </div>
+              <PresenterControlsPanel
+                canGoBack={currentSlideIndex > 0}
+                canGoForward={currentSlideIndex < slides.length - 1}
+                currentNarrationIndex={currentNarrationIndex}
+                hasSlides={slides.length > 0}
+                isBusy={pendingPresentationStart}
+                isGeneratingNarrationAudio={isGeneratingNarrationAudio}
+                isInteracting={isInteracting}
+                isListeningBrowserVoice={isListeningBrowserVoice}
+                isNarrationLoadingForActiveSlide={
+                  narrationLoadingSlideId === activeSlide.id
+                }
+                isPlayingSpeech={isPlayingSpeech}
+                isPresenting={isPresenting}
+                isRecordingVoice={isRecordingVoice}
+                isSubmittingVoice={isSubmittingVoice}
+                isSynthesizingSpeech={isSynthesizingSpeech}
+                isUpdatingNarrationProgress={isUpdatingNarrationProgress}
+                lastSpokenText={lastSpokenText}
+                narrationSegmentsLength={narrationSegments.length}
+                onBack={() => handleSelectSlide(Math.max(currentSlideIndex - 1, 0))}
+                onForward={() =>
+                  handleSelectSlide(Math.min(currentSlideIndex + 1, slides.length - 1))
+                }
+                onNextPoint={() =>
+                  handleNarrationStep(
+                    Math.min(currentNarrationIndex + 1, narrationSegments.length - 1),
+                  )
+                }
+                onPlayFromCurrentPoint={() =>
+                  void playSpeech({
+                    slideId: activeSlide.id,
+                    narrationIndex: currentNarrationIndex,
+                    style: "narration",
+                    continueSequence: true,
+                    advanceSlides: narrationAutoPlay,
+                  })
+                }
+                onPreviousPoint={() =>
+                  handleNarrationStep(Math.max(currentNarrationIndex - 1, 0))
+                }
+                onRestart={restartPresentationFromBeginning}
+                onStopAudio={stopActiveAudio}
+                onTogglePresenting={togglePresenting}
+                pendingPresentationStart={pendingPresentationStart}
+                pendingUserTurn={pendingUserTurn}
+                presentLabel={presentButtonLabel}
+                sessionState={state.session.state}
+              />
 
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    className="rounded-full border border-white/20 px-3 py-1.5 text-sm transition hover:border-white/40 disabled:opacity-50"
-                    disabled={
-                      narrationSegments.length <= 1 ||
-                      currentNarrationIndex === 0 ||
-                      isUpdatingNarrationProgress
-                    }
-                    onClick={() =>
-                      handleNarrationStep(Math.max(currentNarrationIndex - 1, 0))
-                    }
-                    type="button"
-                  >
-                    Previous point
-                  </button>
-                  <button
-                    className="rounded-full border border-white/20 px-3 py-1.5 text-sm transition hover:border-white/40 disabled:opacity-50"
-                    disabled={
-                      narrationSegments.length <= 1 ||
-                      currentNarrationIndex >= narrationSegments.length - 1 ||
-                      isUpdatingNarrationProgress
-                    }
-                    onClick={() =>
-                      handleNarrationStep(
-                        Math.min(currentNarrationIndex + 1, narrationSegments.length - 1),
-                      )
-                    }
-                    type="button"
-                  >
-                    {isUpdatingNarrationProgress ? "Updating..." : "Next point"}
-                  </button>
-                </div>
+              <AskNaturallyPanel
+                backendVoiceRecordingAvailable={backendVoiceRecordingAvailable}
+                backendVoiceRecordingReason={backendVoiceRecordingSupport.reason}
+                browserSpeechSupported={browserSpeechSupported}
+                commandInput={commandInput}
+                isInteracting={isInteracting}
+                isListeningBrowserVoice={isListeningBrowserVoice}
+                isPending={isPending}
+                isRecordingVoice={isRecordingVoice}
+                isSubmittingVoice={isSubmittingVoice}
+                isSynthesizingSpeech={isSynthesizingSpeech}
+                lastVoiceTranscript={lastVoiceTranscript}
+                latestAnswerNotice={latestAnswerNotice}
+                latestAssistantMessage={latestAssistantMessage}
+                liveVoiceMode={liveVoiceMode}
+                onCommandInputChange={setCommandInput}
+                onRecordQuestion={handleRecordQuestion}
+                onSendInteraction={sendInteraction}
+                onSpeakAnswer={(answer) =>
+                  void playSpeech({
+                    text: answer,
+                    style: "answer",
+                  })
+                }
+                onToggleLiveVoice={() => setLiveVoiceMode((previous) => !previous)}
+                questionFlowActive={questionFlow !== null}
+                recordQuestionUnavailable={recordQuestionUnavailable}
+                recordQuestionUsesBrowserFallback={recordQuestionUsesBrowserFallback}
+              />
 
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    className="rounded-full bg-coral px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95 disabled:opacity-50"
-                    disabled={
-                      !activeSlide ||
-                      narrationLoadingSlideId === activeSlide.id ||
-                      isSynthesizingSpeech ||
-                      pendingPresentationStart
-                    }
-                    onClick={() =>
-                      void playSpeech({
-                        slideId: activeSlide.id,
-                        narrationIndex: currentNarrationIndex,
-                        style: "narration",
-                        continueSequence: true,
-                        advanceSlides: narrationAutoPlay,
-                      })
-                    }
-                    type="button"
-                  >
-                    {isSynthesizingSpeech ? "Synthesizing..." : "Play from current point"}
-                  </button>
-                  <button
-                    className="rounded-full border border-white/20 px-4 py-2 text-sm transition hover:border-white/40 disabled:opacity-50"
-                    disabled={!isPlayingSpeech}
-                    onClick={stopActiveAudio}
-                    type="button"
-                  >
-                    Stop audio
-                  </button>
-                  <button
-                    className="rounded-full border border-white/20 px-4 py-2 text-sm transition hover:border-white/40 disabled:opacity-50"
-                    disabled={slides.length === 0 || pendingPresentationStart}
-                    onClick={restartPresentationFromBeginning}
-                    type="button"
-                  >
-                    Restart from beginning
-                  </button>
-                </div>
-                <p className="mt-3 text-sm leading-6 text-paper/60">
-                  Narration continues automatically. After a spoken answer, the presenter
-                  bridges back into the deck and resumes from the current point.
-                </p>
-                {lastSpokenText ? (
-                  <p className="mt-3 text-sm leading-6 text-paper/65">
-                    Last spoken: {lastSpokenText}
-                  </p>
-                ) : null}
-              </section>
-
-              <section className="rounded-[28px] border border-white/10 bg-white/5 p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-paper/55">
-                  Ask naturally
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                      liveVoiceMode
-                        ? "bg-coral text-white"
-                        : "border border-white/20 text-paper hover:border-white/40"
-                    }`}
-                    disabled={!browserSpeechSupported}
-                    onClick={() => setLiveVoiceMode((previous) => !previous)}
-                    type="button"
-                  >
-                    {liveVoiceMode ? "Live voice on" : "Live voice off"}
-                  </button>
-                  <button
-                    className="rounded-full border border-white/20 px-4 py-2 text-sm transition hover:border-white/40 disabled:opacity-50"
-                    disabled={
-                      isSubmittingVoice ||
-                      isListeningBrowserVoice ||
-                      isInteracting ||
-                      (recordQuestionUnavailable && !isRecordingVoice)
-                    }
-                    onClick={() => {
-                      handleRecordQuestion();
-                    }}
-                    type="button"
-                  >
-                    {isRecordingVoice
-                      ? "Stop recording"
-                      : isListeningBrowserVoice
-                        ? "Stop listening"
-                        : isSubmittingVoice
-                          ? "Processing..."
-                          : backendVoiceRecordingAvailable
-                            ? "Record question"
-                            : recordQuestionUsesBrowserFallback
-                              ? "Speak question"
-                              : "Record question unavailable"}
-                  </button>
-                </div>
-                <p className="mt-3 text-sm leading-6 text-paper/60">
-                  {backendVoiceRecordingAvailable
-                    ? browserSpeechSupported
-                      ? liveVoiceMode
-                        ? "Browser speech recognition is armed for live interruption testing. It disarms automatically when a question is sent."
-                        : "Record question captures audio for backend STT. Live voice remains available for interruption-style browser testing."
-                      : "Record question captures audio for backend STT. Browser speech recognition is not available here."
-                    : recordQuestionUsesBrowserFallback
-                      ? "This browser/context cannot record audio directly for backend STT here, so Record question falls back to one-shot browser speech recognition."
-                      : backendVoiceRecordingSupport.reason ??
-                        "Voice input is not available here right now."}
-                </p>
-                <div className="mt-3 rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm text-paper/75">
-                  <p>
-                    Voice state:{" "}
-                    <span className="font-semibold text-paper">
-                      {isSubmittingVoice
-                        ? "processing"
-                        : isRecordingVoice
-                          ? "recording"
-                        : isListeningBrowserVoice
-                          ? "listening"
-                          : liveVoiceMode
-                            ? "armed"
-                            : "idle"}
-                    </span>
-                  </p>
-                </div>
-                {isBuildingAnswer ? (
-                  <div className="mt-3 rounded-[22px] border border-sky-300/20 bg-sky-400/10 px-4 py-4 text-paper shadow-[0_0_0_1px_rgba(125,211,252,0.06)]">
-                    <div className="flex items-center gap-3">
-                      <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-paper/20 border-t-paper" />
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/60">
-                          Working
-                        </p>
-                        <p className="mt-1 text-sm font-semibold text-paper">
-                          Generating answer
-                        </p>
-                      </div>
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-paper/80">
-                      {workingOverlayMessage}
-                    </p>
-                    {pendingUserTurn ? (
-                      <div className="mt-3 rounded-[16px] border border-white/10 bg-white/5 px-3 py-3 text-sm leading-6 text-paper/90">
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/50">
-                          Current question
-                        </p>
-                        <p className="mt-2">{pendingUserTurn}</p>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {browserInterimTranscript ? (
-                  <div className="mt-3 rounded-[18px] border border-coral/30 bg-coral/10 px-4 py-3 text-sm leading-6 text-paper">
-                    Hearing: {browserInterimTranscript}
-                  </div>
-                ) : null}
-                {lastVoiceTranscript ? (
-                  <div className="mt-3 rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-paper/80">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/50">
-                      Last voice input
-                    </p>
-                    <p className="mt-2">
-                      {lastVoiceTranscript.transcriptAvailable
-                        ? lastVoiceTranscript.text
-                        : lastVoiceTranscript.hadSpeech
-                          ? "Speech was detected, but no transcript was produced."
-                          : "No speech detected."}
-                    </p>
-                    <p className="mt-2 text-xs text-paper/50">
-                      Source: {lastVoiceTranscript.source} / {lastVoiceTranscript.provider}
-                    </p>
-                  </div>
-                ) : null}
-                <textarea
-                  className="mt-4 min-h-28 w-full rounded-[22px] border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-paper outline-none placeholder:text-paper/35"
-                  onChange={(event) => setCommandInput(event.target.value)}
-                  placeholder="Ask a question, ask for a simpler explanation, ask for an example, or continue the conversation."
-                  value={commandInput}
-                />
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:opacity-90 disabled:opacity-50"
-                    disabled={!commandInput.trim() || isInteracting || isPending}
-                    onClick={sendInteraction}
-                    type="button"
-                  >
-                    {isBuildingAnswer ? "Generating..." : "Send"}
-                  </button>
-                </div>
-                {latestAnswerNotice ? (
-                  <div className="mt-4 rounded-[22px] border border-emerald-300/20 bg-emerald-400/10 px-4 py-4">
-                    <div className="flex items-center gap-3">
-                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/20 text-base text-emerald-100">
-                        ✓
-                      </span>
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/55">
-                          Answer ready
-                        </p>
-                        {latestAnswerNotice.question ? (
-                          <p className="mt-1 text-sm leading-6 text-paper/70">
-                            Question: “{latestAnswerNotice.question}”
-                          </p>
-                        ) : null}
-                      </div>
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-paper/90">
-                      {latestAnswerNotice.answer}
-                    </p>
-                    <button
-                      className="mt-3 rounded-full border border-white/20 px-3 py-1.5 text-sm transition hover:border-white/40 disabled:opacity-50"
-                      disabled={isSynthesizingSpeech}
-                      onClick={() =>
-                        void playSpeech({
-                          text: latestAnswerNotice.answer,
-                          style: "answer",
-                        })
-                      }
-                      type="button"
-                    >
-                      Speak last answer
-                    </button>
-                  </div>
-                ) : latestAssistantMessage ? (
-                  <div className="mt-4 rounded-[22px] bg-white/5 px-4 py-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-paper/55">
-                      Latest assistant message
-                    </p>
-                    <p className="mt-2 text-sm leading-6 text-paper/85">
-                      {latestAssistantMessage}
-                    </p>
-                  </div>
-                ) : null}
-              </section>
-
-              <section className="rounded-[28px] border border-white/10 bg-white/5 p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-paper/55">
-                  Grounding
-                </p>
-                <p className="mt-3 text-sm leading-6 text-paper/70">
-                  Source type: {state.deck.source.type}
-                </p>
-                <div className="mt-3 space-y-2">
-                  {state.deck.source.sourceIds.length > 0 ? (
-                    state.deck.source.sourceIds.map((sourceUrl) => (
-                      <a
-                        className="block break-all text-sm text-coral underline-offset-2 hover:underline"
-                        href={sourceUrl}
-                        key={sourceUrl}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        {sourceUrl}
-                      </a>
-                    ))
-                  ) : (
-                    <p className="text-sm leading-6 text-paper/60">
-                      No external sources were attached to this session.
-                    </p>
-                  )}
-                </div>
-              </section>
+              <GroundingPanel source={state.deck.source} />
             </aside>
           </section>
         ) : null}
 
-        <section className="mt-6">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Slides</h3>
-            <p className="text-sm text-paper/55">Choose any slide in the current deck.</p>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-            {slides.map((slide, index) => (
-              <button
-                className="min-w-0 text-left"
-                key={slide.id}
-                onClick={() => handleSelectSlide(index)}
-                type="button"
-              >
-                <SlidePreviewCard
-                  isActive={index === currentSlideIndex}
-                  illustrationAsset={illustrationsBySlideId[slide.id]}
-                  slide={slide}
-                  slideNumber={index + 1}
-                  theme={deckTheme}
-                />
-              </button>
-            ))}
-          </div>
-        </section>
+        <SlideOverview
+          currentSlideIndex={currentSlideIndex}
+          illustrationsBySlideId={illustrationsBySlideId}
+          onSelectSlide={handleSelectSlide}
+          slides={slides}
+          theme={deckTheme}
+        />
       </div>
     </main>
   );

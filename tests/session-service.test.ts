@@ -14,8 +14,11 @@ import type {
   DeckRepository,
   GenerateDeckInput,
   GenerateNarrationInput,
+  PresentationReview,
+  ReviewPresentationInput,
   Session,
   SessionRepository,
+  SlideNarration,
   TranscriptRepository,
   TranscriptTurn,
   WebFetchResult,
@@ -372,6 +375,46 @@ class ThinNarrationRepairReviewLLMProvider extends AcceptableMockLLMProvider {
   }
 }
 
+class BackgroundIntroRewriteReviewLLMProvider extends TrackingPlanLLMProvider {
+  override async reviewPresentation(
+    input: ReviewPresentationInput,
+  ): Promise<PresentationReview> {
+    const firstSlide = input.deck.slides[0];
+    if (!firstSlide) {
+      return {
+        approved: true,
+        overallScore: 0.99,
+        summary: "No slides to review.",
+        issues: [],
+        repairedNarrations: [],
+      };
+    }
+
+    const rewrittenIntro: SlideNarration = {
+      slideId: firstSlide.id,
+      narration:
+        "Background review tried to replace the already published intro narration. This text should never replace the session copy.",
+      segments: [
+        "Background review tried to replace the already published intro narration.",
+        "This text should never replace the session copy.",
+        "The presenter should keep the narration that was already available.",
+        "Only missing slide narrations should be added in the background.",
+      ],
+      summaryLine: "Background rewrite",
+      promptsForPauses: [],
+      suggestedTransition: "Continue.",
+    };
+
+    return {
+      approved: true,
+      overallScore: 0.99,
+      summary: "Review suggests a rewrite that must not replace published narration.",
+      issues: [],
+      repairedNarrations: [rewrittenIntro],
+    };
+  }
+}
+
 class TrackingQuestionLLMProvider extends AcceptableMockLLMProvider {
   answerQuestionCalls = 0;
   lastAnswerQuestionInput:
@@ -424,6 +467,31 @@ class SourceAwareGeneralQuestionLLMProvider extends SourceAwareQuestionLLMProvid
       confidence: 0.99,
       rationale:
         "Use general contextual mode so the test exercises source grounding from the ordinary question path.",
+    };
+  }
+}
+
+class SludgeRejectingGroundedQuestionLLMProvider extends SourceAwareQuestionLLMProvider {
+  override async planConversationTurn(): Promise<ConversationTurnPlan> {
+    return {
+      interruptionType: "question",
+      inferredNeeds: ["question"],
+      responseMode: "grounded_factual",
+      runtimeEffects: {},
+      confidence: 0.99,
+      rationale: "Treat this as a grounded factual question.",
+    };
+  }
+
+  async validateQuestionAnswer(input: { proposedAnswer: string }) {
+    const looksLikeSludge =
+      /system verification - home|quality assurance integrated|faster code|hidden risks/i.test(
+        input.proposedAnswer,
+      );
+
+    return {
+      isValid: !looksLikeSludge,
+      reason: looksLikeSludge ? "The answer is homepage sludge, not an actual answer." : "ok",
     };
   }
 }
@@ -493,6 +561,232 @@ class NoisySystemVerificationWebResearchProvider
       confidence: 0.9,
       checkedAt: "2026-04-17T00:00:00.000Z",
     };
+  }
+}
+
+class ResearchBackedSystemVerificationWebResearchProvider
+  implements WebResearchProvider
+{
+  readonly name = "research-backed-systemverification-web-research";
+  searchCalls = 0;
+  fetchCalls = 0;
+
+  async healthCheck() {
+    return {
+      provider: this.name,
+      ok: true,
+      detail: "stub ready",
+      checkedAt: "2026-04-17T00:00:00.000Z",
+    };
+  }
+
+  async search(query: string) {
+    this.searchCalls += 1;
+    if (/ceo|chief executive/i.test(query)) {
+      return [
+        {
+          title: "System Verification leadership",
+          url: "https://www.systemverification.com/about/leadership",
+          snippet:
+            "Leadership page with company facts, offices, and executive team information.",
+        },
+      ];
+    }
+
+    return [];
+  }
+
+  async fetch(url: string): Promise<WebFetchResult> {
+    this.fetchCalls += 1;
+    if (url.includes("/about/leadership")) {
+      return {
+        url,
+        title: "System Verification leadership",
+        content:
+          "System Verification leadership. CEO Jane Doe leads System Verification's international quality assurance business. Offices include Sweden, Germany, Bosnia and Herzegovina, Poland, and Denmark.",
+      };
+    }
+
+    return {
+      url,
+      title: "System Verification - Home",
+      content:
+        "System Verification home page. Quality assurance services, offices, and company information.",
+    };
+  }
+
+  async summarizeFindings() {
+    return {
+      provider: this.name,
+      summary: "stub summary",
+      citations: [],
+      confidence: 0.9,
+      checkedAt: "2026-04-17T00:00:00.000Z",
+    };
+  }
+}
+
+class ResearchBackedIphoneWebResearchProvider implements WebResearchProvider {
+  readonly name = "research-backed-iphone-web-research";
+  searchCalls = 0;
+
+  async healthCheck() {
+    return {
+      provider: this.name,
+      ok: true,
+      detail: "stub ready",
+      checkedAt: "2026-04-17T00:00:00.000Z",
+    };
+  }
+
+  async search(query: string) {
+    this.searchCalls += 1;
+    if (/created|company|iphone/i.test(query)) {
+      return [
+        {
+          title: "Apple introduces iPhone",
+          url: "https://www.apple.com/newsroom/2007/01/09Apple-Reinvents-the-Phone-with-iPhone/",
+          snippet:
+            "Apple today introduced iPhone, combining a revolutionary mobile phone, widescreen iPod and breakthrough Internet device.",
+        },
+      ];
+    }
+
+    return [];
+  }
+
+  async fetch(url: string): Promise<WebFetchResult> {
+    if (url.includes("newsroom/2007/01/09Apple-Reinvents-the-Phone-with-iPhone")) {
+      return {
+        url,
+        title: "Apple Reinvents the Phone with iPhone",
+        content:
+          "Apple today introduced iPhone, combining a revolutionary mobile phone, a widescreen iPod, and a breakthrough Internet communications device.",
+      };
+    }
+
+    return {
+      url,
+      title: "iPhone",
+      content:
+        "Our latest iPhone models are built for Apple Intelligence and advanced mobile performance.",
+    };
+  }
+
+  async summarizeFindings() {
+    return {
+      provider: this.name,
+      summary: "stub summary",
+      citations: [],
+      confidence: 0.9,
+      checkedAt: "2026-04-17T00:00:00.000Z",
+    };
+  }
+}
+
+class TopicOnlyPremiereDeckLLMProvider extends TrackingQuestionLLMProvider {
+  override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
+    const generated = await super.generateDeck(input);
+
+    return DeckSchema.parse({
+      ...generated,
+      id: "deck_topic_only_premiere",
+      title: "SpongeBob SquarePants: The 1999 Premiere",
+      topic: input.topic,
+      summary:
+        "This deck explains when SpongeBob SquarePants first aired in 1999, what happened in the debut episode, and why that premiere mattered to the series.",
+      source: {
+        type: "topic",
+        topic: input.topic,
+        sourceIds: [],
+      },
+      slides: generated.slides.map((slide, index) => {
+        switch (index) {
+          case 0:
+            return {
+              ...slide,
+              title: "When SpongeBob First Aired",
+              learningGoal:
+                "Understand when SpongeBob SquarePants first premiered and why that date matters.",
+              keyPoints: [
+                "Nickelodeon aired 'Help Wanted' on May 1, 1999.",
+                "That broadcast introduced SpongeBob SquarePants as a television series to a wide audience.",
+                "The debut set the tone for the humor, setting, and energy that defined the franchise.",
+              ],
+              beginnerExplanation:
+                "SpongeBob first reached television audiences when 'Help Wanted' aired on May 1, 1999.",
+              advancedExplanation:
+                "The May 1, 1999 premiere turned the character from a pilot concept into a broadcast series with a recognizable comic identity.",
+              examples: [
+                "A viewer in 1999 would have met SpongeBob for the first time through 'Help Wanted' on Nickelodeon.",
+              ],
+            };
+          case 1:
+            return {
+              ...slide,
+              title: "How the Premiere Introduced Bikini Bottom",
+              learningGoal:
+                "See how the first episode introduced SpongeBob, the Krusty Krab, and the tone of Bikini Bottom.",
+              keyPoints: [
+                "The episode quickly showed SpongeBob's optimism and eagerness to work at the Krusty Krab.",
+                "Squidward's irritation and Mr. Krabs's skepticism gave the comedy immediate contrast.",
+                "The undersea setting made the world feel playful, strange, and easy to recognize.",
+              ],
+              beginnerExplanation:
+                "The premiere showed who SpongeBob is and what kind of world he lives in.",
+              advancedExplanation:
+                "The debut episode established character contrast, comic rhythm, and a memorable sense of place in only a few scenes.",
+              examples: [
+                "SpongeBob's excitement about getting a job contrasts sharply with Squidward's visible dread.",
+              ],
+            };
+          case 2:
+            return {
+              ...slide,
+              title: "Why the First Episode Mattered",
+              learningGoal:
+                "Explain why the 1999 premiere became an important starting point for the series.",
+              keyPoints: [
+                "The debut episode proved that SpongeBob's fast, absurd humor worked in a full television story.",
+                "It gave the show a repeatable formula: optimism, chaos, and a strange but relatable workplace.",
+                "Later episodes could build on characters and settings that audiences already understood from the premiere.",
+              ],
+              beginnerExplanation:
+                "The first episode mattered because it showed that SpongeBob's style and characters could carry a whole series.",
+              advancedExplanation:
+                "The premiere functioned as a template for the show's pacing, workplace comedy, and emotional contrast.",
+              examples: [
+                "Once the premiere made the Krusty Krab and its characters familiar, later episodes could move faster and go bigger.",
+              ],
+            };
+          default:
+            return {
+              ...slide,
+              title: "What Viewers Remember from the Debut",
+              learningGoal:
+                "Summarize the most memorable parts of SpongeBob's first television appearance.",
+              keyPoints: [
+                "SpongeBob's determination made him instantly distinct from typical cartoon leads.",
+                "The burger-flipping chaos at the Krusty Krab made the episode easy to remember.",
+                "The combination of bright visuals and earnest comedy helped the premiere stand out in 1999.",
+              ],
+              beginnerExplanation:
+                "People remember the debut because it was energetic, funny, and clear about who SpongeBob was.",
+              advancedExplanation:
+                "The premiere left a durable impression by combining a strong lead performance, clear comic stakes, and a distinctive visual world.",
+              examples: [
+                "Many viewers remember SpongeBob proving himself through sheer enthusiasm during the Krusty Krab rush.",
+              ],
+            };
+        }
+      }),
+    });
+  }
+}
+
+class BrokenTopicOnlyPremiereDeckLLMProvider extends TopicOnlyPremiereDeckLLMProvider {
+  override async answerQuestion() {
+    throw new Error("question answering timed out");
   }
 }
 
@@ -592,6 +886,18 @@ test("question interaction answers in context and pauses the session", async () 
   assert.equal(result.session.state, "slide_paused");
   assert.equal(result.session.transcriptTurnIds.length, 3);
   assert.match(result.assistantMessage, /Short answer|State machines/i);
+});
+
+test("createSession stores the requested presentation theme on the deck", async () => {
+  const { deckRepository, service } = createHarness();
+  const created = await service.createSession({
+    topic: "State machines",
+    theme: "editorial",
+  });
+
+  const deck = await deckRepository.getById(created.session.deckId);
+
+  assert.equal(deck?.metadata.theme, "editorial");
 });
 
 test("general contextual questions use llm answering instead of short-circuiting to the slide summary", async () => {
@@ -1288,6 +1594,225 @@ test("grounded factual questions fall back honestly when the llm returns a clipp
   );
 });
 
+test("off-topic questions are classified as off-topic instead of forcing a deck-shaped answer", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TrackingQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+    groundingSourceIds: ["https://www.systemverification.com/"],
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "What is the weather in Stockholm tomorrow?",
+  );
+
+  assert.equal(result.interruption.type, "question");
+  assert.equal(llmProvider.answerQuestionCalls, 0);
+  assert.match(
+    result.assistantMessage,
+    /does not seem to be about the current presentation/i,
+  );
+});
+
+test("source-backed off-topic factual questions still stay off-topic", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TrackingQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "Spongebob Squarepants first episode that was aired in 1999",
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "What is the weather in Stockholm tomorrow?",
+  );
+
+  assert.equal(llmProvider.answerQuestionCalls, 0);
+  assert.match(
+    result.assistantMessage,
+    /does not seem to be about the current presentation/i,
+  );
+});
+
+test("relevant grounded factual questions can trigger follow-up research when the initial source grounding is too weak", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new BrokenQuestionLLMProvider();
+  const webResearchProvider =
+    new ResearchBackedSystemVerificationWebResearchProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+    undefined,
+    webResearchProvider,
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+    groundingSourceIds: ["https://www.systemverification.com/"],
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "Who is the CEO of System Verification?",
+  );
+
+  assert.equal(result.turnDecision.responseMode, "grounded_factual");
+  assert.ok(webResearchProvider.searchCalls >= 1);
+  assert.ok(webResearchProvider.fetchCalls >= 1);
+  assert.match(result.assistantMessage, /CEO Jane Doe/i);
+});
+
+test("creator questions can trigger follow-up research when source grounding lacks the answer", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new BrokenQuestionLLMProvider();
+  const webResearchProvider = new ResearchBackedIphoneWebResearchProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+    undefined,
+    webResearchProvider,
+  );
+
+  const created = await service.createSession({
+    topic: "The history of Apple Iphone from the first version released",
+    groundingSourceIds: ["https://www.apple.com/iphone/"],
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "Which company created the iPhone?",
+  );
+
+  assert.ok(webResearchProvider.searchCalls >= 1);
+  assert.match(result.assistantMessage, /Apple/i);
+});
+
+test("topic-only factual questions can use deck context without source grounding", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new BrokenTopicOnlyPremiereDeckLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "Spongebob Squarepants first episode that was aired in 1999",
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "When did SpongeBob first premiere?",
+  );
+
+  assert.match(result.assistantMessage, /May 1, 1999|1999/i);
+  assert.doesNotMatch(result.assistantMessage, /frames the concrete case/i);
+});
+
+test("topic-only off-topic questions are not rescued by meaningless overlap", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TopicOnlyPremiereDeckLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "Spongebob Squarepants first episode that was aired in 1999",
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "What is the weather in Stockholm tomorrow?",
+  );
+
+  assert.equal(llmProvider.answerQuestionCalls, 0);
+  assert.match(
+    result.assistantMessage,
+    /does not seem to be about the current presentation/i,
+  );
+});
+
+test("invalid grounded sludge answers are rejected and repaired from grounded source snippets", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new SludgeRejectingGroundedQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+    undefined,
+    new NoisySystemVerificationWebResearchProvider(),
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+    groundingSourceIds: ["https://www.systemverification.com/"],
+    groundingSourceType: "mixed",
+  });
+
+  const result = await service.interact(
+    created.session.id,
+    "What countries are System Verification in?",
+  );
+
+  assert.equal(result.turnDecision.responseMode, "grounded_factual");
+  assert.match(
+    result.assistantMessage,
+    /Sweden|Germany|Bosnia and Herzegovina|Poland|Denmark/i,
+  );
+  assert.doesNotMatch(result.assistantMessage, /System Verification - Home/i);
+  assert.doesNotMatch(result.assistantMessage, /quality assurance integrated/i);
+});
+
 test("restart-style explanations reset narration progress to the start", async () => {
   const { service } = createHarness();
   const created = await service.createSession({
@@ -1347,6 +1872,7 @@ test("session creation plans first and gives the intro narration multiple beats"
   assert.equal(created.narrations.length, 1);
   assert.ok(created.narrations[0]);
   assert.ok((created.narrations[0]?.segments.length ?? 0) >= 4);
+  assert.match(created.narrations[0]?.segments[0] ?? "", /^Welcome everyone\./);
   assert.ok(deck.metadata.generation);
   assert.equal(deck.metadata.generation?.narrationReadySlides, 1);
   assert.equal(deck.metadata.generation?.backgroundEnrichmentPending, true);
@@ -1365,6 +1891,42 @@ test("session creation plans first and gives the intro narration multiple beats"
   assert.equal(
     Object.keys(finalizedSession.narrationBySlideId).length,
     finalizedDeck.slides.length,
+  );
+});
+
+test("background enrichment does not replace already published intro narration", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new BackgroundIntroRewriteReviewLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "Interactive AI teachers",
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
+  const introSlideId = deck?.slides[0]?.id;
+  const publishedIntro = created.narrations[0];
+
+  assert.ok(introSlideId);
+  assert.ok(publishedIntro);
+
+  await service.waitForBackgroundEnrichment(created.session.id);
+
+  const finalizedSession = await sessionRepository.getById(created.session.id);
+  const finalizedIntro = finalizedSession?.narrationBySlideId[introSlideId];
+
+  assert.ok(finalizedIntro);
+  assert.equal(finalizedIntro.narration, publishedIntro.narration);
+  assert.doesNotMatch(finalizedIntro.narration, /Background review tried to replace/i);
+  assert.equal(
+    Object.keys(finalizedSession?.narrationBySlideId ?? {}).length,
+    deck?.slides.length,
   );
 });
 
@@ -1394,13 +1956,14 @@ test("intro narration repair keeps the next-slide transition when the deck has m
     /clear close/i,
   );
   assert.equal((created.narrations[0]?.segments.length ?? 0) >= 4, true);
+  assert.match(created.narrations[0]?.segments[0] ?? "", /^Welcome everyone\./);
   assert.match(
     created.narrations[0]?.suggestedTransition ?? "",
     new RegExp(secondSlide?.title ?? "", "i"),
   );
 });
 
-test("session creation fails when llm generation produces no usable deck", async () => {
+test("session creation falls back when llm generation produces no usable deck", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1412,20 +1975,20 @@ test("session creation fails when llm generation produces no usable deck", async
     transcriptRepository,
   );
 
-  await assert.rejects(
-    service.createSession({
-      topic: "Jivr onboarding",
-      groundingSummary:
-        "Jivr is a tool created by Per Hjalhdal. It is used to support onboarding and structured team knowledge sharing.",
-      groundingSourceIds: ["https://jivr.com"],
-      groundingSourceType: "mixed",
-      targetSlideCount: 4,
-    }),
-    /No usable LLM-generated deck was produced|lmstudio returned an empty response/i,
-  );
+  const created = await service.createSession({
+    topic: "Jivr onboarding",
+    groundingSummary:
+      "Jivr is a tool created by Per Hjalhdal. It is used to support onboarding and structured team knowledge sharing.",
+    groundingSourceIds: ["https://jivr.com"],
+    groundingSourceType: "mixed",
+    targetSlideCount: 4,
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
 
-  assert.equal((await deckRepository.list()).length, 0);
-  assert.equal((await sessionRepository.list()).length, 0);
+  assert.ok(deck);
+  assert.match(deck?.title ?? "", /Jivr onboarding/i);
+  assert.equal((await deckRepository.list()).length, 1);
+  assert.equal((await sessionRepository.list()).length, 1);
 });
 
 test("session creation retries weak deck drafts before relying on repair", async () => {
@@ -1470,7 +2033,7 @@ test("session creation retries weak deck drafts before relying on repair", async
   );
 });
 
-test("session creation rejects repair-heavy meta decks even when the LLM returns structured JSON", async () => {
+test("session creation falls back from repair-heavy meta decks even when the LLM returns structured JSON", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1481,19 +2044,22 @@ test("session creation rejects repair-heavy meta decks even when the LLM returns
     transcriptRepository,
   );
 
-  await assert.rejects(
-    service.createSession({
-      topic: "System Verification",
-      presentationBrief: "Create an onboarding presentation about our company.",
-      groundingSummary:
-        "System Verification provides quality management, QA operations, and delivery support for complex engineering teams.",
-      groundingSourceIds: ["https://www.systemverification.com/"],
-      groundingSourceType: "mixed",
-      targetSlideCount: 2,
-    }),
-    /No acceptable LLM-generated deck was produced/i,
-  );
+  const created = await service.createSession({
+    topic: "System Verification",
+    presentationBrief: "Create an onboarding presentation about our company.",
+    groundingSummary:
+      "System Verification provides quality management, QA operations, and delivery support for complex engineering teams.",
+    groundingSourceIds: ["https://www.systemverification.com/"],
+    groundingSourceType: "mixed",
+    targetSlideCount: 2,
+  });
+  const deck = await deckRepository.getById(created.session.deckId);
 
-  assert.equal((await deckRepository.list()).length, 0);
-  assert.equal((await sessionRepository.list()).length, 0);
+  assert.ok(deck);
+  assert.equal((await deckRepository.list()).length, 1);
+  assert.equal((await sessionRepository.list()).length, 1);
+  assert.doesNotMatch(
+    deck?.slides.map((slide) => slide.keyPoints.join(" ")).join(" ") ?? "",
+    /walk through|direct the audience|avoid clutter|presentation should be delivered/i,
+  );
 });

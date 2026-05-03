@@ -186,6 +186,177 @@ test("deck evaluation flags generic template language left by repair-like phrasi
   );
 });
 
+test("deck evaluation allows procedural decks to use action-oriented key points", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_procedural",
+    title: "Making salsa dip",
+    topic: "Making salsa dip",
+    summary: "A practical how-to deck.",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Making salsa dip",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "procedural_1",
+        order: 0,
+        title: "Key preparation steps",
+        learningGoal: "See how the main preparation steps affect texture and flavor.",
+        keyPoints: [
+          "Chop tomatoes and onion evenly so each bite has the same texture.",
+          "Mix lime, salt, and cilantro after chopping so the seasoning spreads evenly.",
+          "Taste after resting because salt and acid become clearer after a few minutes.",
+        ],
+        beginnerExplanation:
+          "A practical salsa process is easier to follow when each action has a visible effect.",
+        advancedExplanation:
+          "Cut size, seasoning order, and resting time all change the final texture and flavor.",
+        examples: ["A bowl that tastes flat after resting usually needs more salt or acid."],
+        likelyQuestions: ["How long should salsa rest before serving?"],
+        visualNotes: [],
+        visuals: {
+          layoutTemplate: "three-step-flow",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-05-01T12:00:00.000Z",
+    updatedAt: "2026-05-01T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: ["procedural"],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    evaluation.checks.some(
+      (check) => check.code === "language_quality" && check.status === "pass",
+    ),
+  );
+});
+
+test("deck evaluation flags prompt-scaffold and truncated fallback text inside slide bodies", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_scaffold_body",
+    title: "SpongeBob first episode",
+    topic: "SpongeBob first episode",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "SpongeBob first episode",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "scaffold_1",
+        order: 0,
+        title: "May 1, 1999 sneak peek airing",
+        learningGoal: "See what the first episode was and why it mattered.",
+        keyPoints: [
+          "SpongeBob SquarePants first aired as a sneak peek on May 1, 1999, after the Kids.",
+          "SpongeBob first episode is easier to understand when its purpose, structure, and one concrete example are visible together.",
+          "This initial broadcast introduced Help Wanted before the official July premiere.",
+        ],
+        beginnerExplanation:
+          "SpongeBob first episode is easier to understand when its purpose, structure, and one concrete example are visible together.",
+        advancedExplanation:
+          "A concrete consequence, responsibility, or example shows why SpongeBob first episode matters.",
+        examples: [],
+        likelyQuestions: [],
+        visualNotes: [],
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+      {
+        id: "scaffold_2",
+        order: 1,
+        title: "The strongest takeaway",
+        learningGoal:
+          "See what one concrete detail teaches about SpongeBob first episode, then bring final questions into the discussion.",
+        keyPoints: [
+          "The specific case study or research angle requested in the prompt: SpongeBob first episode.",
+          "A concrete example, consequence, or real-world application of SpongeBob first episode.",
+          "Questions are welcome before we close, especially about how the main takeaway applies in practice.",
+        ],
+        beginnerExplanation:
+          "The specific case study or research angle requested in the prompt: SpongeBob first episode.",
+        advancedExplanation:
+          "A concrete example, consequence, or real-world application of SpongeBob first episode.",
+        examples: ["At least one practical exercise for the audience to complete during the workshop."],
+        likelyQuestions: [],
+        visualNotes: [],
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-14T12:00:00.000Z",
+    updatedAt: "2026-04-14T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 4,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    evaluation.checks.some(
+      (check) => check.code === "prompt_contamination" && check.status !== "pass",
+    ),
+  );
+  assert.ok(
+    evaluation.checks.some(
+      (check) => check.code === "templated_slide_language" && check.status !== "pass",
+    ),
+  );
+  assert.ok(
+    evaluation.checks.some(
+      (check) => check.code === "language_quality" && check.status !== "pass",
+    ),
+  );
+  assert.ok(evaluation.overallScore < 1);
+});
+
 test("deck evaluation flags slides that repeat nearly the same explanation across the deck", () => {
   const repeated = [
     "Wherever you are in your quality journey, our solutions help you strengthen software testing, align your strategy with business goals, and move forward more safely.",
@@ -793,6 +964,151 @@ test("deck evaluation flags truncated dangling slide language", () => {
   );
 });
 
+test("deck evaluation accepts question-shaped how-it-works titles", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_how_works",
+    title: "How an interactive AI tutor works",
+    topic: "How an interactive AI tutor works",
+    summary:
+      "The deck explains the input, processing, feedback, and takeaway behind an interactive AI tutor.",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "How an interactive AI tutor works",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_how_works_1",
+        order: 0,
+        title: "How an interactive AI tutor works",
+        learningGoal:
+          "See how an interactive AI tutor turns learner input into adaptive feedback.",
+        keyPoints: [
+          "The tutor starts by capturing a learner question, answer, or hesitation as input.",
+          "The model interprets that input against the current lesson context before choosing a response.",
+          "The feedback loop updates the next explanation so the learner receives more targeted guidance.",
+        ],
+        beginnerExplanation:
+          "An interactive AI tutor responds to each learner action instead of presenting the same static lesson to everyone.",
+        advancedExplanation:
+          "The tutoring loop combines input interpretation, response generation, and feedback signals to keep the next step relevant.",
+        examples: [
+          "A learner gives a wrong answer, and the tutor responds with a smaller hint instead of moving on.",
+        ],
+        likelyQuestions: ["How does the tutor know what to explain next?"],
+        visualNotes: ["Show a learner input moving through a feedback loop."],
+        visuals: {
+          layoutTemplate: "three-step-flow",
+          accentColor: "1C7C7D",
+          imagePrompt: "learner and AI tutor feedback loop",
+          imageSlots: [],
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-13T22:00:00.000Z",
+    updatedAt: "2026-04-13T22:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck);
+  assert.equal(
+    evaluation.checks.find((check) => check.code === "language_quality")
+      ?.status,
+    "pass",
+  );
+});
+
+test("deck evaluation flags fragmentary workshop bullets and same-slide duplication", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_vgr_fragment",
+    title: "VGR AI workshop",
+    topic: "Using AI tools in daily work",
+    summary: "A workshop about safe AI use in daily work.",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "Using AI tools in daily work",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "slide_vgr_fragment",
+        order: 0,
+        title: "Specific use cases for AI in project management",
+        learningGoal:
+          "Identify concrete AI applications for project managers, product owners, and test leads.",
+        keyPoints: [
+          "Focus on the intersection of AI capabilities and VGR's specific mandates: healthcare, culture, and transport.",
+          "Generating draft user stories for a new digital health service feature based on existing patient journey maps.",
+          "AI tools must not process personal health data or sensitive protocol information due to strict data security regulations.",
+          "AI tools must not process personal health data or sensitive protocol information due to strict data security regulations before review.",
+        ],
+        beginnerExplanation:
+          "The workshop connects AI usage to concrete daily work and safe review.",
+        advancedExplanation:
+          "The stronger examples separate role-specific use cases from governance constraints.",
+        examples: [
+          "project managers, product owners, and test leads can use AI tools in their daily",
+        ],
+        likelyQuestions: ["Which tasks are safe to try first?"],
+        visualNotes: ["Show role-specific work outputs."],
+        visuals: {
+          layoutTemplate: "two-column-callouts",
+          accentColor: "1C7C7D",
+          imagePrompt: "public sector team reviewing AI generated work outputs",
+          imageSlots: [
+            {
+              id: "image_vgr_fragment",
+              prompt: "public sector team reviewing AI generated work outputs",
+            },
+          ],
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+        },
+      },
+    ],
+    createdAt: "2026-05-01T10:00:00.000Z",
+    updatedAt: "2026-05-01T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+  assert.ok(
+    evaluation.checks.some(
+      (check) => check.code === "language_quality" && check.status === "fail",
+    ),
+  );
+});
+
 test("deck evaluation accepts complete declarative key points even when they use varied verbs", () => {
   const deck = DeckSchema.parse({
     id: "deck_eval_6",
@@ -854,6 +1170,68 @@ test("deck evaluation accepts complete declarative key points even when they use
       (check) => check.code === "language_quality" && check.status !== "pass",
     ),
   );
+});
+
+test("deck evaluation accepts organization operations titles that end with how it works", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_operations_title",
+    title: "System Verification",
+    topic: "System Verification",
+    summary: "System Verification is explained through identity, operating model, capabilities, and value.",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "System Verification",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "operations_title_1",
+        order: 0,
+        title: "Where it operates and how it works",
+        learningGoal:
+          "Understand the operating footprint and delivery model behind System Verification.",
+        keyPoints: [
+          "System Verification operates through QA specialists who support software teams during delivery.",
+          "The organization connects operating footprint, project support, and delivery collaboration.",
+          "Its operating model becomes clearer when location, team structure, and workflow are separated from service capabilities.",
+        ],
+        beginnerExplanation:
+          "The operating model explains where the organization works and how support reaches project teams.",
+        advancedExplanation:
+          "Separating operations from capabilities keeps the organization overview from turning into a service catalogue.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-05-02T10:00:00.000Z",
+    updatedAt: "2026-05-02T10:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const languageCheck = evaluateDeckQuality(deck, []).checks.find(
+    (check) => check.code === "language_quality",
+  );
+
+  assert.equal(languageCheck?.status, "pass");
 });
 
 test("deck evaluation ignores visual prompt scaffolding when judging intro substance", () => {
@@ -921,6 +1299,136 @@ test("deck evaluation ignores visual prompt scaffolding when judging intro subst
   assert.ok(
     !evaluation.checks.some(
       (check) => check.code === "intro_slide_substance" && check.status !== "pass",
+    ),
+  );
+});
+
+test("deck evaluation flags leaked generation scaffold phrases", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_scaffold",
+    title: "SpongeBob SquarePants first episode",
+    topic: "SpongeBob SquarePants first episode",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "topic",
+      topic: "SpongeBob SquarePants first episode",
+      sourceIds: [],
+    },
+    slides: [
+      {
+        id: "scaffold_slide",
+        order: 0,
+        title: "Concrete Example: The premiere",
+        learningGoal:
+          "See how the subject or organization is connected to the first episode.",
+        keyPoints: [
+          "The core mechanisms, characteristics, or defining ideas behind SpongeBob SquarePants first episode.",
+          "The first episode aired in 1999 and introduced the main workplace setting.",
+          "The premiere established a recognizable tone for later episodes.",
+        ],
+        beginnerExplanation:
+          "The subject or organization is not a valid audience-facing explanation.",
+        advancedExplanation:
+          "Concrete Example: internal generation scaffolding should not pass as final content.",
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          imagePrompt: "SpongeBob premiere",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-18T20:10:00.000Z",
+    updatedAt: "2026-04-18T20:10:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    evaluation.checks.some(
+      (check) => check.code === "templated_slide_language" && check.status === "fail",
+    ),
+  );
+});
+
+test("deck evaluation flags repair-template fragments in explanations and dangling titles", () => {
+  const deck = DeckSchema.parse({
+    id: "deck_eval_repair_fragments",
+    title: "SpongeBob 1999 premiere",
+    topic: "SpongeBob SquarePants first episode",
+    summary: "Summary",
+    pedagogicalProfile: {
+      audienceLevel: "beginner",
+      tone: "supportive and concrete",
+      pace: "balanced",
+      preferredExampleStyle: "real_world",
+      wantsFrequentChecks: true,
+      detailLevel: "standard",
+    },
+    source: {
+      type: "mixed",
+      topic: "SpongeBob SquarePants first episode",
+      sourceIds: ["https://example.com/source"],
+    },
+    slides: [
+      {
+        id: "frag_1",
+        order: 0,
+        title: "The significance of the show's evolution from a seven-minute pilot to",
+        learningGoal: "See how the 1999 premiere anchors the topic.",
+        keyPoints: [
+          "The first broadcast happened in 1999.",
+          "Nickelodeon used the premiere to introduce the show.",
+          "The episode connected the characters to the show's launch.",
+        ],
+        beginnerExplanation: "The first broadcast happened in 1999.",
+        advancedExplanation:
+          "Real-world applications is one concrete way to understand the first episode.",
+        examples: [],
+        likelyQuestions: [],
+        visualNotes: [],
+        visuals: {
+          layoutTemplate: "hero-focus",
+          accentColor: "1C7C7D",
+          cards: [],
+          callouts: [],
+          diagramNodes: [],
+          diagramEdges: [],
+          imageSlots: [],
+        },
+      },
+    ],
+    createdAt: "2026-04-26T12:00:00.000Z",
+    updatedAt: "2026-04-26T12:00:00.000Z",
+    metadata: {
+      estimatedDurationMinutes: 3,
+      tags: [],
+      language: "en",
+    },
+  });
+
+  const evaluation = evaluateDeckQuality(deck, []);
+
+  assert.ok(
+    evaluation.checks.some(
+      (check) => check.code === "language_quality" && check.status !== "pass",
     ),
   );
 });

@@ -22,6 +22,8 @@ The architecture is intentionally modular so LLM, vision, STT, TTS, VAD, storage
 
 Active implementation tracking lives in [tasks.md](/Users/johanengwall/github_repos/slidespeech/tasks.md).
 This README is the product and status narrative, not the canonical task list.
+Competitive and product-reference notes live in [docs/product-landscape.md](/Users/johanengwall/github_repos/slidespeech/docs/product-landscape.md).
+Canonical deck-arc and slide-role definitions live in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
 
 ## What makes SlideSpeech interesting
 
@@ -45,6 +47,8 @@ That is the real product shape:
 
 Classification is central to the system.
 SlideSpeech tries to make explicit decisions early instead of relying on one giant prompt.
+
+The canonical definitions for generation-time deck arcs and slide roles live in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
 
 At generation time, the system classifies things like:
 

@@ -7,7 +7,9 @@ import type {
   PresentationIntent,
   PresentationPlan,
   PresentationReview,
+  ReviewDeckSemanticsInput,
   ReviewPresentationInput,
+  DeckSemanticReviewResult,
   SlideNarration,
 } from "@slidespeech/types";
 
@@ -22,6 +24,7 @@ export class PresentationPlanner {
     groundingSummary?: string,
     groundingHighlights?: string[],
     groundingExcerpts?: string[],
+    groundingCoverageGoals?: string[],
     targetDurationMinutes?: number,
     targetSlideCount?: number,
   ): Promise<PresentationPlan> {
@@ -33,6 +36,7 @@ export class PresentationPlanner {
       ...(groundingSummary ? { groundingSummary } : {}),
       ...(groundingHighlights?.length ? { groundingHighlights } : {}),
       ...(groundingExcerpts?.length ? { groundingExcerpts } : {}),
+      ...(groundingCoverageGoals?.length ? { groundingCoverageGoals } : {}),
       ...(targetDurationMinutes ? { targetDurationMinutes } : {}),
       ...(targetSlideCount ? { targetSlideCount } : {}),
     });
@@ -68,6 +72,21 @@ export class NarrationEngine {
 
 export class PresentationQualityReviewer {
   constructor(private readonly llmProvider: LLMProvider) {}
+
+  reviewDeckSemantics(
+    input: ReviewDeckSemanticsInput,
+  ): Promise<DeckSemanticReviewResult> {
+    if (typeof this.llmProvider.reviewDeckSemantics !== "function") {
+      return Promise.resolve({
+        approved: true,
+        score: 1,
+        summary: "Deck semantic review unavailable; deterministic checks remain active.",
+        issues: [],
+      });
+    }
+
+    return this.llmProvider.reviewDeckSemantics(input);
+  }
 
   review(input: ReviewPresentationInput): Promise<PresentationReview> {
     return this.llmProvider.reviewPresentation(input);

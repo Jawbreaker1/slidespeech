@@ -26,6 +26,12 @@ const extractGroundingHighlights = (
     .split(/\n+|(?<=[.!?])\s+/)
     .map((chunk) => chunk.replace(/\s+/g, " ").trim())
     .filter((chunk) => chunk.length >= 30)
+    .filter(
+      (chunk) =>
+        !/^\s*(?:research coverage goals|curated grounding highlights|external grounding summary|grounded source excerpts|direct source grounding|search research)\s*:/i.test(
+          chunk,
+        ),
+    )
     .filter((chunk) => {
       const normalized = chunk.toLowerCase();
       if (seen.has(normalized)) {
@@ -48,6 +54,22 @@ const resolveTargetSlideCount = (input: GenerateDeckInput): number =>
         : 4),
   );
 
+const makeCardTitle = (point: string): string => {
+  const normalized = point.replace(/\s+/g, " ").trim();
+  const [head, ...rest] = normalized.split(":");
+  const explicitHead = rest.length > 0 ? (head ?? "").trim() : "";
+  const source = explicitHead.length >= 8 ? explicitHead : normalized;
+  const words = source
+    .replace(/^[^\p{L}\p{N}]+/gu, "")
+    .replace(/\b(?:which|that|where|who|whose)\b.*$/i, "")
+    .replace(/[.,:!?]+$/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  const title = words.slice(0, 6).join(" ");
+
+  return title || "Main idea";
+};
+
 const makeCards = (
   slideId: string,
   points: string[],
@@ -55,7 +77,7 @@ const makeCards = (
 ) =>
   points.slice(0, 3).map((point, index) => ({
     id: `${slideId}-card-${index + 1}`,
-    title: `Key point ${index + 1}`,
+    title: makeCardTitle(point),
     body: point,
     tone: tones[index] ?? "neutral",
   }));
@@ -67,6 +89,20 @@ const pickGroundedPoints = (
 ): string[] => {
   const grounded = highlights.slice(offset, offset + 3);
   return grounded.length > 0 ? grounded : fallbackPoints;
+};
+
+const pickGroundedPointsForSlide = (
+  highlights: string[],
+  slideIndex: number,
+  fallbackPoints: string[],
+): string[] => {
+  if (highlights.length === 0) {
+    return fallbackPoints;
+  }
+
+  return Array.from({ length: Math.min(3, highlights.length) }, (_, index) =>
+    highlights[(slideIndex + index) % highlights.length],
+  ).filter((value): value is string => Boolean(value));
 };
 
 const uniqueNonEmptyStrings = (values: Array<string | null | undefined>): string[] =>
@@ -185,7 +221,11 @@ export const buildDeterministicDeck = (input: GenerateDeckInput): Deck => {
   const createdAt = nowIso();
   const topic = input.topic.trim();
   const onboardingLike = /\bonboarding\b/i.test(input.presentationBrief ?? "");
-  const groundedHighlights = extractGroundingHighlights(input.groundingSummary);
+  const groundedHighlights = uniqueNonEmptyStrings([
+    ...(input.groundingHighlights ?? []),
+    ...(input.groundingFacts ?? []).map((fact) => fact.claim),
+    ...extractGroundingHighlights(input.groundingSummary),
+  ]);
   const targetSlideCount = resolveTargetSlideCount(input);
   const storyline = input.plan?.storyline ?? [
     "orientation",
@@ -435,21 +475,23 @@ export const buildDeterministicDeck = (input: GenerateDeckInput): Deck => {
     }
 
     const storylineLabel = storyline[index] ?? `extra teaching beat ${index - baseSlides.length + 1}`;
-    const extraHighlights = pickGroundedPoints(groundedHighlights, index * 2, [
-      `Add one more concrete angle on ${topic} without changing the main thread.`,
-      "Use the extra time to deepen understanding, not to introduce a new topic.",
-      "Keep the pacing smooth and visually consistent.",
+    const extraHighlights = pickGroundedPointsForSlide(groundedHighlights, index, [
+      `${storylineLabel} is one concrete part of ${topic}.`,
+      `${topic} is easier to understand when this part is connected back to the main storyline.`,
+      `The audience should leave this section with one clearer question or takeaway about ${topic}.`,
     ]);
     return {
       id: createId("slide"),
       order: index,
       title: `${topic}: ${storylineLabel}`,
-      learningGoal: `Extend the audience's understanding of ${topic} while staying on the same storyline.`,
+      learningGoal: `Explain ${storylineLabel.toLowerCase()} as one clear part of ${topic}.`,
       keyPoints: extraHighlights,
       requiredContext: [`The earlier slides about ${topic}.`],
-      speakerNotes: ["Use this extension slide to deepen or reinforce, not to branch into a side topic."],
-      beginnerExplanation: `This slide adds one more coherent teaching beat so the pacing matches the requested length without breaking the storyline.`,
-      advancedExplanation: `This extension slide reinforces the same conceptual thread and keeps the deck aligned with the requested duration.`,
+      speakerNotes: [`Connect ${storylineLabel.toLowerCase()} back to the main story about ${topic}.`],
+      beginnerExplanation: extraHighlights.slice(0, 2).join(" "),
+      advancedExplanation:
+        extraHighlights[2] ??
+        `${storylineLabel} should clarify one practical part of ${topic}.`,
       examples: groundedHighlights.slice(index, index + 2),
       likelyQuestions: [`How does this deepen the main story about ${topic}?`],
       canSkip: true,
@@ -459,7 +501,7 @@ export const buildDeterministicDeck = (input: GenerateDeckInput): Deck => {
         layoutTemplate: index % 2 === 0 ? "two-column-callouts" : "summary-board",
         accentColor: index % 2 === 0 ? "1C7C7D" : "8D64D6",
         eyebrow: "Extended depth",
-        heroStatement: `This slide adds depth while staying inside the same narrative about ${topic}.`,
+        heroStatement: `${storylineLabel} is part of the main story about ${topic}.`,
         cards: makeCards(createId("tmp"), extraHighlights, ["accent", "info", "success"]),
         callouts: [],
         diagramNodes: [],
@@ -516,6 +558,9 @@ export const buildDeterministicNarration = (
   const nextSlide = input.deck.slides[input.slide.order + 1];
   const prefersBeginnerFriendlyLanguage =
     input.deck.pedagogicalProfile.audienceLevel === "beginner";
+  const openingIntro = /^sv\b/i.test(input.deck.metadata.language)
+    ? `Välkomna. Vi börjar med att rama in ${input.deck.topic} så att resten av genomgången får en tydlig kontext.`
+    : `Welcome everyone. We will start by framing ${input.deck.topic} so the rest of this talk has a clear context.`;
   const normalizeNarrationSentence = (value: string): string => {
     const normalized = value.replace(/\s+/g, " ").trim().replace(/^[\-\u2022*\d.)\s]+/, "");
     if (!normalized) {
@@ -538,6 +583,7 @@ export const buildDeterministicNarration = (
   const segments =
     input.slide.order === 0
       ? [
+          openingIntro,
           `${input.deck.topic} matters because it connects to a concrete need, not just an abstract idea.`,
           normalizeNarrationSentence(input.slide.beginnerExplanation),
           prefixNarrationSentence(

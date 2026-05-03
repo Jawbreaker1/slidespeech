@@ -6,56 +6,15 @@ import type {
   SlideNarration,
 } from "@slidespeech/types";
 
-const META_PATTERNS = [
-  /\bthis slide\b/i,
-  /\bslides?\b/i,
-  /\bpresentation\b/i,
-  /\bdeck\b/i,
-  /\buse screenshots?\b/i,
-  /\bavoid clutter(?:ing)?\b/i,
-  /\btext-heavy\b/i,
-  /\bhigh-resolution\b/i,
-  /\bfor every slide\b/i,
-  /\bblueprint\b/i,
-];
-
-const PROMPT_CONTAMINATION_PATTERNS = [
-  /\bcreate (?:an?|the)?\s*(?:onboarding\s+)?presentation\b/i,
-  /\bmake (?:an?|the)?\s*(?:onboarding\s+)?presentation\b/i,
-  /\bmore information is available at\b/i,
-  /\buse google\b/i,
-  /\bour company\b/i,
-];
-
-const TEMPLATE_LANGUAGE_PATTERNS = [
-  /\bthis part of\b/i,
-  /\bbroader goals? of\b/i,
-  /\bday-to-day work\b/i,
-  /\bdelivery work\b/i,
-  /\bcustomer outcomes?\b/i,
-  /\bin practical delivery work\b/i,
-];
-
-const PROMOTIONAL_NOISE_PATTERNS = [
-  /\bsubscribe now\b/i,
-  /\blearn more\b/i,
-  /\b6-month subscription offer\b/i,
-  /\bblaze through\b/i,
-  /\bfree trial\b/i,
-  /\bupgrade now\b/i,
-];
-
-const AWKWARD_LANGUAGE_PATTERNS = [
-  /\bunderstand the role of\b/i,
-  /\bthe role of .+ in .+\b/i,
-  /^\s*use\b/i,
-  /\b(?:due to|because|connected to|related to)\s+(?:a|an|the)?$/i,
-  /\bas$/i,
-];
-
-const IMPERATIVE_KEY_POINT_PATTERNS = [
-  /^\s*(use|avoid|keep|start|add|mix|taste|review|walk through|show|tell|highlight|map out|validate)\b/i,
-];
+import {
+  AWKWARD_LANGUAGE_PATTERNS,
+  countTextGuardMatches,
+  IMPERATIVE_KEY_POINT_PATTERNS,
+  PRESENTATION_META_PATTERNS,
+  PROMPT_CONTAMINATION_PATTERNS,
+  SOURCE_NOISE_PATTERNS,
+  TEMPLATE_LANGUAGE_PATTERNS,
+} from "./text-quality-guards";
 
 const INFORMATIVE_VERB_PATTERN =
   /\b(is|are|was|were|helps?|support(?:s)?|show(?:s)?|mean(?:s)?|include(?:s)?|use(?:s|d)?|serve(?:s|d)?|function(?:s)?|operate(?:s)?|connect(?:s)?|explain(?:s|ed)?|confirm(?:s|ed)?|provide(?:s|d)?)\b/i;
@@ -127,13 +86,38 @@ const looksFragmentaryKeyPoint = (value: string): boolean => {
   if (/^[a-z]/.test(trimmed)) {
     return true;
   }
+  if (/^\s*(?:generating|leveraging|focusing)\b/i.test(trimmed)) {
+    return true;
+  }
 
   const tokens = tokenize(trimmed);
+  if (tokens.length < 5) {
+    return true;
+  }
   if (tokens.length >= 7 && /[.!?]$/.test(trimmed)) {
     return false;
   }
 
   return tokens.length >= 6 && !INFORMATIVE_VERB_PATTERN.test(trimmed);
+};
+
+const hasNearDuplicateVisiblePoints = (values: string[]): boolean => {
+  const tokenSets = values
+    .map((value) => unique(tokenize(value)))
+    .filter((tokens) => tokens.length >= 6);
+
+  for (let index = 0; index < tokenSets.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < tokenSets.length; otherIndex += 1) {
+      const left = tokenSets[index]!;
+      const right = tokenSets[otherIndex]!;
+      const overlap = overlapRatio(left, right);
+      if (overlap >= 0.78 || overlapRatio(right, left) >= 0.78) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 };
 
 const buildCheck = (
@@ -153,6 +137,9 @@ export const evaluateDeckQuality = (
   narrations: SlideNarration[] = [],
 ): DeckEvaluation => {
   const checks: DeckEvaluationCheck[] = [];
+  const proceduralDeck = deck.metadata.tags.some(
+    (tag) => tag.toLowerCase() === "procedural",
+  );
   const deckTopicTokens = topicTokens(deck);
   const narrationBySlideId = new Map(
     narrations.map((narration) => [narration.slideId, narration]),
@@ -218,7 +205,14 @@ export const evaluateDeckQuality = (
   const contaminatedStrings = [
     deck.topic,
     deck.title,
-    ...deck.slides.flatMap((slide) => [slide.title, slide.learningGoal]),
+    ...deck.slides.flatMap((slide) => [
+      slide.title,
+      slide.learningGoal,
+      slide.beginnerExplanation,
+      slide.advancedExplanation,
+      ...slide.keyPoints,
+      ...slide.examples,
+    ]),
   ];
   const contaminationHits = contaminatedStrings.filter((value) =>
     PROMPT_CONTAMINATION_PATTERNS.some((pattern) => pattern.test(value)),
@@ -234,7 +228,7 @@ export const evaluateDeckQuality = (
   );
 
   const noisySlides = deck.slides.filter((slide) =>
-    PROMOTIONAL_NOISE_PATTERNS.some((pattern) => pattern.test(slideText(slide))),
+    SOURCE_NOISE_PATTERNS.some((pattern) => pattern.test(slideText(slide))),
   );
   checks.push(
     buildCheck(
@@ -251,13 +245,29 @@ export const evaluateDeckQuality = (
   );
 
   const awkwardLanguageSlides = deck.slides.filter((slide) => {
-    const text = [slide.title, slide.learningGoal, ...slide.keyPoints].join(" ");
+    const textFields = [
+      slide.title,
+      slide.learningGoal,
+      slide.beginnerExplanation,
+      slide.advancedExplanation,
+      ...slide.keyPoints,
+      ...slide.examples,
+    ];
+    const text = textFields.join(" ");
     return (
       AWKWARD_LANGUAGE_PATTERNS.some((pattern) => pattern.test(text)) ||
-      slide.keyPoints.some((point) =>
-        IMPERATIVE_KEY_POINT_PATTERNS.some((pattern) => pattern.test(point)),
+      textFields.some((field) =>
+        AWKWARD_LANGUAGE_PATTERNS.some((pattern) => pattern.test(field)),
       ) ||
-      slide.keyPoints.some((point) => looksFragmentaryKeyPoint(point))
+      (!proceduralDeck &&
+        slide.keyPoints.some((point) =>
+          IMPERATIVE_KEY_POINT_PATTERNS.some((pattern) => pattern.test(point)),
+        )) ||
+      slide.keyPoints.some((point) => point.length > 280) ||
+      slide.examples.some((example) => example.length > 280) ||
+      slide.keyPoints.some((point) => looksFragmentaryKeyPoint(point)) ||
+      slide.examples.some((example) => looksFragmentaryKeyPoint(example)) ||
+      hasNearDuplicateVisiblePoints(slide.keyPoints)
     );
   });
   checks.push(
@@ -305,7 +315,7 @@ export const evaluateDeckQuality = (
       0,
     );
 
-    return matches >= 2;
+    return matches >= 1;
   });
   checks.push(
     buildCheck(
@@ -442,7 +452,4 @@ export const evaluateDeckQuality = (
 };
 
 const countMetaMatches = (value: string): number =>
-  META_PATTERNS.reduce(
-    (sum, pattern) => sum + (pattern.test(value) ? 1 : 0),
-    0,
-  );
+  countTextGuardMatches(value, PRESENTATION_META_PATTERNS);

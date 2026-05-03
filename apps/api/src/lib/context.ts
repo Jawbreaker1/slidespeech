@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 import {
   LLMConversationTurnEngine,
@@ -18,10 +18,17 @@ import {
   PptxGenJSDeckExporter,
 } from "@slidespeech/providers";
 
-import { env } from "../config/env";
+import { env, envRoot } from "../config/env";
 
-const storageRoot = resolve(process.cwd(), env.STORAGE_ROOT);
+const resolveFromEnvRoot = (path: string): string =>
+  isAbsolute(path) ? path : resolve(envRoot, path);
+
+const storageRoot = resolveFromEnvRoot(env.STORAGE_ROOT);
 const exportRoot = resolve(storageRoot, "exports");
+const fasterWhisperPythonBin = resolveFromEnvRoot(env.FASTER_WHISPER_PYTHON_BIN);
+const piperTtsPythonBin = resolveFromEnvRoot(env.PIPER_TTS_PYTHON_BIN);
+const piperTtsModelPath = resolveFromEnvRoot(env.PIPER_TTS_MODEL_PATH);
+const piperTtsConfigPath = resolveFromEnvRoot(env.PIPER_TTS_CONFIG_PATH);
 
 const llmProvider = createLLMProvider({
   llmProvider: env.LLM_PROVIDER,
@@ -31,14 +38,14 @@ const llmProvider = createLLMProvider({
   ttsProvider: env.TTS_PROVIDER,
   vadProvider: env.VAD_PROVIDER,
   webResearchProvider: env.WEB_RESEARCH_PROVIDER,
-  fasterWhisperPythonBin: env.FASTER_WHISPER_PYTHON_BIN,
+  fasterWhisperPythonBin,
   fasterWhisperModel: env.FASTER_WHISPER_MODEL,
   fasterWhisperComputeType: env.FASTER_WHISPER_COMPUTE_TYPE,
   fasterWhisperBeamSize: env.FASTER_WHISPER_BEAM_SIZE,
   fasterWhisperLanguage: env.FASTER_WHISPER_LANGUAGE,
-  piperTtsPythonBin: env.PIPER_TTS_PYTHON_BIN,
-  piperTtsModelPath: env.PIPER_TTS_MODEL_PATH,
-  piperTtsConfigPath: env.PIPER_TTS_CONFIG_PATH,
+  piperTtsPythonBin,
+  piperTtsModelPath,
+  piperTtsConfigPath,
   piperTtsSentenceSilenceMs: env.PIPER_TTS_SENTENCE_SILENCE_MS,
   systemTtsVoice: env.SYSTEM_TTS_VOICE,
   systemTtsRateWpm: env.SYSTEM_TTS_RATE_WPM,
@@ -73,7 +80,7 @@ const illustrationProvider = createIllustrationProvider({
 });
 const sttProvider = createSpeechToTextProvider({
   sttProvider: env.STT_PROVIDER,
-  fasterWhisperPythonBin: env.FASTER_WHISPER_PYTHON_BIN,
+  fasterWhisperPythonBin,
   fasterWhisperModel: env.FASTER_WHISPER_MODEL,
   fasterWhisperComputeType: env.FASTER_WHISPER_COMPUTE_TYPE,
   fasterWhisperBeamSize: env.FASTER_WHISPER_BEAM_SIZE,
@@ -81,9 +88,9 @@ const sttProvider = createSpeechToTextProvider({
 });
 const ttsProvider = createTextToSpeechProvider({
   ttsProvider: env.TTS_PROVIDER,
-  piperTtsPythonBin: env.PIPER_TTS_PYTHON_BIN,
-  piperTtsModelPath: env.PIPER_TTS_MODEL_PATH,
-  piperTtsConfigPath: env.PIPER_TTS_CONFIG_PATH,
+  piperTtsPythonBin,
+  piperTtsModelPath,
+  piperTtsConfigPath,
   piperTtsSentenceSilenceMs: env.PIPER_TTS_SENTENCE_SILENCE_MS,
   systemTtsVoice: env.SYSTEM_TTS_VOICE,
   systemTtsRateWpm: env.SYSTEM_TTS_RATE_WPM,

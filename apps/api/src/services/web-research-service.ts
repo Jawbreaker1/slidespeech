@@ -7,19 +7,30 @@ import {
   WebFetchResponseSchema,
   WebResearchQueryResponseSchema,
 } from "@slidespeech/types";
-import { sanitizeResearchQuery } from "@slidespeech/providers";
+import { decodeHtmlEntities, sanitizeResearchQuery } from "@slidespeech/providers";
 
 import { appContext } from "../lib/context";
+import { envRoot } from "../config/env";
 
 const findingHasFetchedSourceContent = (content: string): boolean =>
   !content.startsWith("Failed to fetch source content:") &&
   !content.startsWith("Search snippet fallback:");
 
+const summarizeCandidateFindings = (
+  findings: Array<{ url: string; title: string; content: string }>,
+) => {
+  const fetchedFindings = findings.filter((finding) =>
+    findingHasFetchedSourceContent(finding.content),
+  );
+
+  return fetchedFindings.length > 0 ? fetchedFindings : findings;
+};
+
 const DISCUSSION_SOURCE_PATTERN =
   /\b(forum|forums|community|discussion|thread)\b/i;
 
 const LOW_SIGNAL_QA_SOURCE_PATTERN =
-  /\b(stackexchange\.com|stackoverflow\.com|reddit\.com|quora\.com|fandom\.com|wikia\.com)\b/i;
+  /\b(stackexchange\.com|stackoverflow\.com|reddit\.com|quora\.com|answers\.com|fandom\.com|wikia\.com)\b/i;
 
 const NAVIGATION_NOISE_PATTERN =
   /\b(home|contact|career|careers|about us|privacy|newsletter|knowledge hub|customer case|open positions|follow us|view all news|follow warcraft)\b/i;
@@ -27,13 +38,18 @@ const NAVIGATION_NOISE_PATTERN =
 const PROMOTIONAL_NOISE_PATTERN =
   /\b(subscribe now|learn more|buy now|free trial|6-month subscription offer|blaze through|limited[- ]time|pre[- ]purchase|upgrade now|visit the shop|choose your edition|adopt today|by purchasing|purchase(?:d|s|ing)?|starter edition|charity|donation|bundle|recruit a friend|roofus pack|habitat for humanity|adopt roofus)\b/i;
 
+const SCRAPED_COUNTER_NOISE_PATTERN =
+  /\b0\s+(?:years?|locations?|employees?|consultant rating)\b/i;
+
 const INFORMATIVE_FINDING_PATTERN =
   /\b(is|are|was|were|introduced|released|launched|developed|features?|includes?|explores?|explains?|supports?|stud(?:y|ied|ies)|spread|outbreak|incident|research(?:er|ers)?|model(?:s|ed|ing)?|quarantine|pandemic|contagion|operations?|management|insights|services?|solutions?|quality)\b/i;
 
 const SPECIALIZED_RESEARCH_QUERY_PATTERN =
   /\b(outbreak|incident|plague|research(?:er|ers)?|stud(?:y|ied|ies)|epidemi\w*|pandemic|contagion|disease spread|infection spread|model(?:s|ed|ing)?)\b/i;
+const EPISODE_RESEARCH_QUERY_PATTERN =
+  /\b(first episode|premiere|pilot|broadcast|aired|released|launch(?:ed)?)\b/i;
 const TITLE_CASE_ENTITY_PATTERN =
-  /\b([A-Z][a-z]+(?:\s+(?:of|the|and|for|in|on|to|a|an)\s+[A-Z][a-z]+|\s+[A-Z][a-z]+){1,5})\b/g;
+  /\b([A-Z][A-Za-z0-9'’-]+(?:\s+(?:of|the|and|for|in|on|to|a|an)\s+[A-Z][A-Za-z0-9'’-]+|\s+[A-Z][A-Za-z0-9'’-]+){1,5})\b/g;
 
 const QUERY_STOPWORDS = new Set([
   "the",
@@ -156,6 +172,45 @@ const buildQueryTokens = (query: string): string[] =>
 const buildSpecificQueryTokens = (query: string): string[] =>
   buildQueryTokens(query).filter((token) => token.length >= 5 || /\d/.test(token));
 
+const normalizeComparableSearchText = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+
+const normalizeHostname = (value: string): string =>
+  value.replace(/^www\./i, "").toLowerCase();
+
+const hostnameFromUrl = (value: string): string | null => {
+  try {
+    return normalizeHostname(new URL(value).hostname);
+  } catch {
+    return null;
+  }
+};
+
+const originFromUrl = (value: string): string | null => {
+  try {
+    return new URL(value).origin.replace(/\/+$/g, "");
+  } catch {
+    return null;
+  }
+};
+
+const hostMatchesAllowedHostnames = (
+  url: string,
+  allowedHostnames: string[],
+): boolean => {
+  const candidate = hostnameFromUrl(url);
+  if (!candidate) {
+    return false;
+  }
+
+  return allowedHostnames.some(
+    (hostname) => candidate === hostname || candidate.endsWith(`.${hostname}`),
+  );
+};
+
 const buildEntityHintTokens = (input: { title: string; url: string }): string[] =>
   tokenize(`${input.title} ${input.url}`)
     .filter((token) => token.length >= 4)
@@ -201,9 +256,11 @@ export const sanitizeFetchedFinding = (
   }
 
   const genericEntityQuery = GENERIC_ENTITY_REFERENCE_PATTERN.test(query.trim());
+  const decodedTitle = decodeHtmlEntities(finding.title);
+  const decodedContent = decodeHtmlEntities(finding.content);
   const entityHintTokens =
     options?.allowTrustedExplicitSource && (genericEntityQuery || buildQueryTokens(query).length <= 2)
-      ? buildEntityHintTokens({ title: finding.title, url: finding.url })
+      ? buildEntityHintTokens({ title: decodedTitle, url: finding.url })
       : [];
   const queryTokens = uniqueStrings([...buildQueryTokens(query), ...entityHintTokens]);
   const specificQueryTokens = uniqueStrings([
@@ -211,7 +268,7 @@ export const sanitizeFetchedFinding = (
     ...entityHintTokens.filter((token) => token.length >= 5 || /\d/.test(token)),
   ]);
   const specializedQuery = SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query);
-  const normalizedContent = finding.content
+  const normalizedContent = decodedContent
     .replace(/\u00a0/g, " ")
     .replace(/\b(Buy Now|Learn More|Subscribe Now|View All News|Visit the Shop|Choose Your Edition|Adopt Today|Follow Warcraft)\b/g, ". ")
     .replace(/\s+/g, " ")
@@ -225,6 +282,8 @@ export const sanitizeFetchedFinding = (
     .filter((sentence) => sentence.length >= 30 && sentence.length <= (options?.allowTrustedExplicitSource ? 420 : 280))
     .filter((sentence) => !NAVIGATION_NOISE_PATTERN.test(sentence))
     .filter((sentence) => !PROMOTIONAL_NOISE_PATTERN.test(sentence))
+    .filter((sentence) => !SCRAPED_COUNTER_NOISE_PATTERN.test(sentence))
+    .filter((sentence) => !/\?$/.test(sentence))
     .filter((sentence) => !looksLikeTaxonomyNoise(sentence));
 
   const scoredSentences = sentences
@@ -285,6 +344,7 @@ export const sanitizeFetchedFinding = (
 
   return {
     ...finding,
+    title: decodedTitle,
     content,
   };
 };
@@ -336,15 +396,12 @@ export const collectFetchedFindingUrls = (
 export const buildExplicitSourceFallbackQuery = (input: {
   topic: string;
   urls: string[];
+  organization?: string;
+  presentationFrame?: "subject" | "organization" | "mixed";
+  deliveryFormat?: "presentation" | "workshop";
 }): string => {
   const hostnames = input.urls
-    .map((value) => {
-      try {
-        return new URL(value).hostname.replace(/^www\./i, "");
-      } catch {
-        return "";
-      }
-    })
+    .map((value) => hostnameFromUrl(value) ?? "")
     .filter(Boolean);
   const normalizedTopic = (() => {
     const sanitized = sanitizeResearchQuery(input.topic) || input.topic;
@@ -358,8 +415,63 @@ export const buildExplicitSourceFallbackQuery = (input: {
     return sanitized.trim();
   })();
   const siteFilters = [...new Set(hostnames)].map((hostname) => `site:${hostname}`);
+  const organizationContext =
+    input.organization?.trim() &&
+    (input.presentationFrame === "organization" ||
+      input.presentationFrame === "mixed")
+      ? input.organization.trim()
+      : "";
+  const organizationSupportTerms =
+    organizationContext.length > 0
+      ? input.deliveryFormat === "workshop"
+        ? ["about", "services", "policy", "guidelines"]
+        : ["about", "services", "locations", "offices"]
+      : [];
+  const includeTopic =
+    normalizedTopic.length > 0 &&
+    (
+      organizationContext.length === 0 ||
+      normalizeComparableSearchText(normalizedTopic) !==
+        normalizeComparableSearchText(organizationContext)
+    );
 
-  return [...siteFilters, normalizedTopic].filter(Boolean).join(" ").trim();
+  return [
+    ...siteFilters,
+    organizationContext ? `"${organizationContext}"` : "",
+    includeTopic ? normalizedTopic : "",
+    ...organizationSupportTerms,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+};
+
+export const buildSupportingExplicitSourceUrls = (input: {
+  urls: string[];
+  presentationFrame?: "subject" | "organization" | "mixed";
+  deliveryFormat?: "presentation" | "workshop";
+}): string[] => {
+  if (
+    input.presentationFrame !== "organization" &&
+    input.presentationFrame !== "mixed"
+  ) {
+    return [];
+  }
+
+  const candidatePaths =
+    input.deliveryFormat === "workshop"
+      ? ["/about", "/about-us", "/services", "/policy", "/guidelines"]
+      : ["/about", "/about-us", "/services", "/locations", "/offices"];
+
+  const origins = input.urls
+    .map((value) => originFromUrl(value))
+    .filter((value): value is string => Boolean(value));
+
+  return [
+    ...new Set(
+      origins.flatMap((origin) => candidatePaths.map((path) => `${origin}${path}`)),
+    ),
+  ].slice(0, 5);
 };
 
 export const buildGuessedOfficialUrls = (query: string): string[] => {
@@ -380,16 +492,42 @@ export const buildGuessedOfficialUrls = (query: string): string[] => {
   ];
 
   if (/\b(car|cars|vehicle|vehicles|automotive|truck|trucks)\b/i.test(query)) {
-    urls.push(`https://www.${slug}cars.com/`);
+    if (/cars?$/.test(slug)) {
+      urls.push(`https://www.${slug}.com/intl/`);
+    } else {
+      urls.push(`https://www.${slug}cars.com/`);
+      urls.push(`https://www.${slug}cars.com/intl/`);
+    }
   }
 
   return [...new Set(urls)];
 };
 
+const ENTITY_OVERVIEW_QUERY_PATTERN =
+  /\b(official|company|organization|organisation|brand|business|corporation|manufacturer|automaker|car maker|car company)\b/i;
+
+const buildGuessedEntityKnowledgeUrls = (query: string): string[] => {
+  if (
+    SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query) ||
+    EPISODE_RESEARCH_QUERY_PATTERN.test(query) ||
+    !ENTITY_OVERVIEW_QUERY_PATTERN.test(query)
+  ) {
+    return [];
+  }
+
+  return uniqueStrings(
+    extractNamedPhrases(query)
+      .map((phrase) => slugifyWikiTitle(phrase.replace(/\bofficial\b/gi, "").trim()))
+      .filter(Boolean)
+      .map((slug) => `https://en.wikipedia.org/wiki/${slug}`),
+  );
+};
+
 const slugifyWikiTitle = (value: string): string =>
   value
     .trim()
-    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/[^A-Za-z0-9()]+/g, "_")
+    .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "");
 
 const extractNamedPhrases = (query: string): string[] => {
@@ -404,7 +542,8 @@ const extractNamedPhrases = (query: string): string[] => {
 };
 
 export const buildGuessedKnowledgeUrls = (query: string): string[] => {
-  if (!SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query)) {
+  const episodeResearchQuery = EPISODE_RESEARCH_QUERY_PATTERN.test(query);
+  if (!SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query) && !episodeResearchQuery) {
     return [];
   }
 
@@ -420,6 +559,59 @@ export const buildGuessedKnowledgeUrls = (query: string): string[] => {
     urls.push(`https://en.wikipedia.org/wiki/${slug}`);
     urls.push(`https://en.wikipedia.org/wiki/${slug}_incident`);
     urls.push(`https://en.wikipedia.org/wiki/${slug}_event`);
+    if (episodeResearchQuery) {
+      urls.push(`https://en.wikipedia.org/wiki/List_of_${slug}_episodes`);
+      urls.push(`https://en.wikipedia.org/wiki/${slug}_(season_1)`);
+    }
+  }
+
+  return uniqueStrings(urls);
+};
+
+const WIKI_PAGE_REFERENCE_PATTERN =
+  /\b([A-Z][A-Za-z0-9'’:-]+(?:\s+[A-Z0-9][A-Za-z0-9'’:-]+){0,7})\s+\(([^()]{3,80})\)/g;
+
+export const buildDiscoveredKnowledgeUrls = (
+  query: string,
+  findings: Array<{ url: string; title: string; content: string }>,
+): string[] => {
+  if (!EPISODE_RESEARCH_QUERY_PATTERN.test(query)) {
+    return [];
+  }
+
+  const queryTokens = buildQueryTokens(query);
+  const urls: string[] = [];
+
+  for (const finding of findings) {
+    if (!/\/\/en\.wikipedia\.org\//i.test(finding.url)) {
+      continue;
+    }
+
+    const text = `${finding.title} ${finding.content}`;
+    for (const match of text.matchAll(WIKI_PAGE_REFERENCE_PATTERN)) {
+      const title = `${match[1]?.trim() ?? ""} (${match[2]?.trim() ?? ""})`;
+      if (title.length < 8) {
+        continue;
+      }
+
+      const titleTokens = tokenize(title);
+      const overlapsQuery =
+        queryTokens.length === 0 ||
+        queryTokens.some((token) => titleTokens.includes(token));
+      const looksEpisodeLike =
+        /\b(?:episode|pilot|premiere|season|aired|broadcast)\b/i.test(title) ||
+        (titleTokens.length <= 8 &&
+          queryTokens.some((token) => titleTokens.includes(token)));
+
+      if (!overlapsQuery || !looksEpisodeLike) {
+        continue;
+      }
+
+      const slug = slugifyWikiTitle(title);
+      if (slug) {
+        urls.push(`https://en.wikipedia.org/wiki/${slug}`);
+      }
+    }
   }
 
   return uniqueStrings(urls);
@@ -428,11 +620,18 @@ export const buildGuessedKnowledgeUrls = (query: string): string[] => {
 export const searchAndSummarizeWebResearch = async (input: {
   query: string;
   maxResults: number;
+  allowedHostnames?: string[];
 }) => {
+  const allowedHostnames = [...new Set(
+    (input.allowedHostnames ?? [])
+      .map((value) => normalizeHostname(value))
+      .filter(Boolean),
+  )];
   const cached = await readResearchCache({
     kind: "search",
     query: input.query,
     maxResults: input.maxResults,
+    ...(allowedHostnames.length > 0 ? { allowedHostnames } : {}),
     ttlMs: 1000 * 60 * 60 * 6,
   });
 
@@ -442,7 +641,10 @@ export const searchAndSummarizeWebResearch = async (input: {
 
   const findings = [];
   const successfulResults = [];
-  const guessedKnowledgeUrls = buildGuessedKnowledgeUrls(input.query);
+  const guessedKnowledgeUrls = uniqueStrings([
+    ...buildGuessedKnowledgeUrls(input.query),
+    ...buildGuessedEntityKnowledgeUrls(input.query),
+  ]);
   const guessedOfficialUrls = buildGuessedOfficialUrls(input.query);
 
   for (const url of guessedKnowledgeUrls) {
@@ -450,8 +652,63 @@ export const searchAndSummarizeWebResearch = async (input: {
       break;
     }
 
+    if (
+      allowedHostnames.length > 0 &&
+      !hostMatchesAllowedHostnames(url, allowedHostnames)
+    ) {
+      continue;
+    }
+
     try {
       const rawFinding = await appContext.webResearchProvider.fetch(url);
+      if (
+        allowedHostnames.length > 0 &&
+        !hostMatchesAllowedHostnames(rawFinding.url, allowedHostnames)
+      ) {
+        continue;
+      }
+      const finding = sanitizeFetchedFinding(input.query, rawFinding, {
+        allowTrustedExplicitSource: true,
+      });
+      if (!finding || !findingLooksRelevant(input.query, finding)) {
+        continue;
+      }
+      findings.push(finding);
+      successfulResults.push({
+        title: finding.title,
+        url: finding.url,
+        snippet: finding.content.slice(0, 240),
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  const discoveredKnowledgeUrls = buildDiscoveredKnowledgeUrls(input.query, findings);
+  for (const url of discoveredKnowledgeUrls) {
+    if (successfulResults.length >= input.maxResults + 2) {
+      break;
+    }
+
+    if (successfulResults.some((existing) => existing.url === url)) {
+      continue;
+    }
+
+    if (
+      allowedHostnames.length > 0 &&
+      !hostMatchesAllowedHostnames(url, allowedHostnames)
+    ) {
+      continue;
+    }
+
+    try {
+      const rawFinding = await appContext.webResearchProvider.fetch(url);
+      if (
+        allowedHostnames.length > 0 &&
+        !hostMatchesAllowedHostnames(rawFinding.url, allowedHostnames)
+      ) {
+        continue;
+      }
       const finding = sanitizeFetchedFinding(input.query, rawFinding, {
         allowTrustedExplicitSource: true,
       });
@@ -474,8 +731,21 @@ export const searchAndSummarizeWebResearch = async (input: {
       break;
     }
 
+    if (
+      allowedHostnames.length > 0 &&
+      !hostMatchesAllowedHostnames(url, allowedHostnames)
+    ) {
+      continue;
+    }
+
     try {
       const rawFinding = await appContext.webResearchProvider.fetch(url);
+      if (
+        allowedHostnames.length > 0 &&
+        !hostMatchesAllowedHostnames(rawFinding.url, allowedHostnames)
+      ) {
+        continue;
+      }
       const finding = sanitizeFetchedFinding(input.query, rawFinding);
       if (!finding || !findingLooksRelevant(input.query, finding)) {
         continue;
@@ -492,7 +762,13 @@ export const searchAndSummarizeWebResearch = async (input: {
   }
 
   const results = await appContext.webResearchProvider.search(input.query);
-  const candidateResults = results.slice(0, Math.max(input.maxResults * 3, 5));
+  const candidateResults = results
+    .filter((result) =>
+      allowedHostnames.length === 0
+        ? true
+        : hostMatchesAllowedHostnames(result.url, allowedHostnames),
+    )
+    .slice(0, Math.max(input.maxResults * 3, 5));
 
   for (const result of candidateResults) {
     if (successfulResults.some((existing) => existing.url === result.url)) {
@@ -501,6 +777,12 @@ export const searchAndSummarizeWebResearch = async (input: {
 
     try {
       const rawFinding = await appContext.webResearchProvider.fetch(result.url);
+      if (
+        allowedHostnames.length > 0 &&
+        !hostMatchesAllowedHostnames(rawFinding.url, allowedHostnames)
+      ) {
+        continue;
+      }
       const finding = sanitizeFetchedFinding(input.query, rawFinding);
       if (!finding || !findingLooksRelevant(input.query, finding)) {
         continue;
@@ -530,7 +812,7 @@ export const searchAndSummarizeWebResearch = async (input: {
 
   const summary = await appContext.webResearchProvider.summarizeFindings({
     query: input.query,
-    findings,
+    findings: summarizeCandidateFindings(findings),
   });
 
   const response = WebResearchQueryResponseSchema.parse({
@@ -547,6 +829,7 @@ export const searchAndSummarizeWebResearch = async (input: {
     kind: "search",
     query: input.query,
     maxResults: input.maxResults,
+    ...(allowedHostnames.length > 0 ? { allowedHostnames } : {}),
     response,
   });
 
@@ -603,7 +886,7 @@ export const fetchAndSummarizeExplicitSources = async (input: {
 
   const summary = await appContext.webResearchProvider.summarizeFindings({
     query: input.query,
-    findings,
+    findings: summarizeCandidateFindings(findings),
   });
 
   const response = WebResearchQueryResponseSchema.parse({
@@ -638,6 +921,7 @@ type ResearchCacheKeyInput =
       kind: "search";
       query: string;
       maxResults: number;
+      allowedHostnames?: string[];
     }
   | {
       kind: "explicit";
@@ -645,8 +929,8 @@ type ResearchCacheKeyInput =
       urls: string[];
     };
 
-const RESEARCH_CACHE_DIR = resolve(process.cwd(), "data/research-cache");
-const RESEARCH_CACHE_VERSION = 13;
+const RESEARCH_CACHE_DIR = resolve(envRoot, "data/research-cache");
+const RESEARCH_CACHE_VERSION = 19;
 
 const cacheKeyFor = (input: ResearchCacheKeyInput): string => {
   const hash = createHash("sha1");

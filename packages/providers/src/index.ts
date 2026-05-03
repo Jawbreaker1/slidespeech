@@ -18,3 +18,4 @@ export * from "./vision/lmstudio-vision-provider";
 export * from "./vision/mock-vision-provider";
 export * from "./web-research/mock-web-research-provider";
 export * from "./web-research/hosted-web-research-provider";
+export { decodeHtmlEntities } from "./shared";
