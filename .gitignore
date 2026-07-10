@@ -13,6 +13,7 @@ models/tts/*.onnx.json
 data/decks/*.json
 data/evaluations/*.json
 data/exports/*.pptx
+data/generation-runs/
 data/research-cache/*.json
 data/sessions/*.json
 data/transcripts/*.json

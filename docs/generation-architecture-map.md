@@ -46,6 +46,7 @@ flowchart LR
   Research["Research planning\nresearch-plan-stage / research-policy"]
   ResearchExecution["Research execution\nresearch-source-stage / web-research-*"]
   Grounding["Fact curation\ngrounding-fact-stage / grounding-*"]
+  V2Foundation["IMPLEMENTED V2 FOUNDATION\nartifact schemas + stage runner + trace recorder"]
   DisabledGeneration["FAIL-CLOSED BOUNDARY\nOpenAICompatible.generateDeck\nlegacy scaffold path removed"]
   V2DeckStrategy["PENDING V2\nDeckStrategy + SlidePlan[]"]
   SlideLLM["PENDING V2\nSlide generation from SlidePlan"]
@@ -63,7 +64,8 @@ flowchart LR
   Research --> ResearchExecution
   ResearchExecution --> Grounding
   Grounding --> DisabledGeneration
-  DisabledGeneration -. "next implementation" .-> V2DeckStrategy
+  DisabledGeneration -. "not yet wired" .-> V2Foundation
+  V2Foundation -. "next implementation" .-> V2DeckStrategy
   V2DeckStrategy -. "planned" .-> SlideLLM
   SlideLLM --> SlideAssessment
   SlideAssessment -->|retry feedback| SlideLLM
@@ -79,7 +81,7 @@ flowchart LR
   classDef gate fill:#1f2a44,stroke:#60a5fa,color:#eff6ff;
   classDef runtime fill:#3b1f47,stroke:#c084fc,color:#faf5ff;
 
-  class UserPrompt,API,Intent,Research,ResearchExecution,Grounding,V2DeckStrategy,SlideLLM,StrictNormalize target;
+  class UserPrompt,API,Intent,Research,ResearchExecution,Grounding,V2Foundation,V2DeckStrategy,SlideLLM,StrictNormalize target;
   class DisabledGeneration,SlideAssessment,DeckReview,FinalReview,Publication gate;
   class Narration,QA runtime;
 ```

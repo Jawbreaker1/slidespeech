@@ -1,5 +1,6 @@
 export * from "./deck/pptxgenjs-deck-exporter";
 export * from "./factory";
+export * from "./generation-v2";
 export * from "./illustration/hosted-illustration-provider";
 export * from "./illustration/mock-illustration-provider";
 export * from "./llm/lmstudio-llm-provider";

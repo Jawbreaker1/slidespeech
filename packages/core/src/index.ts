@@ -1,6 +1,7 @@
 export * from "./conversation-turn-engine";
 export * from "./defaults";
 export * from "./evaluation";
+export * from "./generation/v2";
 export * from "./planners";
 export * from "./question-answer-service";
 export * from "./resume-planner";

@@ -26,6 +26,7 @@ const V2_SOURCE_ROOTS = [
   "apps/api/src/services/generation-v2",
   "packages/core/src/generation/v2",
   "packages/providers/src/generation-v2",
+  "packages/types/src/generation-v2",
 ];
 
 const V2_SINGLE_FILES = ["packages/types/src/generation-v2.ts"];
@@ -127,12 +128,6 @@ const run = async (): Promise<void> => {
   requireText(
     tasks,
     "docs/generation-architecture-map.md",
-    "tasks.md",
-  );
-
-  requireText(
-    tasks,
-    "Status: in progress",
     "tasks.md",
   );
 

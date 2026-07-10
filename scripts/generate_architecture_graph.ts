@@ -8,6 +8,8 @@ const graphRoots = [
   "apps/api/src/services",
   "packages/core/src/generation",
   "packages/core/src",
+  "packages/types/src",
+  "packages/providers/src/generation-v2",
   "packages/providers/src/llm",
 ].map((path) => resolve(repoRoot, path));
 
@@ -15,6 +17,8 @@ const generationFilePatterns = [
   /apps\/api\/src\/services\/(?:generation|grounding|presentation|research|web-research)/,
   /packages\/core\/src\/generation\//,
   /packages\/core\/src\/(?:session-deck-quality|session-service|validation|question-answer-service|evaluation)\.ts$/,
+  /packages\/types\/src\/generation-v2\//,
+  /packages\/providers\/src\/generation-v2\//,
   /packages\/providers\/src\/llm\//,
 ];
 

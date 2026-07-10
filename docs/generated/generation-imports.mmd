@@ -32,33 +32,42 @@ flowchart LR
   N21["apps/api/src/services/web-research-source-hygiene.ts"]
   N22["packages/core/src/evaluation.ts"]
   N23["packages/core/src/generation/generation-orchestrator.ts"]
-  N24["packages/core/src/question-answer-service.ts"]
-  N25["packages/core/src/session-deck-quality.ts"]
-  N26["packages/core/src/session-service.ts"]
-  N27["packages/core/src/validation.ts"]
-  N28["packages/providers/src/llm/content-language.ts"]
-  N29["packages/providers/src/llm/conversation-plan-normalization.ts"]
-  N30["packages/providers/src/llm/deck-semantic-review-normalization.ts"]
-  N31["packages/providers/src/llm/deck-shape-text.ts"]
-  N32["packages/providers/src/llm/grounding-normalization.ts"]
-  N33["packages/providers/src/llm/lmstudio-llm-provider.ts"]
-  N34["packages/providers/src/llm/lmstudio-structured-output.ts"]
-  N35["packages/providers/src/llm/mock-llm-provider.ts"]
-  N36["packages/providers/src/llm/narration-review-normalization.ts"]
-  N37["packages/providers/src/llm/openai-compatible-deck-semantic-review.ts"]
-  N38["packages/providers/src/llm/openai-compatible-grounding-classification.ts"]
-  N39["packages/providers/src/llm/openai-compatible-narration-generation.ts"]
-  N40["packages/providers/src/llm/openai-compatible-presentation-plan.ts"]
-  N41["packages/providers/src/llm/openai-compatible-presentation-review.ts"]
-  N42["packages/providers/src/llm/openai-compatible-prompt-context.ts"]
-  N43["packages/providers/src/llm/openai-compatible.ts"]
-  N44["packages/providers/src/llm/pedagogical-profile-normalization.ts"]
-  N45["packages/providers/src/llm/presentation-plan-normalization.ts"]
-  N46["packages/providers/src/llm/prompt-shaping.ts"]
-  N47["packages/providers/src/llm/research-planning.ts"]
-  N48["packages/providers/src/llm/resilient-llm-provider.ts"]
-  N49["packages/providers/src/llm/slide-arc-policy.ts"]
-  N50["packages/providers/src/llm/structured-normalization.ts"]
+  N24["packages/core/src/generation/v2/index.ts"]
+  N25["packages/core/src/generation/v2/stage-runner.ts"]
+  N26["packages/core/src/question-answer-service.ts"]
+  N27["packages/core/src/session-deck-quality.ts"]
+  N28["packages/core/src/session-service.ts"]
+  N29["packages/core/src/validation.ts"]
+  N30["packages/providers/src/generation-v2/file-generation-trace-recorder.ts"]
+  N31["packages/providers/src/generation-v2/index.ts"]
+  N32["packages/providers/src/llm/content-language.ts"]
+  N33["packages/providers/src/llm/conversation-plan-normalization.ts"]
+  N34["packages/providers/src/llm/deck-semantic-review-normalization.ts"]
+  N35["packages/providers/src/llm/deck-shape-text.ts"]
+  N36["packages/providers/src/llm/grounding-normalization.ts"]
+  N37["packages/providers/src/llm/lmstudio-llm-provider.ts"]
+  N38["packages/providers/src/llm/lmstudio-structured-output.ts"]
+  N39["packages/providers/src/llm/mock-llm-provider.ts"]
+  N40["packages/providers/src/llm/narration-review-normalization.ts"]
+  N41["packages/providers/src/llm/openai-compatible-deck-semantic-review.ts"]
+  N42["packages/providers/src/llm/openai-compatible-grounding-classification.ts"]
+  N43["packages/providers/src/llm/openai-compatible-narration-generation.ts"]
+  N44["packages/providers/src/llm/openai-compatible-presentation-plan.ts"]
+  N45["packages/providers/src/llm/openai-compatible-presentation-review.ts"]
+  N46["packages/providers/src/llm/openai-compatible-prompt-context.ts"]
+  N47["packages/providers/src/llm/openai-compatible.ts"]
+  N48["packages/providers/src/llm/pedagogical-profile-normalization.ts"]
+  N49["packages/providers/src/llm/presentation-plan-normalization.ts"]
+  N50["packages/providers/src/llm/prompt-shaping.ts"]
+  N51["packages/providers/src/llm/research-planning.ts"]
+  N52["packages/providers/src/llm/resilient-llm-provider.ts"]
+  N53["packages/providers/src/llm/slide-arc-policy.ts"]
+  N54["packages/providers/src/llm/structured-normalization.ts"]
+  N55["packages/types/src/generation-v2/common.ts"]
+  N56["packages/types/src/generation-v2/index.ts"]
+  N57["packages/types/src/generation-v2/presentation.ts"]
+  N58["packages/types/src/generation-v2/research.ts"]
+  N59["packages/types/src/generation-v2/runtime.ts"]
 
   N1 --> N11
   N1 --> N13
@@ -83,54 +92,58 @@ flowchart LR
   N2 --> N9
   N20 --> N19
   N20 --> N21
-  N23 --> N25
-  N25 --> N27
-  N26 --> N23
-  N26 --> N24
-  N26 --> N25
-  N26 --> N27
-  N28 --> N31
-  N29 --> N50
+  N23 --> N27
+  N27 --> N29
+  N28 --> N23
+  N28 --> N26
+  N28 --> N27
+  N28 --> N29
   N3 --> N13
   N3 --> N15
   N3 --> N4
-  N33 --> N43
-  N34 --> N50
-  N36 --> N50
-  N37 --> N30
-  N37 --> N36
-  N38 --> N31
-  N38 --> N32
-  N38 --> N42
-  N38 --> N50
-  N39 --> N36
-  N39 --> N50
+  N32 --> N35
+  N33 --> N54
+  N37 --> N47
+  N38 --> N54
   N4 --> N5
   N4 --> N6
-  N40 --> N42
-  N40 --> N45
-  N40 --> N46
-  N40 --> N49
-  N41 --> N36
-  N42 --> N28
-  N42 --> N31
-  N43 --> N29
-  N43 --> N34
-  N43 --> N37
-  N43 --> N38
-  N43 --> N39
+  N40 --> N54
+  N41 --> N34
+  N41 --> N40
+  N42 --> N35
+  N42 --> N36
+  N42 --> N46
+  N42 --> N54
   N43 --> N40
-  N43 --> N41
-  N43 --> N42
-  N43 --> N47
-  N43 --> N49
-  N45 --> N28
-  N45 --> N31
-  N45 --> N44
-  N45 --> N49
-  N45 --> N50
-  N46 --> N31
-  N49 --> N31
+  N43 --> N54
+  N44 --> N46
+  N44 --> N49
+  N44 --> N50
+  N44 --> N53
+  N45 --> N40
+  N46 --> N32
+  N46 --> N35
+  N47 --> N33
+  N47 --> N38
+  N47 --> N41
+  N47 --> N42
+  N47 --> N43
+  N47 --> N44
+  N47 --> N45
+  N47 --> N46
+  N47 --> N51
+  N47 --> N53
+  N49 --> N32
+  N49 --> N35
+  N49 --> N48
+  N49 --> N53
+  N49 --> N54
+  N50 --> N35
+  N53 --> N35
+  N57 --> N55
+  N57 --> N58
+  N58 --> N55
+  N59 --> N55
   N9 --> N1
   N9 --> N8
 
@@ -157,30 +170,39 @@ flowchart LR
   class N21 research;
   class N22 provider;
   class N23 legacy;
-  class N24 runtime;
-  class N25 gate;
-  class N26 provider;
+  class N24 v2;
+  class N25 v2;
+  class N26 runtime;
   class N27 gate;
   class N28 provider;
-  class N29 runtime;
-  class N30 provider;
-  class N31 adapter;
-  class N32 research;
-  class N33 provider;
+  class N29 gate;
+  class N30 v2;
+  class N31 v2;
+  class N32 provider;
+  class N33 runtime;
   class N34 provider;
-  class N35 provider;
-  class N36 gate;
+  class N35 adapter;
+  class N36 research;
   class N37 provider;
-  class N38 research;
+  class N38 provider;
   class N39 provider;
-  class N40 legacy;
+  class N40 gate;
   class N41 provider;
-  class N42 provider;
+  class N42 research;
   class N43 provider;
-  class N44 provider;
-  class N45 legacy;
+  class N44 legacy;
+  class N45 provider;
   class N46 provider;
-  class N47 research;
+  class N47 provider;
   class N48 provider;
   class N49 legacy;
   class N50 provider;
+  class N51 research;
+  class N52 provider;
+  class N53 legacy;
+  class N54 provider;
+  class N55 v2;
+  class N56 v2;
+  class N57 v2;
+  class N58 v2;
+  class N59 v2;

@@ -150,6 +150,21 @@ V2 is built around explicit typed artifacts. These artifacts should be persisted
 or at least logged in development mode so failures can be inspected without
 guessing.
 
+Persisted artifacts carry `schemaVersion`, `artifactId`, and `createdAt`.
+Collection stages use explicit set artifacts such as `SlidePlanSet`,
+`SlideDesignSpecSet`, `SlideDraftSet`, and `NarrationScriptSet` so provenance is
+not lost around a bare array.
+
+Every stage returns a `GenerationStageResult` with:
+- `status`: `succeeded`, `rejected`, or `failed`
+- stage name, run id, attempt, timestamps, and duration
+- input artifact ids and source ids
+- structured warnings and errors
+- a schema-validated artifact only when one exists
+
+Malformed output becomes a failed stage. Agent rejection remains a rejected
+stage. Neither state may be normalized into apparent success.
+
 ### `PromptClassification`
 
 Purpose:
@@ -169,7 +184,7 @@ Fields:
 - `requestedSources`
 - `requestedCoverage`
 - `requestedSlideCount`
-- `requestedDuration`
+- `requestedDurationMinutes`
 - `visualPreference`
 - `voicePreference`
 - `confidence`
@@ -423,17 +438,21 @@ Purpose:
 - generate visible slide content from a slide's allocated material and design
   spec
 
-Fields:
+Common fields:
+- `slideId`
 - `title`
 - `subtitle`
-- `visibleClaims`
-- `cards`
-- `callouts`
-- `diagramNodes`
+- `usedFactIds`
 - `speakerNotes`
 - `imagePrompt`
-- `sourceAttribution`
+- `sourceAttributions`
 - `likelyQuestions`
+
+Visible content is one discriminated `content` shape, not a universal set of
+parallel fields. Initial content kinds are `statement`, `list`, `cards`,
+`process`, `comparison`, `quote`, `timeline`, `metrics`, `activity`,
+`source-excerpt`, and `question`. A slide cannot simultaneously populate legacy
+key points, explanations, cards, and hero copy with the same claim.
 
 Function:
 
@@ -473,17 +492,18 @@ Fields:
 Function:
 
 ```ts
-generateNarration(
+generateNarrations(
   strategy: DeckStrategy,
-  slidePlan: SlidePlan,
-  slideDraft: SlideDraft,
-  priorSlide?: SlideDraft,
-  nextSlide?: SlideDraft,
-): Promise<NarrationScript>
+  slidePlans: SlidePlan[],
+  slideDrafts: SlideDraft[],
+  factBank: FactBank,
+): Promise<NarrationScript[]>
 ```
 
 Rules:
 - Narration should explain, connect, and contextualize.
+- Narration is generated with the complete deck arc available so adjacent
+  transitions and the ending are planned as one spoken presentation.
 - It must not simply read the slide.
 - It should sound like a presenter speaking to an audience.
 - It should include transitions between slides.
@@ -515,6 +535,21 @@ Rules:
 - Review should not rewrite visible content.
 - If review finds a stage error, retry that stage with explicit feedback.
 - If the same stage fails twice, fail the generation.
+
+### `PublishablePresentation`
+
+Purpose:
+- represent the only artifact that may cross into the interactive runtime
+- keep classification, facts, plans, designs, slides, narration, and reviews
+  traceable as one immutable publication bundle
+
+Rules:
+- every design, draft, and narration must match the ordered slide-plan ids
+- strategy references must match the included classification and fact bank
+- every included review must be approved
+- an approved publication review is mandatory
+- conversion to the runtime `Deck` shape happens after this contract, never
+  before it
 
 ## Research Strategy
 

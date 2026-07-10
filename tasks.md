@@ -172,7 +172,7 @@ Open findings carried into their owning phases:
 
 ## Phase 3: V2 Types, Interfaces, And Logging
 
-Status: in progress
+Status: completed
 
 Owned V2 stages:
 - `PromptClassification`
@@ -192,34 +192,34 @@ Goal:
 - Add the typed artifacts and stage interfaces before implementing semantic behavior.
 
 Implementation tasks:
-- [ ] Define `PromptClassification` schema/type.
-- [ ] Define `ResearchPlan` schema/type.
-- [ ] Define `ResearchBundle` schema/type.
-- [ ] Define `FactBank` schema/type.
-- [ ] Define `DeckStrategy` schema/type.
-- [ ] Define `SlidePlan[]` schema/type.
-- [ ] Define `SlideDesignSpec[]` schema/type.
-- [ ] Define `SlideDraft[]` schema/type.
-- [ ] Define `ReviewResult` schema/type.
-- [ ] Define `NarrationScript[]` schema/type.
-- [ ] Define `PublishablePresentation` schema/type.
-- [ ] Define `GroundedAnswer` and resume-plan runtime types.
-- [ ] Add stage result metadata for `status`, `warnings`, `errors`, and source traceability.
-- [ ] Add development logging so every failed generation can be inspected by stage.
-- [ ] Keep production generation fail-closed until downstream phases are complete.
+- [x] Define `PromptClassification` schema/type.
+- [x] Define `ResearchPlan` schema/type.
+- [x] Define `ResearchBundle` schema/type.
+- [x] Define `FactBank` schema/type.
+- [x] Define `DeckStrategy` schema/type.
+- [x] Define `SlidePlan[]` schema/type through `SlidePlanSet`.
+- [x] Define `SlideDesignSpec[]` schema/type through `SlideDesignSpecSet`.
+- [x] Define layout-specific `SlideDraft[]` schema/type through `SlideDraftSet`.
+- [x] Define `ReviewResult` schema/type without repair output.
+- [x] Define `NarrationScript[]` schema/type through `NarrationScriptSet`.
+- [x] Define fail-closed `PublishablePresentation` schema/type.
+- [x] Define `GroundedAnswer` and resume-plan runtime types.
+- [x] Add stage result metadata for `status`, `warnings`, `errors`, timings, attempts, and source traceability.
+- [x] Add file-backed development tracing so every stage result can be inspected by run and attempt.
+- [x] Keep production generation fail-closed until downstream phases are complete.
 
 Validation:
-- [ ] Type-level tests for artifact shape.
-- [ ] Unit tests for stage result success/reject/error states.
-- [ ] `npm run arch:graph`
-- [ ] `npm run arch:check`
-- [ ] `npm run typecheck --workspaces --if-present -- --pretty false`
-- [ ] Targeted tests for V2 artifact contracts.
+- [x] Type-level/runtime schema tests for artifact shape.
+- [x] Unit tests for stage result success/reject/error states.
+- [x] `npm run arch:graph`
+- [x] `npm run arch:check`
+- [x] `npm run typecheck --workspaces --if-present -- --pretty false`
+- [x] Targeted tests for V2 artifact contracts.
 
 Definition of done:
-- [ ] All V2 artifacts have explicit schemas or TypeScript types.
-- [ ] No stage writes visible slide copy before `SlideDraft[]`.
-- [ ] Failure states are representable without throwing away diagnostics.
+- [x] All V2 artifacts have explicit schemas or TypeScript types.
+- [x] No stage writes visible slide copy before `SlideDraft[]`.
+- [x] Failure states are representable without throwing away diagnostics.
 
 ## Phase 4: Classification, Research, And Fact Bank
 
