@@ -9,12 +9,15 @@ import {
 } from "../packages/providers/src/web-research/hosted-web-research-provider";
 import type { WebSearchResult } from "@slidespeech/types";
 
-test("builds targeted search query variants for known entities", () => {
+test("builds generic search query variants for current entity prompts", () => {
   const queries = buildSearchQueries("Latest OpenAI model releases in 2026");
 
   assert.ok(queries.includes("Latest OpenAI model releases in 2026"));
   assert.ok(queries.includes("Latest OpenAI model releases in 2026 official"));
-  assert.ok(queries.includes("site:openai.com Latest OpenAI model releases in 2026"));
+  assert.equal(
+    queries.some((query) => /^site:openai\.com\b/i.test(query)),
+    false,
+  );
 });
 
 test("sanitizes instructional prompts into actual research subjects", () => {
@@ -26,13 +29,13 @@ test("sanitizes instructional prompts into actual research subjects", () => {
   );
 });
 
-test("builds direct site guesses for compact brand subjects", () => {
+test("does not synthesize site-scoped domain guesses for compact brand subjects", () => {
   const queries = buildSearchQueries(
     "Make a presentation about Volvo for an audience of children. Make sure to add many pictures of cars.",
   );
 
-  assert.ok(queries.includes("site:volvo.com Volvo"));
-  assert.ok(queries.includes("site:volvocars.com Volvo"));
+  assert.equal(queries.some((query) => /^site:volvo\.com\b/i.test(query)), false);
+  assert.equal(queries.some((query) => /volvocars\.com/i.test(query)), false);
 });
 
 test("builds specialized search variants without official-site bias", () => {

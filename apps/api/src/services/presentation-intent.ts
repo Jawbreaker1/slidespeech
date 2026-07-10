@@ -14,7 +14,11 @@ const normalizeIntentSentence = (sentence: string): string => {
     return "";
   }
 
-  if (/^(use|see also|more information|more info)\b/i.test(trimmed)) {
+  if (
+    /^(use|see also|more information|more info|information\s+(?:can be found|is available)|använd|se även|mer information)\b/i.test(
+      trimmed,
+    )
+  ) {
     return "";
   }
 
@@ -55,39 +59,6 @@ const overlapTokenCount = (left: string, right: string): number => {
   const leftTokens = [...new Set(tokenizeIntentText(left))];
   const rightTokens = new Set(tokenizeIntentText(right));
   return leftTokens.filter((token) => rightTokens.has(token)).length;
-};
-
-const deriveFocusAnchor = (input: {
-  subject: string;
-  coverageRequirements: string[];
-  presentationFrame: PresentationIntent["presentationFrame"];
-  contentMode: NonNullable<PresentationIntent["contentMode"]>;
-  deliveryFormat: PresentationIntent["deliveryFormat"];
-}): string | undefined => {
-  if (
-    input.presentationFrame !== "subject" ||
-    input.contentMode !== "descriptive" ||
-    input.deliveryFormat !== "presentation"
-  ) {
-    return undefined;
-  }
-
-  const subjectTokens = new Set(tokenizeIntentText(input.subject));
-
-  for (const requirement of input.coverageRequirements) {
-    const normalized = normalizePresentationSubject(requirement)
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/[.,;:!?]+$/g, "");
-    const tokens = [...new Set(tokenizeIntentText(normalized))];
-    const novelTokenCount = tokens.filter((token) => !subjectTokens.has(token)).length;
-
-    if (tokens.length >= 3 && novelTokenCount >= 2) {
-      return normalized;
-    }
-  }
-
-  return undefined;
 };
 
 const extractLeadingResearchInstructionSubject = (topic: string): string | undefined => {
@@ -198,7 +169,12 @@ const normalizePresentationSubject = (value: string): string => {
     return normalizeProceduralSubject(remainder);
   }
 
-  return capitalizeFirst(normalized);
+  return capitalizeFirst(
+    normalized
+      .replace(/^(?:a|an)\s+/i, "")
+      .replace(/^(?:en|ett|den|det)\s+/i, "")
+      .trim(),
+  );
 };
 
 const subjectToActionPhrase = (subject: string): string => {
@@ -301,7 +277,11 @@ export const stripInstructionalSuffixes = (value: string): string =>
       "",
     )
     .replace(/\bmore information is available at\b.*$/i, " ")
+    .replace(/\binformation (?:can be found|is available) at\s*(?:[.?!]|$)/gi, " ")
     .replace(/\bmore info\b.*$/i, " ")
+    .replace(/\bmer information finns på\b.*$/i, " ")
+    .replace(/\bmer information finns hos\b.*$/i, " ")
+    .replace(/\bmer information\b.*$/i, " ")
     .replace(/\bfor additional information\b.*$/i, " ")
     .replace(/\buse google\b.*$/i, " ")
     .replace(/\bgoogla\b.*$/i, " ")
@@ -317,10 +297,10 @@ export const extractPresentationBrief = (topic: string): string => {
   const normalizedSentences = splitIntoSentences(stripped)
     .map((sentence) =>
       stripLeadingResearchInstructionClause(sentence)
-        .replace(/^(create|make|build|generate|write|prepare|present)\b/gi, " ")
+        .replace(/^(create|make|build|generate|write|prepare|present|skapa|gör|generera|skriv|förbered|presentera)\b/gi, " ")
         .replace(/\s+/g, " ")
         .trim()
-        .replace(/^(a|an)\s+/i, "")
+        .replace(/^(a|an|en|ett)\s+/i, "")
         .trim(),
     )
     .map((sentence) => normalizeIntentSentence(sentence))
@@ -341,11 +321,17 @@ export const extractPresentationSubject = (topic: string): string => {
   const overviewSubjectMatch = firstSentence.match(
     /^(?:\d+\s*-\s*slide\s+)?(?:onboarding\s+|introductory\s+)?(?:overview|introduction|intro)\s+of\s+(.+?)(?:\s+\bfor\b.+)?$/i,
   );
+  const swedishPresentationSubjectMatch = firstSentence.match(
+    /^(?:kort\s+|kortfattad\s+)?presentation\s+om\s+(.+?)(?:$|[.,;:!?])/i,
+  );
+  const aboutSubjectWithForComplementMatch = cleaned.match(
+    /\b(?:about|on|regarding|om)\s+(.+?\b(?:strategy|plan|roadmap|approach|playbook|framework|proposal|case|method|process|model|guide|strategi|plan|färdplan|angreppssätt|ramverk|förslag|fall|metod|process|modell|guide)\s+(?:for|för)\s+.+?)(?:$|[.,;:!?]|\s+\busing\b|\s+\bwith\b|\s+\bmed\b)/i,
+  );
   const aboutMatch = cleaned.match(
-    /\b(?:about|on|regarding)\s+(.+?)(?:$|[.,;:!?]|\s+\bfor\b|\s+\busing\b|\s+\bwith\b)/i,
+    /\b(?:about|on|regarding|om)\s+(.+?)(?:$|[.,;:!?]|\s+\bfor\b|\s+\busing\b|\s+\bwith\b|\s+\bför\b|\s+\bmed\b)/i,
   );
   const howMatch = cleaned.match(
-    /\b(?:explain|describe|show|teach|understand|walk me through)\s+(.+?)(?:,\s+and\s+(?:it\s+must|the presentation should)\b|$)/i,
+    /\b(?:explain|describe|show|teach|understand|walk me through|förklara|beskriv|visa|lär ut)\s+(.+?)(?:,\s+and\s+(?:it\s+must|the presentation should)\b|$)/i,
   );
   const candidate =
     audiencePresentationSubjectMatch?.[1] && audiencePresentationSubjectMatch[2]
@@ -356,6 +342,10 @@ export const extractPresentationSubject = (topic: string): string => {
         ? presentationExplainingSubjectMatch[1]
       : overviewSubjectMatch?.[1]
         ? overviewSubjectMatch[1]
+      : swedishPresentationSubjectMatch?.[1]
+        ? swedishPresentationSubjectMatch[1]
+      : aboutSubjectWithForComplementMatch?.[1]
+        ? aboutSubjectWithForComplementMatch[1]
       : aboutMatch?.[1] ?? howMatch?.[1] ?? firstSentence;
 
   return normalizePresentationSubject(
@@ -488,6 +478,14 @@ const extractOrganization = (brief: string): string | undefined => {
       .sort((left, right) => left - right)[0] ?? brief.length;
 
   const segment = brief.slice(start, end).trim().replace(/[.,;:!?]+$/g, "");
+  if (
+    /^(?:include|add|create|make|build|generate|write|prepare|present|information|more information|use|read|see)\b/i.test(
+      segment,
+    )
+  ) {
+    return undefined;
+  }
+
   return segment.length >= 2 ? segment : undefined;
 };
 
@@ -607,13 +605,15 @@ export const derivePresentationIntent = (topic: string): PresentationIntent => {
     extractedSubject.length >= 2 &&
     !subjectIsGenericEntityReference(extractedSubject)
       ? extractedSubject
-      : explicitSourceUrls
+      : presentationFrame !== "subject"
+        ? explicitSourceUrls
           .map((url) => deriveHostnameEntityAnchor(url))
           .find(
             (candidate): candidate is string =>
               typeof candidate === "string" &&
               !subjectIsGenericEntityReference(candidate),
-          ));
+          )
+        : undefined);
   const subject =
     presentationFrame === "organization" &&
     subjectIsGenericEntityReference(extractedSubject) &&
@@ -623,13 +623,6 @@ export const derivePresentationIntent = (topic: string): PresentationIntent => {
   const deliveryFormat = /\bworkshop\b/i.test(brief) ? "workshop" : "presentation";
   const activityRequirement = extractActivityRequirement(topic, coverageRequirements);
   const contentMode = inferContentMode(topic, brief, subject);
-  const focusAnchor = deriveFocusAnchor({
-    subject,
-    coverageRequirements,
-    presentationFrame,
-    contentMode,
-    deliveryFormat,
-  });
   const presentationGoal = extractPresentationGoal({
     topic,
     brief,
@@ -639,7 +632,6 @@ export const derivePresentationIntent = (topic: string): PresentationIntent => {
 
   return {
     subject,
-    ...(focusAnchor ? { focusAnchor } : {}),
     framing: brief,
     presentationFrame,
     contentMode,

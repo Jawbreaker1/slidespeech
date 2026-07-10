@@ -24,9 +24,9 @@ export const PresenterHeader = ({
     <div className="flex flex-wrap gap-3">
       <Link
         className="rounded-full border border-white/20 px-4 py-2 text-sm font-semibold text-paper transition hover:border-white/40"
-        href="/workbench"
+        href="/"
       >
-        Open workbench
+        Launchpad
       </Link>
       <a
         className="rounded-full bg-coral px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"

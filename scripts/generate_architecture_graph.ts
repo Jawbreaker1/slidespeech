@@ -1,0 +1,212 @@
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, relative, resolve } from "node:path";
+
+const repoRoot = resolve(new URL("..", import.meta.url).pathname);
+const outputPath = resolve(repoRoot, "docs/generated/generation-imports.mmd");
+
+const graphRoots = [
+  "apps/api/src/services",
+  "packages/core/src/generation",
+  "packages/core/src",
+  "packages/providers/src/llm",
+].map((path) => resolve(repoRoot, path));
+
+const generationFilePatterns = [
+  /apps\/api\/src\/services\/(?:generation|grounding|presentation|research|web-research)/,
+  /packages\/core\/src\/generation\//,
+  /packages\/core\/src\/(?:session-deck-quality|session-service|validation|question-answer-service|evaluation)\.ts$/,
+  /packages\/providers\/src\/llm\//,
+];
+
+export type GraphNodeClass =
+  | "v2"
+  | "legacy"
+  | "adapter"
+  | "gate"
+  | "runtime"
+  | "research"
+  | "provider";
+
+export type ArchitectureGraphNode = {
+  repoPath: string;
+  nodeClass: GraphNodeClass;
+};
+
+type Graph = {
+  content: string;
+  nodeCount: number;
+  edgeCount: number;
+  nodes: ArchitectureGraphNode[];
+};
+
+const LEGACY_GENERATION_PATHS = new Set([
+  "apps/api/src/services/generation-context-service.ts",
+  "apps/api/src/services/presentation-intent.ts",
+  "apps/api/src/services/research-policy.ts",
+  "packages/core/src/generation/generation-orchestrator.ts",
+  "packages/providers/src/llm/openai-compatible-presentation-plan.ts",
+  "packages/providers/src/llm/presentation-plan-normalization.ts",
+  "packages/providers/src/llm/slide-arc-policy.ts",
+]);
+
+export const isV2ArchitecturePath = (repoPath: string): boolean =>
+  repoPath.includes("/generation-v2/") ||
+  repoPath.includes("/generation/v2/") ||
+  repoPath.endsWith("/generation-v2.ts");
+
+const toRepoPath = (path: string): string =>
+  relative(repoRoot, path).replaceAll("\\", "/");
+
+const walk = async (directory: string): Promise<string[]> => {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const paths = await Promise.all(
+    entries.map(async (entry) => {
+      const entryPath = resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        return await walk(entryPath);
+      }
+      return entry.isFile() && entry.name.endsWith(".ts") ? [entryPath] : [];
+    }),
+  );
+  return paths.flat();
+};
+
+const isGenerationFile = (path: string): boolean => {
+  const repoPath = toRepoPath(path);
+  return generationFilePatterns.some((pattern) => pattern.test(repoPath));
+};
+
+const resolveImport = (fromFile: string, specifier: string): string | null => {
+  if (!specifier.startsWith(".")) {
+    return null;
+  }
+
+  const basePath = resolve(dirname(fromFile), specifier);
+  const candidates = [
+    `${basePath}.ts`,
+    resolve(basePath, "index.ts"),
+  ];
+
+  return candidates.find(isGenerationFile) ?? null;
+};
+
+const extractRelativeImports = (source: string): string[] => {
+  const imports = new Set<string>();
+  const importPattern = /import\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g;
+  let match: RegExpExecArray | null = null;
+  while ((match = importPattern.exec(source)) !== null) {
+    if (match[1]) {
+      imports.add(match[1]);
+    }
+  }
+  return [...imports];
+};
+
+export const classifyNode = (repoPath: string): GraphNodeClass => {
+  if (LEGACY_GENERATION_PATHS.has(repoPath)) {
+    return "legacy";
+  }
+  if (isV2ArchitecturePath(repoPath)) {
+    return "v2";
+  }
+  if (repoPath.includes("deck-shape")) {
+    return "adapter";
+  }
+  if (/(?:validation|session-deck-quality|narration-review)/.test(repoPath)) {
+    return "gate";
+  }
+  if (/(?:question-answer|conversation|voice|tts)/.test(repoPath)) {
+    return "runtime";
+  }
+  if (/(?:grounding|research|web-research|generation-context|presentation-context)/.test(repoPath)) {
+    return "research";
+  }
+  return "provider";
+};
+
+export const buildArchitectureGraph = async (): Promise<Graph> => {
+  const files = [...new Set((await Promise.all(graphRoots.map(walk))).flat())]
+    .filter(isGenerationFile)
+    .sort((left, right) => toRepoPath(left).localeCompare(toRepoPath(right)));
+
+  const fileSet = new Set(files);
+  const nodeIds = new Map(files.map((file, index) => [file, `N${index + 1}`]));
+  const nodes = files.map((file) => {
+    const repoPath = toRepoPath(file);
+    return {
+      repoPath,
+      nodeClass: classifyNode(repoPath),
+    } satisfies ArchitectureGraphNode;
+  });
+  const edges = new Set<string>();
+
+  for (const file of files) {
+    const source = await readFile(file, "utf8");
+    const fromId = nodeIds.get(file);
+    if (!fromId) {
+      continue;
+    }
+
+    for (const importSpecifier of extractRelativeImports(source)) {
+      const resolvedImport = resolveImport(file, importSpecifier);
+      if (!resolvedImport || !fileSet.has(resolvedImport)) {
+        continue;
+      }
+      const toId = nodeIds.get(resolvedImport);
+      if (toId) {
+        edges.add(`${fromId} --> ${toId}`);
+      }
+    }
+  }
+
+  const lines = [
+    "%% Auto-generated by scripts/generate_architecture_graph.ts",
+    "%% Do not edit manually. Run: npm run arch:graph",
+    "flowchart LR",
+    "  classDef v2 fill:#163d2a,stroke:#4ade80,color:#ecfdf5;",
+    "  classDef legacy fill:#4b1d1d,stroke:#fb7185,color:#fff1f2;",
+    "  classDef adapter fill:#4a2f10,stroke:#f59e0b,color:#fff7ed;",
+    "  classDef gate fill:#1f2a44,stroke:#60a5fa,color:#eff6ff;",
+    "  classDef runtime fill:#3b1f47,stroke:#c084fc,color:#faf5ff;",
+    "  classDef research fill:#17324a,stroke:#38bdf8,color:#f0f9ff;",
+    "  classDef provider fill:#2f2f3a,stroke:#94a3b8,color:#f8fafc;",
+    "",
+    ...files.map((file) => {
+      const id = nodeIds.get(file);
+      const label = toRepoPath(file);
+      return `  ${id}["${label}"]`;
+    }),
+    "",
+    ...[...edges].sort().map((edge) => `  ${edge}`),
+    "",
+    ...nodes.map((node) => {
+      const file = files.find((candidate) => toRepoPath(candidate) === node.repoPath);
+      const id = file ? nodeIds.get(file) : undefined;
+      return `  class ${id} ${node.nodeClass};`;
+    }),
+    "",
+  ];
+
+  return {
+    content: `${lines.join("\n")}`,
+    nodeCount: files.length,
+    edgeCount: edges.size,
+    nodes,
+  };
+};
+
+const run = async (): Promise<void> => {
+  const graph = await buildArchitectureGraph();
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, graph.content, "utf8");
+  console.log(
+    `Wrote ${toRepoPath(outputPath)} with ${graph.nodeCount} nodes and ${graph.edgeCount} edges.`,
+  );
+};
+
+if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
+  run().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

@@ -1725,9 +1725,9 @@ export const SessionPresenter = ({ sessionId }: { sessionId: string }) => {
           <p className="mt-3 text-sm leading-6 text-paper/80">{error}</p>
           <Link
             className="mt-4 inline-flex rounded-full bg-white px-4 py-2 text-sm font-semibold text-ink"
-            href="/workbench"
+            href="/"
           >
-            Back to workbench
+            Back to launchpad
           </Link>
         </div>
       </main>

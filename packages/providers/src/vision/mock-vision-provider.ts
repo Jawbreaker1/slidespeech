@@ -14,8 +14,8 @@ export class MockVisionProvider implements VisionProvider {
       summary: `No visual analysis available yet for ${input.slideId}.`,
       isRelevant: true,
       relevanceScore: 0.5,
-      visualIssues: ["Visual analysis is mocked in phase 1."],
-      pedagogicalHints: ["Add rendered slide screenshots in phase 4."],
+      visualIssues: ["Visual analysis is test-only mocked."],
+      pedagogicalHints: ["Use a real vision provider for rendered-slide review."],
     };
   }
 
@@ -26,10 +26,10 @@ export class MockVisionProvider implements VisionProvider {
   }
 
   async describeVisualIssues() {
-    return ["Visual issue detection is mocked in phase 1."];
+    return ["Visual issue detection is test-only mocked."];
   }
 
   async extractPedagogicalVisualHints() {
-    return ["Pedagogical visual hints are mocked in phase 1."];
+    return ["Pedagogical visual hints are test-only mocked."];
   }
 }

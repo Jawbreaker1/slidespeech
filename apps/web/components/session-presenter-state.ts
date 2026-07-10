@@ -87,7 +87,7 @@ export const toInteractionLog = (
 
 export const getNarrationSegments = (
   narration: SlideNarration | undefined,
-  fallbackText: string | undefined,
+  sourceText: string | undefined,
 ): string[] => {
   const explicitSegments = narration?.segments ?? [];
 
@@ -95,7 +95,7 @@ export const getNarrationSegments = (
     return explicitSegments;
   }
 
-  const baseText = narration?.narration ?? fallbackText ?? "";
+  const baseText = narration?.narration ?? sourceText ?? "";
   const normalized = baseText.replace(/\s+/g, " ").trim();
 
   if (!normalized) {

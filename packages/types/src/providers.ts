@@ -44,6 +44,7 @@ export interface PlanPresentationInput {
   groundingHighlights?: string[];
   groundingExcerpts?: string[];
   groundingCoverageGoals?: string[];
+  groundingFacts?: GroundingFact[];
   pedagogicalProfile: PedagogicalProfile;
   groundingSummary?: string;
   targetDurationMinutes?: number;
@@ -135,7 +136,6 @@ export interface GenerateDeckInput {
   topic: string;
   presentationBrief?: string;
   intent?: PresentationIntent;
-  revisionGuidance?: string;
   plan?: PresentationPlan;
   pedagogicalProfile: PedagogicalProfile;
   groundingSummary?: string;
@@ -145,6 +145,7 @@ export interface GenerateDeckInput {
   groundingSourceIds?: string[];
   groundingFacts?: GroundingFact[];
   slideBriefs?: SlideBrief[];
+  revisionGuidance?: string;
   groundingSourceType?: "topic" | "document" | "pptx" | "mixed";
   targetDurationMinutes?: number;
   targetSlideCount?: number;
@@ -452,13 +453,6 @@ export interface UserPreferences {
 export interface UserPreferencesRepository {
   save(preferences: UserPreferences): Promise<void>;
   getByUserId(userId: string): Promise<UserPreferences | null>;
-}
-
-export interface InterruptClassifier {
-  classify(input: {
-    session: Session;
-    text: string;
-  }): Promise<UserInterruption>;
 }
 
 export interface ResumePlanner {

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  normalizeResearchPlanningSuggestion,
   parseResearchPlanningText,
-  summarizeRevisionGuidance,
 } from "../packages/providers/src/llm/research-planning";
 
 const baseInput = {
@@ -47,9 +47,35 @@ RATIONALE:
   ]);
 });
 
-test("revision guidance summaries preserve the first actionable segments", () => {
-  assert.equal(
-    summarizeRevisionGuidance("Fix intro. Remove generic bullets; Add source facts.\nDo not mention slides."),
-    "Fix intro; Remove generic bullets; Add source facts; Do not mention slides",
+test("research planning normalizer accepts structured tool payloads", () => {
+  const parsed = normalizeResearchPlanningSuggestion(
+    {
+      subject: "Create an onboarding presentation about System Verification",
+      searchQueries: [
+        "System Verification about",
+        "System Verification locations",
+        "System Verification services",
+      ],
+      coverageGoals: [
+        "Identify the company's service areas",
+        "Avoid presentation template guidance",
+      ],
+      rationale: ["The request needs company-specific grounding."],
+    },
+    baseInput,
   );
+
+  assert.equal(parsed.subject, "System Verification");
+  assert.deepEqual(parsed.searchQueries, [
+    "System Verification quality assurance",
+    "System Verification about",
+    "System Verification locations",
+    "System Verification services",
+  ]);
+  assert.deepEqual(parsed.coverageGoals, [
+    "Identify the company's service areas",
+  ]);
+  assert.deepEqual(parsed.rationale, [
+    "The request needs company-specific grounding.",
+  ]);
 });

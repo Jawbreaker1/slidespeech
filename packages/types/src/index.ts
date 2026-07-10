@@ -24,7 +24,6 @@ export type {
   GroundingFactRole,
   GroundingFinding,
   GroundingSourceAssessment,
-  InterruptClassifier,
   LLMProvider,
   PedagogicalContext,
   PedagogicalResponse,

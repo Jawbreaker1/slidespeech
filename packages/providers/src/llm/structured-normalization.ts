@@ -45,17 +45,54 @@ export const parseStringifiedArray = (value: string): string[] | null => {
   }
 };
 
+export const parseTaggedStringArray = (value: string): string[] | null => {
+  const trimmed = decodeHtmlEntities(value).trim();
+  if (!/<item\b/i.test(trimmed)) {
+    return null;
+  }
+
+  const closedItems = Array.from(
+    trimmed.matchAll(/<item\b[^>]*>\s*([\s\S]*?)\s*<\/item>/gi),
+  )
+    .map((match) => (match[1] ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  if (closedItems.length > 0) {
+    return closedItems;
+  }
+
+  const looseItems = trimmed
+    .split(/<item\b[^>]*>/i)
+    .map((item) =>
+      item
+        .replace(/<\/item>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter(Boolean);
+
+  return looseItems.length > 0 ? looseItems : [];
+};
+
 export const toStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) {
     return value
       .flatMap((item) =>
-        typeof item === "string" ? parseStringifiedArray(item) ?? [item] : [],
+        typeof item === "string"
+          ? parseTaggedStringArray(item) ?? parseStringifiedArray(item) ?? [item]
+          : [],
       )
       .map((item) => decodeHtmlEntities(item).trim())
       .filter(Boolean);
   }
 
   if (typeof value === "string") {
+    const taggedArray = parseTaggedStringArray(value);
+    if (taggedArray) {
+      return taggedArray;
+    }
+
     const parsedArray = parseStringifiedArray(value);
     if (parsedArray) {
       return parsedArray;
@@ -81,55 +118,4 @@ export const toRecordArray = (value: unknown): Record<string, unknown>[] => {
     (item): item is Record<string, unknown> =>
       Boolean(item) && typeof item === "object",
   );
-};
-
-export const normalizeHexColor = (
-  value: unknown,
-  fallback = "1C7C7D",
-): string => {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const normalized = value.trim().replace(/^#/, "").toUpperCase();
-  return /^[0-9A-F]{6}$/.test(normalized) ? normalized : fallback;
-};
-
-export const normalizeLayoutTemplate = (value: unknown, fallback: string) => {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "hero-focus" ||
-    normalized === "three-step-flow" ||
-    normalized === "two-column-callouts" ||
-    normalized === "summary-board"
-  ) {
-    return normalized;
-  }
-
-  return fallback;
-};
-
-export const normalizeVisualTone = (
-  value: unknown,
-): "accent" | "neutral" | "success" | "warning" | "info" => {
-  if (typeof value !== "string") {
-    return "neutral";
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "accent" ||
-    normalized === "neutral" ||
-    normalized === "success" ||
-    normalized === "warning" ||
-    normalized === "info"
-  ) {
-    return normalized;
-  }
-
-  return "neutral";
 };

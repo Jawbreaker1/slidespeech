@@ -204,12 +204,6 @@ export const PresentationLaunchpad = () => {
               >
                 Ready presentations
               </Link>
-              <Link
-                className="rounded-full border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-white"
-                href="/workbench"
-              >
-                Open workbench
-              </Link>
               <a
                 className="rounded-full border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-white"
                 href="http://localhost:4000/api/presentations/health"
@@ -369,7 +363,7 @@ export const PresentationLaunchpad = () => {
                   {isQueued
                     ? "Only one heavy generation runs at a time in this demo. The page keeps polling until your turn starts."
                     : elapsedSeconds >= 90
-                      ? "This is taking longer than expected. That usually means the local model is retrying or repairing difficult slide output; the app will open presenter mode as soon as the first usable session is saved."
+                      ? "This is taking longer than expected. The local model may still be planning, researching, or retrying a rejected draft; the app will open presenter mode as soon as a usable session is saved."
                       : "Local models can take several minutes. When generation completes, the app opens presenter mode automatically."}
                 </p>
                 <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
@@ -400,12 +394,6 @@ export const PresentationLaunchpad = () => {
               >
                 {isQueued ? "Queued..." : isGenerating ? "Generating..." : "Generate presentation"}
               </button>
-              <Link
-                className="rounded-full border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-                href="/workbench"
-              >
-                Advanced builder
-              </Link>
             </div>
           </div>
 

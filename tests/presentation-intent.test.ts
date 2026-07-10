@@ -85,6 +85,24 @@ test("derivePresentationIntent keeps multiple explicit grounding urls and strips
   assert.doesNotMatch(googledIntent.subject, /\bgoogla\b|\bcreate an onboarding presentation\b/i);
 });
 
+test("derivePresentationIntent does not treat follow-up include instructions as organizations after source urls", () => {
+  const intent = derivePresentationIntent(
+    "Create a presentation about molted email. Information can be found at https://molted.email. Include a slide about the creator Magnus Junghard Jägryd.",
+  );
+
+  assert.equal(intent.subject, "Molted email");
+  assert.equal(intent.presentationFrame, "subject");
+  assert.equal(intent.organization, undefined);
+  assert.equal(intent.focusAnchor, undefined);
+  assert.ok(intent.explicitSourceUrls.includes("https://molted.email/"));
+  assert.ok(
+    intent.coverageRequirements.some((value) =>
+      /creator Magnus Junghard Jägryd/i.test(value),
+    ),
+  );
+  assert.doesNotMatch(intent.framing, /Information can be found at|Include a slide policies/i);
+});
+
 test("derivePresentationIntent treats explicit organization overview wording as the subject before follow-up instructions", () => {
   const intent = derivePresentationIntent(
     "Create a 4-slide onboarding overview of System Verification for a new employee. Use https://www.systemverification.com/ and https://www.systemverification.com/about-us as sources. Explain who they are, where and how they work, what they offer, and close by inviting questions.",
@@ -97,14 +115,19 @@ test("derivePresentationIntent treats explicit organization overview wording as 
   assert.doesNotMatch(intent.subject, /who they are|where and how they work/i);
 });
 
-test("derivePresentationIntent keeps a broad subject while deriving a concrete focus anchor from explicit coverage", () => {
+test("derivePresentationIntent keeps a broad subject and passes explicit coverage without local arc anchoring", () => {
   const intent = derivePresentationIntent(
     "Create a short presentation about World of Warcraft. Include at least one slide about the Corrupted Blood plague event and explain why researchers were interested in it as a model of disease spread.",
   );
 
   assert.equal(intent.presentationFrame, "subject");
   assert.equal(intent.subject, "World of Warcraft");
-  assert.equal(intent.focusAnchor, "The Corrupted Blood plague event");
+  assert.equal(intent.focusAnchor, undefined);
+  assert.ok(
+    intent.coverageRequirements.some((value) =>
+      /Corrupted Blood plague event/i.test(value),
+    ),
+  );
 });
 
 test("derivePresentationIntent keeps organization-context prompts separate from pure company-overview prompts", () => {
@@ -137,6 +160,30 @@ test("derivePresentationIntent extracts subjects from presentation-explaining pr
   assert.equal(intent.subject, "Photosynthesis");
   assert.equal(intent.presentationFrame, "subject");
   assert.doesNotMatch(intent.subject, /presentation|beginners/i);
+});
+
+test("derivePresentationIntent extracts Swedish presentation subjects without prompt framing", () => {
+  const intent = derivePresentationIntent(
+    "Skapa en presentation om en marknadsföringsstrategi för nyproducerade fastigheter.",
+  );
+
+  assert.equal(intent.subject, "Marknadsföringsstrategi för nyproducerade fastigheter");
+  assert.equal(intent.presentationFrame, "subject");
+  assert.doesNotMatch(intent.subject, /skapa|presentation/i);
+  assert.equal(
+    intent.framing,
+    "presentation om en marknadsföringsstrategi för nyproducerade fastigheter",
+  );
+});
+
+test("derivePresentationIntent preserves for-complements in strategy subjects", () => {
+  const intent = derivePresentationIntent(
+    "Create a presentation about a marketing strategy for newly built residential properties.",
+  );
+
+  assert.equal(intent.subject, "Marketing strategy for newly built residential properties");
+  assert.equal(intent.presentationFrame, "subject");
+  assert.doesNotMatch(intent.subject, /\bcreate\b|\bpresentation\b/i);
 });
 
 test("extractPresentationSubject drops leading imperative framing and trailing question sentences", () => {

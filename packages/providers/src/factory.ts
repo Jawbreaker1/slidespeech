@@ -12,6 +12,7 @@ import { HostedIllustrationProvider } from "./illustration/hosted-illustration-p
 import { MockIllustrationProvider } from "./illustration/mock-illustration-provider";
 import { LMStudioLLMProvider } from "./llm/lmstudio-llm-provider";
 import { MockLLMProvider } from "./llm/mock-llm-provider";
+import { OpenAICompatibleLLMProvider } from "./llm/openai-compatible";
 import { ResilientLLMProvider } from "./llm/resilient-llm-provider";
 import {
   FASTER_WHISPER_STT_DEFAULTS,
@@ -23,10 +24,6 @@ import {
   PIPER_TTS_DEFAULTS,
   PiperTTSProvider,
 } from "./tts/piper-tts-provider";
-import {
-  SYSTEM_TTS_DEFAULTS,
-  SystemTTSProvider,
-} from "./tts/system-tts-provider";
 import { MockVADProvider } from "./vad/mock-vad-provider";
 import { LMStudioVisionProvider } from "./vision/lmstudio-vision-provider";
 import { MockVisionProvider } from "./vision/mock-vision-provider";
@@ -34,12 +31,12 @@ import { HostedWebResearchProvider } from "./web-research/hosted-web-research-pr
 import { MockWebResearchProvider } from "./web-research/mock-web-research-provider";
 
 export interface ProviderFactoryConfig {
-  llmProvider: "mock" | "lmstudio" | "openai-compatible" | "hosted";
+  llmProvider: "mock" | "lmstudio" | "openai-compatible";
   illustrationProvider: "mock" | "hosted";
-  visionProvider: "mock" | "lmstudio" | "hosted";
-  sttProvider: "mock" | "faster-whisper" | "hosted";
-  ttsProvider: "mock" | "piper" | "system" | "hosted";
-  vadProvider: "mock" | "silero";
+  visionProvider: "mock" | "lmstudio";
+  sttProvider: "mock" | "faster-whisper";
+  ttsProvider: "mock" | "piper";
+  vadProvider: "mock";
   webResearchProvider: "mock" | "hosted";
   fasterWhisperPythonBin: string;
   fasterWhisperModel: string;
@@ -51,8 +48,6 @@ export interface ProviderFactoryConfig {
   piperTtsConfigPath: string;
   piperTtsSpeakerId?: number;
   piperTtsSentenceSilenceMs: number;
-  systemTtsVoice: string;
-  systemTtsRateWpm: number;
   lmstudioBaseUrl: string;
   lmstudioModel: string;
   lmstudioVisionModel: string;
@@ -78,8 +73,10 @@ export const createLLMProvider = (config: ProviderFactoryConfig): LLMProvider =>
       primaryProvider = new LMStudioLLMProvider(sharedConfig);
       break;
     case "openai-compatible":
-    case "hosted":
-      primaryProvider = new LMStudioLLMProvider(sharedConfig);
+      primaryProvider = new OpenAICompatibleLLMProvider({
+        providerName: "openai-compatible",
+        ...sharedConfig,
+      });
       break;
     case "mock":
     default:
@@ -140,7 +137,6 @@ export const createVisionProvider = (
 ): VisionProvider => {
   switch (config.visionProvider) {
     case "lmstudio":
-    case "hosted":
       return new LMStudioVisionProvider({
         baseUrl: config.lmstudioBaseUrl,
         model:
@@ -186,7 +182,6 @@ export const createSpeechToTextProvider = (
           config.fasterWhisperLanguage ||
           FASTER_WHISPER_STT_DEFAULTS.language,
       });
-    case "hosted":
     case "mock":
     default:
       return new MockSTTProvider();
@@ -197,8 +192,6 @@ export const createTextToSpeechProvider = (
   config: Pick<
     ProviderFactoryConfig,
     | "ttsProvider"
-    | "systemTtsVoice"
-    | "systemTtsRateWpm"
     | "piperTtsPythonBin"
     | "piperTtsModelPath"
     | "piperTtsConfigPath"
@@ -220,13 +213,6 @@ export const createTextToSpeechProvider = (
           ? { speakerId: config.piperTtsSpeakerId }
           : {}),
       });
-    case "system":
-      return new SystemTTSProvider({
-        voice: config.systemTtsVoice || SYSTEM_TTS_DEFAULTS.voice,
-        defaultRateWpm:
-          config.systemTtsRateWpm || SYSTEM_TTS_DEFAULTS.defaultRateWpm,
-      });
-    case "hosted":
     case "mock":
     default:
       return new MockTTSProvider();
@@ -237,7 +223,6 @@ export const createVoiceActivityProvider = (
   config: Pick<ProviderFactoryConfig, "vadProvider">,
 ): VoiceActivityProvider => {
   switch (config.vadProvider) {
-    case "silero":
     case "mock":
     default:
       return new MockVADProvider();

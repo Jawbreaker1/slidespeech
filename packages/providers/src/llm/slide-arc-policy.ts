@@ -5,7 +5,31 @@ import {
   normalizeComparableText,
   tokenizeDeckShapeText,
 } from "./deck-shape-text";
-import type { ArcPolicyInput, SlideArcPolicy } from "./slide-contract-types";
+
+export type SlideArcPolicy =
+  | "procedural"
+  | "organization-overview"
+  | "source-backed-subject"
+  | "subject-explainer";
+
+export type ArcPolicyInput = {
+  intent?: Pick<
+    NonNullable<GenerateDeckInput["intent"]>,
+    | "contentMode"
+    | "subject"
+    | "presentationFrame"
+    | "organization"
+    | "explicitSourceUrls"
+    | "focusAnchor"
+    | "deliveryFormat"
+    | "activityRequirement"
+  > | undefined;
+  groundingHighlights?: string[] | undefined;
+  groundingCoverageGoals?: string[] | undefined;
+  groundingSourceIds?: string[] | undefined;
+  groundingFacts?: GenerateDeckInput["groundingFacts"] | undefined;
+  topic?: GenerateDeckInput["topic"] | undefined;
+};
 
 export const resolveIntentSubject = (
   input: {
@@ -20,13 +44,6 @@ export const usesOrganizationIdentity = (
   Boolean(input.intent?.organization?.trim()) &&
   (input.intent?.presentationFrame === "organization" ||
     input.intent?.presentationFrame === "mixed");
-
-export const framingImpliesOrientation = (
-  input: Pick<GenerateDeckInput, "presentationBrief" | "intent">,
-): boolean =>
-  /\b(onboarding|orientation|introduction|overview)\b/i.test(
-    `${input.intent?.framing ?? ""} ${input.presentationBrief ?? ""}`,
-  );
 
 export const resolveOrganizationDisplayName = (
   input: Pick<GenerateDeckInput, "topic" | "intent">,
@@ -71,14 +88,45 @@ export const resolveIntentFocusAnchor = (
   return focusAnchor && focusAnchor.length > 0 ? focusAnchor : undefined;
 };
 
+const normalizeDisplaySubject = (value: string): string =>
+  value
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(?:how to\s+)?(?:make|making|prepare|preparing|create|creating|cook|cooking|build|building|assemble|assembling)\s+(?:the\s+)?/i, "")
+    .replace(/\b(?:that|which)\s+(?:was|is|were|are|has|have)\b.*$/i, "")
+    .replace(/[.]+$/g, "")
+    .trim();
+
+export const resolvePresentationSubjectLabel = (
+  input: Pick<GenerateDeckInput, "topic" | "intent">,
+): string => {
+  const subject = resolveIntentSubject(input);
+  const focusAnchor = resolveIntentFocusAnchor(input);
+
+  if (input.intent?.contentMode === "procedural") {
+    return normalizeDisplaySubject(subject) || subject;
+  }
+
+  if (usesOrganizationIdentity(input)) {
+    return resolveOrganizationDisplayName(input);
+  }
+
+  if (focusAnchor && focusAnchor.length <= 90) {
+    return focusAnchor;
+  }
+
+  return normalizeDisplaySubject(subject) || subject;
+};
+
 const hasSourceBackedGrounding = (input: ArcPolicyInput): boolean =>
   Boolean(
     input.intent?.explicitSourceUrls?.length ||
-      input.groundingSourceIds?.length,
+      input.groundingSourceIds?.length ||
+      input.groundingFacts?.length,
   );
 
 const looksLikeOrganizationName = (value: string): boolean =>
-  /\b(?:ab|ag|asa|bv|cars|company|corp(?:oration)?|gmbh|group|holding|holdings|inc|limited|ltd|motors|plc)\b/i.test(
+  /\b(?:ab|ag|asa|bv|company|corp(?:oration)?|gmbh|group|holding|holdings|inc|limited|ltd|plc)\b/i.test(
     value,
   );
 
@@ -122,25 +170,26 @@ export const buildArcPolicyPromptLines = (input: ArcPolicyInput): string[] => {
     case "organization-overview":
       return [
         isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">)
-          ? "Use an organization-grounded workshop arc: why this matters for the audience's daily work, where it helps, which constraints shape safe use, and one practical exercise."
-          : "Use an organization overview arc: who the organization is, what it offers, how it works, and one concrete outcome or customer example.",
-        "Do not drift into mission, vision, or broad slogans unless that material is explicitly grounded and central to the request.",
+          ? "Let the plan choose a source-grounded workshop arc for the requested audience; include participant practice only when the request or evidence supports it."
+          : "Let the plan choose the strongest organization arc from the grounded material; cover identity, capabilities, operating model, proof, or next steps only when supported.",
+        "Do not drift into slogans or unsupported organization claims; if source material is thin, keep the outline narrower rather than padding.",
         isWorkshopPresentation(input as Pick<GenerateDeckInput, "intent">)
-          ? "Use a plain workshop title such as '<Organization> workshop: <topic>'. Do not call a workshop an onboarding deck."
-          : "Use a plain organization title such as '<Organization> overview' or '<Organization> onboarding'; avoid 'your guide', 'ultimate', 'excellence', 'journey', and other marketing title phrasing.",
+          ? "Use a plain title that reflects the actual delivery format and topic."
+          : "Use a plain title that reflects the source-backed subject and requested framing.",
+        "The first beat must orient the audience; the final beat must synthesize the deck or invite questions; middle beats must each add a distinct role.",
       ];
     case "source-backed-subject":
       return [
-        "Use a sourced teaching arc that separates the specific event, fact, or mechanism, why it matters, and the takeaway.",
+        "Let the plan choose a sourced explanatory arc from the available evidence instead of following a fixed template.",
         focusAnchor
           ? `Treat ${JSON.stringify(focusAnchor)} as the specific evidence anchor for the detail slide and keep later slides building on it rather than collapsing back to the broad subject alone.`
           : null,
-        "Later slides must not restate the same description; each one needs a different explanatory role.",
+        "The first beat must introduce the exact subject and source-backed anchor; the final beat must synthesize what the audience can conclude; middle beats must each add a distinct evidence or reasoning role.",
       ].filter((line): line is string => Boolean(line));
     case "subject-explainer":
       return [
-        "Use a teaching arc that separates the concrete detail, the implication, and the takeaway.",
-        "Later slides must not restate the same description; each one needs a different explanatory role.",
+        "Let the plan choose the explanatory arc that best fits the subject, audience, and requested framing.",
+        "The first beat must introduce the subject; the final beat must synthesize the deck or invite questions; middle beats must each add a distinct explanatory role.",
       ];
     default:
       return [];

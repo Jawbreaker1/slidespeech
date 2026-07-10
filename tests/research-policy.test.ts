@@ -15,7 +15,6 @@ import {
   topicRequiresGroundedFacts,
   topicLooksTimeSensitive,
 } from "../apps/api/src/services/research-policy";
-import { buildGuessedOfficialUrls } from "../apps/api/src/services/web-research-service";
 
 test("detects time-sensitive topics heuristically", () => {
   assert.equal(
@@ -133,9 +132,9 @@ test("builds procedural coverage goals for generic how-to prompts", () => {
     topic: "Create a short presentation about how to make the perfect salsa dip.",
   });
 
-  assert.ok(plan.coverageGoals.includes("Essential ingredients"));
-  assert.ok(plan.coverageGoals.includes("Key preparation steps"));
-  assert.ok(plan.coverageGoals.includes("Taste, texture, and adjustment"));
+  assert.ok(plan.coverageGoals.includes("Starting inputs"));
+  assert.ok(plan.coverageGoals.includes("Key sequence"));
+  assert.ok(plan.coverageGoals.includes("Quality cues and adjustment"));
   assert.equal(
     plan.coverageGoals.some((goal) => /core mechanisms|real-world application/i.test(goal)),
     false,
@@ -163,29 +162,31 @@ test("buildResearchPlan uses a cleaned subject for imperative entertainment prom
   );
 });
 
-test("builds guessed official urls for compact brand prompts", () => {
-  assert.deepEqual(
-    buildGuessedOfficialUrls(
-      "Make a presentation about Volvo for an audience of children. Make sure to add many pictures of cars.",
-    ),
-    [
-      "https://www.volvo.com/",
-      "https://volvo.com/",
-      "https://www.volvocars.com/",
-      "https://www.volvocars.com/intl/",
-    ],
+test("buildResearchPlan compacts descriptor-heavy car brand prompts before research", () => {
+  const plan = buildResearchPlan({
+    topic: "The Ferrari brand and cars",
+  });
+
+  assert.equal(plan.subject, "Ferrari");
+  assert.equal(plan.directUrls.length, 0);
+  assert.ok(plan.searchQueries.includes("Ferrari official"));
+  assert.ok(plan.searchQueries.includes("Ferrari cars"));
+  assert.ok(plan.searchQueries.includes("Ferrari"));
+  assert.equal(
+    plan.searchQueries.some((query) => /"The Ferrari"|brand cars Ferrari/i.test(query)),
+    false,
   );
 });
 
-test("builds direct site guesses for car-brand subjects without duplicated cars suffixes", () => {
-  assert.deepEqual(
-    buildGuessedOfficialUrls("Volvo Cars"),
-    [
-      "https://www.volvocars.com/",
-      "https://volvocars.com/",
-      "https://www.volvocars.com/intl/",
-    ],
-  );
+test("buildResearchPlan preserves unicode names in requested coverage search queries", () => {
+  const plan = buildResearchPlan({
+    topic:
+      "Create a presentation about molted email. Information can be found at https://molted.email. Include a slide about the creator Magnus Junghard Jägryd.",
+  });
+
+  assert.equal(plan.subject, "Molted email");
+  assert.ok(plan.searchQueries.includes("Molted email Magnus Junghard Jägryd creator"));
+  assert.equal(plan.searchQueries.some((query) => query.includes(" gryd ")), false);
 });
 
 test("builds a research plan with direct urls and targeted queries", () => {
@@ -290,6 +291,31 @@ test("detects research-specific prompts and avoids guessed official urls", () =>
   );
   assert.equal(
     plan.coverageGoals.some((goal) => /requested in the prompt/i.test(goal)),
+    false,
+  );
+});
+
+test("specific debut and release prompts use narrow source-backed coverage goals", () => {
+  const topic =
+    "Create a presentation about Donald Duck's first cartoon appearance released in 1934.";
+  const plan = buildResearchPlan({ topic });
+
+  assert.equal(topicLooksResearchSpecific(topic), true);
+  assert.equal(plan.requiresGroundedFacts, true);
+  assert.ok(
+    plan.coverageGoals.some((goal) =>
+      /exact identity, date, location, and context/i.test(goal),
+    ),
+  );
+  assert.ok(
+    plan.coverageGoals.some((goal) =>
+      /people, roles, sequence, or evidence directly tied/i.test(goal),
+    ),
+  );
+  assert.equal(
+    plan.coverageGoals.some((goal) =>
+      /core mechanisms|real-world application|case study, or experiment/i.test(goal),
+    ),
     false,
   );
 });

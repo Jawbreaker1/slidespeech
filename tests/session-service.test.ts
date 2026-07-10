@@ -4,17 +4,19 @@ import assert from "node:assert/strict";
 import {
   LLMConversationTurnEngine,
   PresentationSessionService,
-  validateAndRepairDeck,
+  validateDeck,
 } from "@slidespeech/core";
 import { MockLLMProvider } from "@slidespeech/providers";
 import { DeckSchema } from "@slidespeech/types";
 import type {
   ConversationTurnPlan,
+  DeckSemanticReviewResult,
   Deck,
   DeckRepository,
   GenerateDeckInput,
   GenerateNarrationInput,
   PresentationReview,
+  ReviewDeckSemanticsInput,
   ReviewPresentationInput,
   Session,
   SessionRepository,
@@ -72,7 +74,35 @@ class InMemoryTranscriptRepository implements TranscriptRepository {
 class AcceptableMockLLMProvider extends MockLLMProvider {
   async generateDeck(input: GenerateDeckInput): Promise<Deck> {
     const generated = await super.generateDeck(input);
-    return validateAndRepairDeck(generated).value;
+    const validated = validateDeck(generated).value;
+    return {
+      ...validated,
+      metadata: {
+        ...validated.metadata,
+        validation: {
+          passed: true,
+          repaired: false,
+          validatedAt: new Date().toISOString(),
+          issues: [],
+        },
+      },
+    };
+  }
+}
+
+class PendingBackgroundNarrationLLMProvider extends AcceptableMockLLMProvider {
+  private narrationCalls = 0;
+
+  override async generateNarration(
+    input: GenerateNarrationInput,
+  ): Promise<SlideNarration> {
+    this.narrationCalls += 1;
+
+    if (this.narrationCalls > 1) {
+      return new Promise<SlideNarration>(() => {});
+    }
+
+    return super.generateNarration(input);
   }
 }
 
@@ -98,6 +128,22 @@ class TrackingPlanLLMProvider extends AcceptableMockLLMProvider {
   }
 }
 
+class TrackingSemanticReviewLLMProvider extends AcceptableMockLLMProvider {
+  lastReviewDeckSemanticsInput: ReviewDeckSemanticsInput | undefined;
+
+  override async reviewDeckSemantics(
+    input: ReviewDeckSemanticsInput,
+  ): Promise<DeckSemanticReviewResult> {
+    this.lastReviewDeckSemanticsInput = input;
+    return {
+      approved: true,
+      score: 0.96,
+      summary: "Accepted with scoped review context.",
+      issues: [],
+    };
+  }
+}
+
 class EmptyResponseLLMProvider extends AcceptableMockLLMProvider {
   async planPresentation(input: { topic: string }) {
     throw new Error("lmstudio returned an empty response.");
@@ -116,13 +162,11 @@ class EmptyResponseLLMProvider extends AcceptableMockLLMProvider {
   }
 }
 
-class RetryingDeckLLMProvider extends AcceptableMockLLMProvider {
+class WeakDeckLLMProvider extends AcceptableMockLLMProvider {
   deckCalls = 0;
-  revisionGuidances: string[] = [];
 
   async generateDeck(input: GenerateDeckInput): Promise<Deck> {
     this.deckCalls += 1;
-    this.revisionGuidances.push(input.revisionGuidance ?? "");
 
     if (this.deckCalls === 1) {
       return DeckSchema.parse({
@@ -246,6 +290,36 @@ class RetryingDeckLLMProvider extends AcceptableMockLLMProvider {
       },
     });
   }
+
+  override async reviewDeckSemantics(input: {
+    deck: Deck;
+  }): Promise<DeckSemanticReviewResult> {
+    if (input.deck.id === "deck_retry_1") {
+      return {
+        approved: false,
+        score: 0.42,
+        summary:
+          "The first generated draft describes presentation mechanics instead of the requested subject.",
+        issues: [
+          {
+            code: "prompt_leakage",
+            severity: "error",
+            message:
+              "The deck contains presentation-mechanics copy instead of subject content.",
+            revisionInstruction:
+              "Regenerate the deck around the requested subject rather than presentation instructions.",
+          },
+        ],
+      };
+    }
+
+    return {
+      approved: true,
+      score: 0.96,
+      summary: "The generated deck is acceptable.",
+      issues: [],
+    };
+  }
 }
 
 class BrokenIntroNarrationLLMProvider extends AcceptableMockLLMProvider {
@@ -293,6 +367,32 @@ class TruncatedGroundedQuestionLLMProvider extends AcceptableMockLLMProvider {
   }
 }
 
+class ThrowingValidationGroundedQuestionLLMProvider extends AcceptableMockLLMProvider {
+  answerQuestionCalls = 0;
+
+  override async planConversationTurn(): Promise<ConversationTurnPlan> {
+    return {
+      interruptionType: "question",
+      inferredNeeds: ["question"],
+      responseMode: "grounded_factual",
+      runtimeEffects: {},
+      confidence: 0.99,
+      rationale: "Treat this as a grounded factual question.",
+    };
+  }
+
+  override async answerQuestion() {
+    this.answerQuestionCalls += 1;
+    return {
+      text: "System Verification helps organizations improve reliability and reduce software risk.",
+    };
+  }
+
+  override async validateQuestionAnswer() {
+    throw new Error("answer validation timed out");
+  }
+}
+
 class OverzealousReviewLLMProvider extends AcceptableMockLLMProvider {
   override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
     const generated = await super.generateDeck(input);
@@ -337,7 +437,112 @@ class OverzealousReviewLLMProvider extends AcceptableMockLLMProvider {
   }
 }
 
-class ThinNarrationRepairReviewLLMProvider extends AcceptableMockLLMProvider {
+class WarningOnlyRejectedReviewLLMProvider extends AcceptableMockLLMProvider {
+  override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
+    const generated = await super.generateDeck(input);
+    const firstSlide = generated.slides[0];
+
+    assert.ok(firstSlide);
+
+    return DeckSchema.parse({
+      ...generated,
+      id: "deck_single_slide_warning_rejected",
+      slides: [{ ...firstSlide, order: 0 }],
+    });
+  }
+
+  override async reviewPresentation() {
+    return {
+      approved: false,
+      overallScore: 0.74,
+      summary: "Review rejected the deck without a hard error issue.",
+      issues: [
+        {
+          code: "review_warning_1",
+          severity: "warning" as const,
+          dimension: "deck" as const,
+          message: "The deck needs another pass before publication.",
+        },
+      ],
+      repairedNarrations: [],
+    };
+  }
+}
+
+class VisualPromptOnlyReviewLLMProvider extends AcceptableMockLLMProvider {
+  override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
+    const generated = await super.generateDeck(input);
+    const firstSlide = generated.slides[0];
+
+    assert.ok(firstSlide);
+
+    return DeckSchema.parse({
+      ...generated,
+      id: "deck_single_slide_visual_prompt_review",
+      slides: [{ ...firstSlide, order: 0 }],
+    });
+  }
+
+  override async reviewPresentation() {
+    return {
+      approved: true,
+      overallScore: 0.74,
+      summary: "Visual prompts need another pass, but the deck is publishable.",
+      issues: [
+        {
+          code: "visual_prompt_quality",
+          severity: "error" as const,
+          dimension: "visual" as const,
+          message: "The generated visual prompt is too descriptive and should be rewritten later.",
+        },
+      ],
+      repairedNarrations: [],
+    };
+  }
+}
+
+class UnavailableSingleSlideReviewLLMProvider extends AcceptableMockLLMProvider {
+  override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
+    const generated = await super.generateDeck(input);
+    const firstSlide = generated.slides[0];
+
+    assert.ok(firstSlide);
+
+    return DeckSchema.parse({
+      ...generated,
+      id: "deck_single_slide_unavailable_review",
+      slides: [{ ...firstSlide, order: 0 }],
+    });
+  }
+
+  override async reviewPresentation() {
+    throw new Error("final review timed out");
+  }
+}
+
+class UnavailableBackgroundReviewLLMProvider extends TrackingPlanLLMProvider {
+  override async reviewPresentation() {
+    throw new Error("background final review timed out");
+  }
+}
+
+class FailingBackgroundNarrationLLMProvider extends TrackingPlanLLMProvider {
+  private narrationCalls = 0;
+
+  override async generateNarration(
+    input: GenerateNarrationInput,
+  ): Promise<SlideNarration> {
+    this.narrationCalls += 1;
+
+    if (this.narrationCalls > 1) {
+      throw new Error("background narration generation failed");
+    }
+
+    return super.generateNarration(input);
+  }
+}
+
+class ReviewWithIgnoredNarrationRewriteLLMProvider extends AcceptableMockLLMProvider {
   override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
     const generated = await super.generateDeck(input);
     const firstSlide = generated.slides[0];
@@ -355,18 +560,21 @@ class ThinNarrationRepairReviewLLMProvider extends AcceptableMockLLMProvider {
     return {
       approved: true,
       overallScore: 0.92,
-      summary: "LLM review suggested a narration rewrite.",
+      summary: "LLM review suggested a narration rewrite that must be ignored.",
       issues: [],
       repairedNarrations: [
         {
           slideId: "slide_single_review",
           narration:
-            "State machines describe how a system moves between clear conditions. Transitions determine what happens next.",
+            "Welcome everyone. We will start by grounding state machines in clear system conditions. State machines describe how a system moves between clear conditions. From there, transitions determine what happens next when an event arrives. In practice, this keeps the valid path visible instead of hidden in scattered branches. I will pause here because questions are welcome about states, transitions, and when the system is allowed to move.",
           segments: [
+            "Welcome everyone. We will start by grounding state machines in clear system conditions.",
             "State machines describe how a system moves between clear conditions.",
-            "Transitions determine what happens next.",
+            "From there, transitions determine what happens next when an event arrives.",
+            "In practice, this keeps the valid path visible instead of hidden in scattered branches.",
+            "I will pause here because questions are welcome about states, transitions, and when the system is allowed to move.",
           ],
-          summaryLine: "Thin repaired narration",
+          summaryLine: "Model repaired narration",
           promptsForPauses: [],
           suggestedTransition: "Continue.",
         },
@@ -430,6 +638,25 @@ class TrackingQuestionLLMProvider extends AcceptableMockLLMProvider {
   }
 }
 
+class OffTopicRejectingQuestionLLMProvider extends TrackingQuestionLLMProvider {
+  override async answerQuestion(
+    input: Parameters<MockLLMProvider["answerQuestion"]>[0],
+  ) {
+    this.answerQuestionCalls += 1;
+    this.lastAnswerQuestionInput = input;
+    return {
+      text: "Stockholm weather tomorrow is outside the current presentation context.",
+    };
+  }
+
+  override async validateQuestionAnswer() {
+    return {
+      isValid: false,
+      reason: "The proposed answer is outside the current presentation scope.",
+    };
+  }
+}
+
 class ExampleNeedQuestionLLMProvider extends TrackingQuestionLLMProvider {
   override async planConversationTurn(): Promise<ConversationTurnPlan> {
     return {
@@ -449,6 +676,12 @@ class SourceAwareQuestionLLMProvider extends TrackingQuestionLLMProvider {
   ) {
     this.answerQuestionCalls += 1;
     this.lastAnswerQuestionInput = input;
+    if (/sweden|germany|bosnia|poland|denmark/i.test(input.sourceGroundingContext ?? "")) {
+      return {
+        text: "The grounded source context lists Sweden, Germany, Bosnia and Herzegovina, Poland, and Denmark.",
+      };
+    }
+
     return {
       text:
         input.sourceGroundingContext ??
@@ -480,6 +713,18 @@ class SludgeRejectingGroundedQuestionLLMProvider extends SourceAwareQuestionLLMP
       runtimeEffects: {},
       confidence: 0.99,
       rationale: "Treat this as a grounded factual question.",
+    };
+  }
+
+  override async answerQuestion(
+    input: Parameters<MockLLMProvider["answerQuestion"]>[0],
+  ) {
+    this.answerQuestionCalls += 1;
+    this.lastAnswerQuestionInput = input;
+    return {
+      text:
+        input.sourceGroundingContext ??
+        "No grounded source context was provided for the question.",
     };
   }
 
@@ -790,6 +1035,56 @@ class BrokenTopicOnlyPremiereDeckLLMProvider extends TopicOnlyPremiereDeckLLMPro
   }
 }
 
+class FatalSemanticPremiereReviewLLMProvider extends TopicOnlyPremiereDeckLLMProvider {
+  override async reviewDeckSemantics(): Promise<DeckSemanticReviewResult> {
+    return {
+      approved: false,
+      score: 0.4,
+      summary:
+        "The semantic reviewer considers this premiere deck fatal even though the generated deck is still more specific than fallback.",
+      issues: [
+        {
+          code: "prompt_leakage",
+          severity: "error",
+          message: "The reviewer found a fatal issue in the generated deck.",
+          revisionInstruction: "Repair the affected slide instead of replacing the full deck.",
+        },
+      ],
+    };
+  }
+}
+
+class PrePublishFatalSemanticReviewLLMProvider extends AcceptableMockLLMProvider {
+  reviewCalls = 0;
+
+  override async reviewDeckSemantics(): Promise<DeckSemanticReviewResult> {
+    this.reviewCalls += 1;
+
+    if (this.reviewCalls === 1) {
+      return {
+        approved: true,
+        score: 0.96,
+        summary: "The generated candidate is acceptable during orchestration.",
+        issues: [],
+      };
+    }
+
+    return {
+      approved: false,
+      score: 0.5,
+      summary: "The final deck regressed before publish.",
+      issues: [
+        {
+          code: "repetitive_copy",
+          severity: "error",
+          message: "The deck repeats the same visible claim across slides.",
+          revisionInstruction: "Regenerate the deck instead of publishing it.",
+        },
+      ],
+    };
+  }
+}
+
 class AlwaysMetaDeckLLMProvider extends AcceptableMockLLMProvider {
   override async generateDeck(input: GenerateDeckInput): Promise<Deck> {
     return DeckSchema.parse({
@@ -851,6 +1146,25 @@ class AlwaysMetaDeckLLMProvider extends AcceptableMockLLMProvider {
       },
     });
   }
+
+  override async reviewDeckSemantics(): Promise<DeckSemanticReviewResult> {
+    return {
+      approved: false,
+      score: 0.42,
+      summary:
+        "The semantic reviewer rejected this deck because it describes presentation mechanics instead of the requested subject.",
+      issues: [
+        {
+          code: "prompt_leakage",
+          severity: "error",
+          message:
+            "The deck contains presentation-mechanics copy instead of subject content.",
+          revisionInstruction:
+            "Regenerate the deck around the requested subject rather than presentation instructions.",
+        },
+      ],
+    };
+  }
 }
 
 const createHarness = () => {
@@ -876,6 +1190,7 @@ test("question interaction answers in context and pauses the session", async () 
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -916,6 +1231,7 @@ test("general contextual questions use llm answering instead of short-circuiting
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -932,6 +1248,7 @@ test("continue resumes a paused session back to presenting", async () => {
   const created = await service.createSession({
     topic: "Vector databases",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   await service.interact(created.session.id, "stop");
   const resumed = await service.interact(created.session.id, "continue");
@@ -941,11 +1258,39 @@ test("continue resumes a paused session back to presenting", async () => {
   assert.ok(resumed.narration);
 });
 
+test("continue cannot start playback while background preparation is still pending", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const service = new PresentationSessionService(
+    new PendingBackgroundNarrationLLMProvider(),
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "Vector databases",
+  });
+
+  assert.equal(created.session.state, "preparing_presentation");
+
+  const result = await service.interact(created.session.id, "continue");
+  const storedSession = await sessionRepository.getById(created.session.id);
+
+  assert.equal(result.interruption.type, "continue");
+  assert.equal(result.session.state, "preparing_presentation");
+  assert.equal(storedSession?.state, "preparing_presentation");
+  assert.equal(result.narration, undefined);
+  assert.match(result.assistantMessage, /still being prepared/i);
+});
+
 test("back changes slide and simplify adapts pedagogical profile", async () => {
   const { service, deckRepository } = createHarness();
   const created = await service.createSession({
     topic: "RAG systems",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
   const deck = await deckRepository.getById(created.session.deckId);
 
   assert.ok(deck);
@@ -974,6 +1319,7 @@ test("freeform confusion stays conversational while adapting pedagogy", async ()
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -989,7 +1335,7 @@ test("freeform confusion stays conversational while adapting pedagogy", async ()
   assert.match(result.assistantMessage, /Short answer|State machines/i);
 });
 
-test("question fallback stays usable when llm answering fails", async () => {
+test("question answering fails closed when the llm answering path fails", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1003,6 +1349,7 @@ test("question fallback stays usable when llm answering fails", async () => {
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1011,10 +1358,89 @@ test("question fallback stays usable when llm answering fails", async () => {
 
   assert.equal(result.interruption.type, "question");
   assert.equal(result.session.state, "slide_paused");
-  assert.match(result.assistantMessage, /The main reason is|State machines|important points/i);
+  assert.equal(
+    result.assistantMessage,
+    "I do not have a reliable answer to that from the current slide or the broader presentation context.",
+  );
 });
 
-test("single-slide session creation prefers deterministic review over an overzealous llm review", async () => {
+test("semantic deck review receives scoped facts and slide briefs", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TrackingSemanticReviewLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  await service.createSession({
+    topic: "System Verification onboarding",
+    groundingFacts: [
+      {
+        id: "fact_operations_1",
+        role: "operations",
+        claim: "System Verification uses delivery teams and QA specialists to support customer projects.",
+        evidence:
+          "Delivery teams and QA specialists support customer projects through tailored quality assurance.",
+        sourceIds: ["systemverification-home"],
+        confidence: "high",
+      },
+      {
+        id: "fact_onboarding_1",
+        role: "onboarding",
+        claim: "System Verification works with quality assurance for software organizations.",
+        evidence:
+          "System Verification works with quality assurance for software organizations.",
+        sourceIds: ["systemverification-home"],
+        confidence: "high",
+      },
+      {
+        id: "fact_delivery_1",
+        role: "delivery",
+        claim: "System Verification adapts QA support to each customer project.",
+        evidence:
+          "System Verification adapts QA support to each customer project.",
+        sourceIds: ["systemverification-home"],
+        confidence: "high",
+      },
+      {
+        id: "fact_closing_1",
+        role: "closing",
+        claim: "System Verification presents quality assurance as a way to reduce software delivery risk.",
+        evidence:
+          "System Verification presents quality assurance as a way to reduce software delivery risk.",
+        sourceIds: ["systemverification-home"],
+        confidence: "high",
+      },
+    ],
+    slideBriefs: [
+      {
+        index: 1,
+        role: "operations",
+        audienceQuestion: "How does System Verification deliver QA support?",
+        requiredClaims: [
+          "System Verification uses delivery teams and QA specialists to support customer projects.",
+        ],
+        evidenceFactIds: ["fact_operations_1"],
+        forbiddenOverlap: ["generic software quality"],
+      },
+    ],
+  });
+
+  assert.equal(
+    llmProvider.lastReviewDeckSemanticsInput?.generationInput.groundingFacts?.[0]?.id,
+    "fact_operations_1",
+  );
+  assert.equal(
+    llmProvider.lastReviewDeckSemanticsInput?.generationInput.slideBriefs?.[0]?.role,
+    "operations",
+  );
+});
+
+test("single-slide session creation rejects a blocking llm review before publishing it", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1025,35 +1451,99 @@ test("single-slide session creation prefers deterministic review over an overzea
     transcriptRepository,
   );
 
-  const created = await service.createSession({
-    topic: "State machines",
-    targetSlideCount: 1,
-  });
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "State machines",
+        targetSlideCount: 1,
+      }),
+    /final quality review|deck is incoherent/i,
+  );
 
-  const savedDeck = await deckRepository.getById(created.session.deckId);
-  assert.ok(savedDeck);
-  assert.ok(savedDeck.metadata.validation);
-  assert.equal(savedDeck.metadata.validation.passed, true);
-  assert.ok(
-    (savedDeck.metadata.validation.overallScore ?? 0) >= 0.8,
-    "deterministic review score should survive an overzealous llm review",
-  );
-  assert.match(
-    savedDeck.metadata.validation.summary ?? "",
-    /Deterministic review used while completing the initial single-slide presentation/i,
-  );
-  assert.equal(
-    savedDeck.metadata.validation.issues.some((issue) => issue.code === "review_issue_1"),
-    false,
-  );
+  const savedDecks = await deckRepository.list();
+  const savedSessions = await sessionRepository.list();
+  assert.equal(savedDecks.length, 0);
+  assert.equal(savedSessions.length, 0);
 });
 
-test("review-repaired narration is revalidated before it is persisted", async () => {
+test("single-slide session creation rejects approved false review even when issues are warnings", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
   const service = new PresentationSessionService(
-    new ThinNarrationRepairReviewLLMProvider(),
+    new WarningOnlyRejectedReviewLLMProvider(),
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "State machines",
+        targetSlideCount: 1,
+      }),
+    /final quality review|Review rejected the deck/i,
+  );
+
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
+  assert.equal(transcriptRepository.turns.length, 0);
+});
+
+test("single-slide session creation accepts visual-prompt-only final review errors", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const service = new PresentationSessionService(
+    new VisualPromptOnlyReviewLLMProvider(),
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const result = await service.createSession({
+    topic: "State machines",
+    targetSlideCount: 1,
+  });
+
+  assert.equal(result.session.state, "presenting");
+  assert.equal((await deckRepository.list()).length, 1);
+  assert.equal((await sessionRepository.list()).length, 1);
+  assert.equal(transcriptRepository.turns.length, 1);
+});
+
+test("single-slide session creation rejects unavailable final llm review before publishing", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const service = new PresentationSessionService(
+    new UnavailableSingleSlideReviewLLMProvider(),
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "State machines",
+        targetSlideCount: 1,
+      }),
+    /final quality review|review unavailable|final review timed out/i,
+  );
+
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
+  assert.equal(transcriptRepository.turns.length, 0);
+});
+
+test("review-supplied narration rewrites are ignored instead of persisted", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const service = new PresentationSessionService(
+    new ReviewWithIgnoredNarrationRewriteLLMProvider(),
     deckRepository,
     sessionRepository,
     transcriptRepository,
@@ -1067,16 +1557,21 @@ test("review-repaired narration is revalidated before it is persisted", async ()
   const savedSession = await sessionRepository.getById(created.session.id);
   assert.ok(savedSession);
 
-  const repairedNarration = savedSession.narrationBySlideId["slide_single_review"];
-  assert.ok(repairedNarration);
-  assert.equal((repairedNarration?.segments.length ?? 0) >= 4, true);
-  assert.doesNotMatch(
-    repairedNarration?.narration ?? "",
-    /today i want to orient you|a practical point here is that|another thing to notice is that|this also means that/i,
+  const persistedNarration = savedSession.narrationBySlideId["slide_single_review"];
+  assert.ok(persistedNarration);
+  assert.equal((persistedNarration?.segments.length ?? 0) >= 4, true);
+  assert.match(
+    persistedNarration?.narration ?? "",
+    /We will start by grounding State machines in the first idea on this slide/i,
   );
+  assert.doesNotMatch(
+    persistedNarration?.narration ?? "",
+    /valid path visible|questions are welcome about states, transitions/i,
+  );
+  assert.notEqual(persistedNarration?.summaryLine, "Model repaired narration");
 });
 
-test("general question fallback stays anchored to the active slide instead of drifting to intro context", async () => {
+test("general question answering fails closed instead of drifting to intro context", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1090,6 +1585,7 @@ test("general question fallback stays anchored to the active slide instead of dr
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
   const deck = await deckRepository.getById(created.session.deckId);
 
   assert.ok(deck);
@@ -1104,13 +1600,9 @@ test("general question fallback stays anchored to the active slide instead of dr
   );
 
   assert.equal(result.interruption.type, "question");
-  assert.doesNotMatch(
+  assert.equal(
     result.assistantMessage,
-    /understand what .* why it matters|one concrete way/i,
-  );
-  assert.ok(
-    result.assistantMessage.trim().length > 0,
-    "the fallback answer should stay usable even when LLM answering fails",
+    "I do not have a reliable answer to that from the current slide or the broader presentation context.",
   );
 });
 
@@ -1130,6 +1622,7 @@ test("example-leaning questions route into example mode instead of generic quest
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1159,6 +1652,7 @@ test("example-leaning questions can use inferred needs even when planner keeps q
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1168,8 +1662,9 @@ test("example-leaning questions can use inferred needs even when planner keeps q
   assert.equal(result.interruption.type, "question");
   assert.equal(result.turnDecision.responseMode, "question");
   assert.deepEqual(result.turnDecision.inferredNeeds, ["example", "question"]);
-  assert.equal(llmProvider.answerQuestionCalls, 0);
-  assert.match(result.assistantMessage, /One concrete example is/i);
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.equal(llmProvider.lastAnswerQuestionInput?.answerMode, "example");
+  assert.match(result.assistantMessage, /concrete example/i);
 });
 
 test("example questions without a local example use llm example mode instead of drifting to another slide", async () => {
@@ -1188,6 +1683,7 @@ test("example questions without a local example use llm example mode instead of 
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
   const deck = await deckRepository.getById(created.session.deckId);
 
   assert.ok(deck);
@@ -1239,6 +1735,7 @@ test("broader deck context prefers relevant later slides instead of raw slide or
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
   const deck = await deckRepository.getById(created.session.deckId);
 
   assert.ok(deck);
@@ -1297,6 +1794,7 @@ test("source-backed factual questions keep an early source excerpt instead of co
   const created = await service.createSession({
     topic: "System Verification",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
   const deck = await deckRepository.getById(created.session.deckId);
 
   assert.ok(deck);
@@ -1324,7 +1822,7 @@ test("source-backed factual questions keep an early source excerpt instead of co
   );
 });
 
-test("main-point questions can be answered locally without calling the llm", async () => {
+test("main-point questions are answered through the llm path, not local slide copy", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1340,6 +1838,7 @@ test("main-point questions can be answered locally without calling the llm", asy
   const created = await service.createSession({
     topic: "State machines",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1348,11 +1847,13 @@ test("main-point questions can be answered locally without calling the llm", asy
 
   assert.equal(result.interruption.type, "question");
   assert.equal(result.session.state, "slide_paused");
-  assert.equal(llmProvider.answerQuestionCalls, 0);
+  assert.equal(llmProvider.answerQuestionCalls, 1);
   assert.equal(result.turnDecision.responseMode, "summarize_current_slide");
-  assert.equal(
-    result.assistantMessage,
-    result.deck.slides[result.session.currentSlideIndex]?.beginnerExplanation,
+  assert.match(result.assistantMessage, /Short answer to/i);
+  assert.ok(
+    result.assistantMessage.includes(
+      result.deck.slides[result.session.currentSlideIndex]?.beginnerExplanation ?? "",
+    ),
   );
 });
 
@@ -1372,6 +1873,7 @@ test("llm-backed turn planning can drive branching behavior", async () => {
   const created = await service.createSession({
     topic: "Presentation runtimes",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1382,7 +1884,7 @@ test("llm-backed turn planning can drive branching behavior", async () => {
   assert.equal(result.turnDecision.responseMode, "example");
   assert.deepEqual(result.turnDecision.inferredNeeds, ["example"]);
   assert.equal(result.session.state, "slide_paused");
-  assert.match(result.assistantMessage, /colleague|care/i);
+  assert.match(result.assistantMessage, /concrete|example|situation/i);
 });
 
 test("resume plan preserves narration point after a pause", async () => {
@@ -1390,6 +1892,7 @@ test("resume plan preserves narration point after a pause", async () => {
   const created = await service.createSession({
     topic: "Voice-first teaching runtimes",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const progressed = await service.updateNarrationProgress(
     created.session.id,
@@ -1412,6 +1915,7 @@ test("question resume advances to the next narration point after answering", asy
   const created = await service.createSession({
     topic: "Voice-first teaching runtimes",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   await service.updateNarrationProgress(
     created.session.id,
@@ -1485,6 +1989,7 @@ test("grounded questions can include source context beyond the current slide", a
     groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1500,7 +2005,7 @@ test("grounded questions can include source context beyond the current slide", a
   );
 });
 
-test("grounded questions can recover factual location context from a noisy homepage source", async () => {
+test("grounded questions fail closed instead of extracting source snippets when llm answering fails", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1520,6 +2025,7 @@ test("grounded questions can recover factual location context from a noisy homep
     groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1527,10 +2033,13 @@ test("grounded questions can recover factual location context from a noisy homep
   );
 
   assert.equal(result.turnDecision.responseMode, "grounded_factual");
-  assert.match(result.assistantMessage, /Sweden|Germany|Bosnia|Poland|Denmark/i);
+  assert.equal(
+    result.assistantMessage,
+    "I do not have a reliable answer to that from the current slide or the available source material.",
+  );
 });
 
-test("grounded question fallback can use a clear source excerpt when llm answering times out", async () => {
+test("grounded question answering fails closed when llm answering times out", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1550,15 +2059,16 @@ test("grounded question fallback can use a clear source excerpt when llm answeri
     groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
     "What countries are System Verification in?",
   );
 
-  assert.match(
+  assert.equal(
     result.assistantMessage,
-    /Sweden|Germany|Bosnia and Herzegovina|Poland|Denmark/i,
+    "I do not have a reliable answer to that from the current slide or the available source material.",
   );
 });
 
@@ -1582,6 +2092,7 @@ test("grounded factual questions fall back honestly when the llm returns a clipp
     groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1594,11 +2105,11 @@ test("grounded factual questions fall back honestly when the llm returns a clipp
   );
 });
 
-test("off-topic questions are classified as off-topic instead of forcing a deck-shaped answer", async () => {
+test("off-topic questions go through llm validation instead of a local blocker", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
-  const llmProvider = new TrackingQuestionLLMProvider();
+  const llmProvider = new OffTopicRejectingQuestionLLMProvider();
   const service = new PresentationSessionService(
     llmProvider,
     deckRepository,
@@ -1612,6 +2123,7 @@ test("off-topic questions are classified as off-topic instead of forcing a deck-
     groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1619,18 +2131,15 @@ test("off-topic questions are classified as off-topic instead of forcing a deck-
   );
 
   assert.equal(result.interruption.type, "question");
-  assert.equal(llmProvider.answerQuestionCalls, 0);
-  assert.match(
-    result.assistantMessage,
-    /does not seem to be about the current presentation/i,
-  );
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.match(result.assistantMessage, /do not have a reliable answer/i);
 });
 
-test("source-backed off-topic factual questions still stay off-topic", async () => {
+test("source-backed off-topic questions fail closed after llm validation", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
-  const llmProvider = new TrackingQuestionLLMProvider();
+  const llmProvider = new OffTopicRejectingQuestionLLMProvider();
   const service = new PresentationSessionService(
     llmProvider,
     deckRepository,
@@ -1643,17 +2152,15 @@ test("source-backed off-topic factual questions still stay off-topic", async () 
     topic: "Spongebob Squarepants first episode that was aired in 1999",
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
     "What is the weather in Stockholm tomorrow?",
   );
 
-  assert.equal(llmProvider.answerQuestionCalls, 0);
-  assert.match(
-    result.assistantMessage,
-    /does not seem to be about the current presentation/i,
-  );
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.match(result.assistantMessage, /do not have a reliable answer/i);
 });
 
 test("relevant grounded factual questions can trigger follow-up research when the initial source grounding is too weak", async () => {
@@ -1678,6 +2185,7 @@ test("relevant grounded factual questions can trigger follow-up research when th
     groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1687,7 +2195,10 @@ test("relevant grounded factual questions can trigger follow-up research when th
   assert.equal(result.turnDecision.responseMode, "grounded_factual");
   assert.ok(webResearchProvider.searchCalls >= 1);
   assert.ok(webResearchProvider.fetchCalls >= 1);
-  assert.match(result.assistantMessage, /CEO Jane Doe/i);
+  assert.equal(
+    result.assistantMessage,
+    "I do not have a reliable answer to that from the current slide or the available source material.",
+  );
 });
 
 test("creator questions can trigger follow-up research when source grounding lacks the answer", async () => {
@@ -1711,6 +2222,7 @@ test("creator questions can trigger follow-up research when source grounding lac
     groundingSourceIds: ["https://www.apple.com/iphone/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1718,37 +2230,13 @@ test("creator questions can trigger follow-up research when source grounding lac
   );
 
   assert.ok(webResearchProvider.searchCalls >= 1);
-  assert.match(result.assistantMessage, /Apple/i);
+  assert.equal(
+    result.assistantMessage,
+    "I do not have a reliable answer to that from the current slide or the available source material.",
+  );
 });
 
 test("topic-only factual questions can use deck context without source grounding", async () => {
-  const deckRepository = new InMemoryDeckRepository();
-  const sessionRepository = new InMemorySessionRepository();
-  const transcriptRepository = new InMemoryTranscriptRepository();
-  const llmProvider = new BrokenTopicOnlyPremiereDeckLLMProvider();
-  const service = new PresentationSessionService(
-    llmProvider,
-    deckRepository,
-    sessionRepository,
-    transcriptRepository,
-    new LLMConversationTurnEngine(llmProvider),
-  );
-
-  const created = await service.createSession({
-    topic: "Spongebob Squarepants first episode that was aired in 1999",
-    groundingSourceType: "mixed",
-  });
-
-  const result = await service.interact(
-    created.session.id,
-    "When did SpongeBob first premiere?",
-  );
-
-  assert.match(result.assistantMessage, /May 1, 1999|1999/i);
-  assert.doesNotMatch(result.assistantMessage, /frames the concrete case/i);
-});
-
-test("topic-only off-topic questions are not rescued by meaningless overlap", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1765,20 +2253,47 @@ test("topic-only off-topic questions are not rescued by meaningless overlap", as
     topic: "Spongebob Squarepants first episode that was aired in 1999",
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
+
+  const result = await service.interact(
+    created.session.id,
+    "When did SpongeBob first premiere?",
+  );
+
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.match(result.assistantMessage, /May 1, 1999|1999/i);
+  assert.doesNotMatch(result.assistantMessage, /frames the concrete case/i);
+});
+
+test("topic-only off-topic questions are rejected by llm validation, not local overlap", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new OffTopicRejectingQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "Spongebob Squarepants first episode that was aired in 1999",
+    groundingSourceType: "mixed",
+  });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
     "What is the weather in Stockholm tomorrow?",
   );
 
-  assert.equal(llmProvider.answerQuestionCalls, 0);
-  assert.match(
-    result.assistantMessage,
-    /does not seem to be about the current presentation/i,
-  );
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.match(result.assistantMessage, /do not have a reliable answer/i);
 });
 
-test("invalid grounded sludge answers are rejected and repaired from grounded source snippets", async () => {
+test("invalid grounded sludge answers are rejected without local snippet repair", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1798,6 +2313,7 @@ test("invalid grounded sludge answers are rejected and repaired from grounded so
     groundingSourceIds: ["https://www.systemverification.com/"],
     groundingSourceType: "mixed",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   const result = await service.interact(
     created.session.id,
@@ -1805,12 +2321,43 @@ test("invalid grounded sludge answers are rejected and repaired from grounded so
   );
 
   assert.equal(result.turnDecision.responseMode, "grounded_factual");
-  assert.match(
+  assert.equal(
     result.assistantMessage,
-    /Sweden|Germany|Bosnia and Herzegovina|Poland|Denmark/i,
+    "I do not have a reliable answer to that from the current slide or the available source material.",
   );
   assert.doesNotMatch(result.assistantMessage, /System Verification - Home/i);
   assert.doesNotMatch(result.assistantMessage, /quality assurance integrated/i);
+});
+
+test("question answer validation failures fail closed instead of accepting generic answers", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new ThrowingValidationGroundedQuestionLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+    new LLMConversationTurnEngine(llmProvider),
+  );
+
+  const created = await service.createSession({
+    topic: "System Verification",
+  });
+  await service.waitForBackgroundEnrichment(created.session.id);
+
+  const result = await service.interact(
+    created.session.id,
+    "Who is the CEO of System Verification?",
+  );
+
+  assert.equal(llmProvider.answerQuestionCalls, 1);
+  assert.equal(
+    result.assistantMessage,
+    "I do not have a reliable answer to that from the current slide or the available source material.",
+  );
+  assert.doesNotMatch(result.assistantMessage, /improve reliability/i);
 });
 
 test("restart-style explanations reset narration progress to the start", async () => {
@@ -1818,6 +2365,7 @@ test("restart-style explanations reset narration progress to the start", async (
   const created = await service.createSession({
     topic: "Adaptive tutoring",
   });
+  await service.waitForBackgroundEnrichment(created.session.id);
 
   await service.updateNarrationProgress(
     created.session.id,
@@ -1868,6 +2416,7 @@ test("session creation plans first and gives the intro narration multiple beats"
   const deck = await deckRepository.getById(created.session.deckId);
 
   assert.equal(llmProvider.planCalls, 1);
+  assert.equal(created.session.state, "preparing_presentation");
   assert.ok(deck);
   assert.equal(created.narrations.length, 1);
   assert.ok(created.narrations[0]);
@@ -1888,9 +2437,106 @@ test("session creation plans first and gives the intro narration multiple beats"
   assert.equal(finalizedDeck.metadata.generation?.narrationReadySlides, finalizedDeck.slides.length);
   assert.ok(finalizedDeck.metadata.evaluation);
   assert.ok(finalizedSession);
+  assert.equal(finalizedSession.state, "presenting");
   assert.equal(
     Object.keys(finalizedSession.narrationBySlideId).length,
     finalizedDeck.slides.length,
+  );
+});
+
+test("session creation can skip background enrichment for deck-only evaluation", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new TrackingPlanLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "Interactive AI teachers",
+    targetSlideCount: 1,
+    skipBackgroundEnrichment: true,
+  });
+  await service.waitForBackgroundEnrichment(created.session.id);
+
+  const deck = await deckRepository.getById(created.session.deckId);
+  const session = await sessionRepository.getById(created.session.id);
+
+  assert.equal(created.session.state, "presenting");
+  assert.ok(deck);
+  assert.equal(deck.metadata.generation?.narrationReadySlides, 1);
+  assert.equal(deck.metadata.generation?.backgroundEnrichmentPending, false);
+  assert.ok(session);
+  assert.equal(Object.keys(session.narrationBySlideId).length, 1);
+});
+
+test("background final review unavailability marks the published session as error", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new UnavailableBackgroundReviewLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "Interactive AI teachers",
+  });
+  assert.equal(created.session.state, "preparing_presentation");
+
+  await service.waitForBackgroundEnrichment(created.session.id);
+
+  const finalizedDeck = await deckRepository.getById(created.session.deckId);
+  const finalizedSession = await sessionRepository.getById(created.session.id);
+
+  assert.ok(finalizedDeck);
+  assert.equal(finalizedSession?.state, "error");
+  assert.equal(finalizedDeck.metadata.generation?.backgroundEnrichmentPending, false);
+  assert.match(
+    finalizedDeck.metadata.validation?.issues.map((issue) => issue.message).join(" ") ?? "",
+    /background final review timed out/i,
+  );
+});
+
+test("background narration failure keeps incomplete sessions out of presenting", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new FailingBackgroundNarrationLLMProvider();
+  const service = new PresentationSessionService(
+    llmProvider,
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  const created = await service.createSession({
+    topic: "Interactive AI teachers",
+  });
+  assert.equal(created.session.state, "preparing_presentation");
+
+  await service.waitForBackgroundEnrichment(created.session.id);
+
+  const finalizedDeck = await deckRepository.getById(created.session.deckId);
+  const finalizedSession = await sessionRepository.getById(created.session.id);
+
+  assert.ok(finalizedDeck);
+  assert.equal(finalizedSession?.state, "error");
+  assert.equal(finalizedDeck.metadata.generation?.backgroundEnrichmentPending, false);
+  assert.ok(
+    (finalizedDeck.metadata.generation?.narrationReadySlides ?? 0) <
+      finalizedDeck.slides.length,
+  );
+  assert.match(
+    finalizedDeck.metadata.validation?.issues.map((issue) => issue.message).join(" ") ?? "",
+    /background narration generation did not complete/i,
   );
 });
 
@@ -1930,7 +2576,7 @@ test("background enrichment does not replace already published intro narration",
   );
 });
 
-test("intro narration repair keeps the next-slide transition when the deck has more slides", async () => {
+test("session creation rejects broken intro narration instead of repairing it locally", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1942,28 +2588,16 @@ test("intro narration repair keeps the next-slide transition when the deck has m
     transcriptRepository,
   );
 
-  const created = await service.createSession({
-    topic: "System Verification",
-  });
-  const deck = await deckRepository.getById(created.session.deckId);
-
-  assert.ok(deck);
-  const secondSlide = deck?.slides[1];
-  assert.ok(secondSlide);
-  assert.ok(created.narrations[0]);
-  assert.doesNotMatch(
-    created.narrations[0]?.narration ?? "",
-    /clear close/i,
-  );
-  assert.equal((created.narrations[0]?.segments.length ?? 0) >= 4, true);
-  assert.match(created.narrations[0]?.segments[0] ?? "", /^Welcome everyone\./);
-  assert.match(
-    created.narrations[0]?.suggestedTransition ?? "",
-    new RegExp(secondSlide?.title ?? "", "i"),
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "System Verification",
+      }),
+    /narration_intro_missing|presenter introduction/i,
   );
 });
 
-test("session creation falls back when llm generation produces no usable deck", async () => {
+test("session creation rejects when llm planning or generation produces no usable deck", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -1975,27 +2609,77 @@ test("session creation falls back when llm generation produces no usable deck", 
     transcriptRepository,
   );
 
-  const created = await service.createSession({
-    topic: "Jivr onboarding",
-    groundingSummary:
-      "Jivr is a tool created by Per Hjalhdal. It is used to support onboarding and structured team knowledge sharing.",
-    groundingSourceIds: ["https://jivr.com"],
-    groundingSourceType: "mixed",
-    targetSlideCount: 4,
-  });
-  const deck = await deckRepository.getById(created.session.deckId);
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "Jivr onboarding",
+        groundingSummary:
+          "Jivr is a tool created by Per Hjalhdal. It is used to support onboarding and structured team knowledge sharing.",
+        groundingSourceIds: ["https://jivr.com"],
+        groundingSourceType: "mixed",
+        targetSlideCount: 4,
+      }),
+    /empty response/i,
+  );
 
-  assert.ok(deck);
-  assert.match(deck?.title ?? "", /Jivr onboarding/i);
-  assert.equal((await deckRepository.list()).length, 1);
-  assert.equal((await sessionRepository.list()).length, 1);
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
 });
 
-test("session creation retries weak deck drafts before relying on repair", async () => {
+test("session creation rejects fatal semantic review without publishing a replacement deck", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
-  const llmProvider = new RetryingDeckLLMProvider();
+  const service = new PresentationSessionService(
+    new FatalSemanticPremiereReviewLLMProvider(),
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "Spongebob Squarepants first episode that was aired in 1999",
+        targetSlideCount: 4,
+      }),
+    /quality gate|fatal issue/i,
+  );
+
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
+});
+
+test("session creation rejects pre-publish deck review before saving a visible session", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const service = new PresentationSessionService(
+    new PrePublishFatalSemanticReviewLLMProvider(),
+    deckRepository,
+    sessionRepository,
+    transcriptRepository,
+  );
+
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "Interactive AI teachers",
+        targetSlideCount: 4,
+      }),
+    /pre-publish deck review|repeats the same visible claim/i,
+  );
+
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
+  assert.equal(transcriptRepository.turns.length, 0);
+});
+
+test("session creation retries a failed deck generation pass before failing or saving", async () => {
+  const deckRepository = new InMemoryDeckRepository();
+  const sessionRepository = new InMemorySessionRepository();
+  const transcriptRepository = new InMemoryTranscriptRepository();
+  const llmProvider = new WeakDeckLLMProvider();
   const service = new PresentationSessionService(
     llmProvider,
     deckRepository,
@@ -2015,25 +2699,15 @@ test("session creation retries weak deck drafts before relying on repair", async
 
   const deck = await deckRepository.getById(created.session.deckId);
 
-  assert.ok(llmProvider.deckCalls >= 2);
-  assert.match(
-    llmProvider.revisionGuidances[1] ?? "",
-    /audience-facing|opening slide|instructional bullet points/i,
-  );
+  assert.equal(llmProvider.deckCalls, 2);
   assert.ok(deck);
-  assert.equal(deck?.title, "Welcome to System Verification");
   assert.doesNotMatch(
     deck?.slides.map((slide) => slide.keyPoints.join(" ")).join(" ") ?? "",
     /walk through|direct new hires|avoid clutter|internal portal/i,
   );
-  assert.ok(
-    !(deck?.metadata.validation?.issues ?? []).some(
-      (issue) => issue.code === "deck_wide_meta_presentation_repaired",
-    ),
-  );
 });
 
-test("session creation falls back from repair-heavy meta decks even when the LLM returns structured JSON", async () => {
+test("session creation rejects semantic-review failures instead of relying on local text guards", async () => {
   const deckRepository = new InMemoryDeckRepository();
   const sessionRepository = new InMemorySessionRepository();
   const transcriptRepository = new InMemoryTranscriptRepository();
@@ -2044,22 +2718,20 @@ test("session creation falls back from repair-heavy meta decks even when the LLM
     transcriptRepository,
   );
 
-  const created = await service.createSession({
-    topic: "System Verification",
-    presentationBrief: "Create an onboarding presentation about our company.",
-    groundingSummary:
-      "System Verification provides quality management, QA operations, and delivery support for complex engineering teams.",
-    groundingSourceIds: ["https://www.systemverification.com/"],
-    groundingSourceType: "mixed",
-    targetSlideCount: 2,
-  });
-  const deck = await deckRepository.getById(created.session.deckId);
-
-  assert.ok(deck);
-  assert.equal((await deckRepository.list()).length, 1);
-  assert.equal((await sessionRepository.list()).length, 1);
-  assert.doesNotMatch(
-    deck?.slides.map((slide) => slide.keyPoints.join(" ")).join(" ") ?? "",
-    /walk through|direct the audience|avoid clutter|presentation should be delivered/i,
+  await assert.rejects(
+    () =>
+      service.createSession({
+        topic: "System Verification",
+        presentationBrief: "Create an onboarding presentation about our company.",
+        groundingSummary:
+          "System Verification provides quality management, QA operations, and delivery support for complex engineering teams.",
+        groundingSourceIds: ["https://www.systemverification.com/"],
+        groundingSourceType: "mixed",
+        targetSlideCount: 2,
+      }),
+    /quality gate|semantic reviewer|prompt_leakage/i,
   );
+
+  assert.equal((await deckRepository.list()).length, 0);
+  assert.equal((await sessionRepository.list()).length, 0);
 });

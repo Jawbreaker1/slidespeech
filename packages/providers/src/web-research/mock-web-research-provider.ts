@@ -14,7 +14,7 @@ export class MockWebResearchProvider implements WebResearchProvider {
       {
         title: `Mock result for ${query}`,
         url: "https://example.com/mock",
-        snippet: "Phase 1 uses a mock web research provider.",
+        snippet: "Test-only mock web research result.",
       },
     ];
   }
@@ -23,7 +23,7 @@ export class MockWebResearchProvider implements WebResearchProvider {
     return {
       url,
       title: "Mock fetched page",
-      content: "This is a mocked fetch response.",
+      content: "This is a test-only mocked fetch response.",
     };
   }
 
@@ -31,4 +31,3 @@ export class MockWebResearchProvider implements WebResearchProvider {
     return `Mock summary for query "${input.query}".`;
   }
 }
-

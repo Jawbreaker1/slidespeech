@@ -1,4 +1,5 @@
 import { decodeHtmlEntities } from "../shared";
+import { parseTaggedStringArray } from "./structured-normalization";
 
 export type StructuredOutputChoice = {
   message?:
@@ -78,6 +79,11 @@ export const parseLooseStructuredValue = (value: string): unknown => {
     }
   }
 
+  const taggedArray = parseTaggedStringArray(trimmed);
+  if (taggedArray) {
+    return taggedArray;
+  }
+
   if (/^(?:true|false)$/i.test(trimmed)) {
     return trimmed.toLowerCase() === "true";
   }
@@ -108,7 +114,7 @@ export const parseLmStudioTaggedToolCall = (
   const parameters = new Map<string, unknown>();
 
   for (const match of body.matchAll(
-    /<parameter=([a-zA-Z0-9_]+)>\s*([\s\S]*?)\s*<\/parameter>/g,
+    /<parameter=([a-zA-Z0-9_]+)>\s*([\s\S]*?)\s*<\/parameter(?:=\1)?>/g,
   )) {
     const key = match[1]?.trim();
     const value = match[2] ?? "";

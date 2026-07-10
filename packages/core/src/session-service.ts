@@ -3,14 +3,12 @@ import type {
   ConversationTurnEngine,
   DeckRepository,
   Deck,
-  GenerateDeckInput,
   GroundingFact,
   LLMProvider,
   PedagogicalProfile,
   PresentationTheme,
   PresentationIntent,
   PresentationPlan,
-  PresentationReview,
   ResumePlan,
   ResumePlanner,
   Session,
@@ -25,11 +23,7 @@ import type {
 } from "@slidespeech/types";
 
 import { DEFAULT_PEDAGOGICAL_PROFILE } from "./defaults";
-import {
-  buildDeterministicDeck,
-  buildDeterministicNarration,
-  buildDeterministicPresentationPlan,
-} from "./deterministic-generation";
+import { generatePresentationDeck } from "./generation/generation-orchestrator";
 import { RuleBasedConversationTurnEngine } from "./conversation-turn-engine";
 import {
   NarrationEngine,
@@ -39,34 +33,32 @@ import {
 import { QuestionAnswerService } from "./question-answer-service";
 import { SimpleResumePlanner } from "./resume-planner";
 import {
-  buildDeckRevisionGuidance,
-  buildDeckSemanticReviewAssessment,
   ensureDeckTheme,
   ensureNarrationSegments,
-  evaluateDeckCandidateForRetry,
-  MAX_DECK_GENERATION_ATTEMPTS,
-  mergeDeckCandidateAssessments,
-  tryAcceptDeckAfterLocalRepair,
   type BackgroundEnrichmentInput,
-  type DeckCandidateAssessment,
-  type ValidationIssue,
 } from "./session-deck-quality";
+import type { ValidationIssue } from "./session-deck-quality";
 import {
-  applyLocalNarrationRepairsFromReview,
-  buildDeterministicPresentationReview,
+  formatBlockingDeckValidationIssues,
+  formatBlockingReviewIssues,
+  isBlockingDeckValidationIssue,
+  reviewDeckBeforePublishing,
+  reviewHasBlockingDeckIssues,
+  reviewPresentationWithLocalBaseline,
+  validateReviewedNarrationsForPublication,
+} from "./session-publication-review";
+import {
   buildGenerationStatus,
   countReadySlides,
   finalizeDeckMetadata,
   mergeNewNarrationsPreservingExisting,
-  mergeReviewedNarrations,
   mergeValidationMetadata,
-  shouldPreferDeterministicReview,
 } from "./session-review-helpers";
 import { transitionSessionState } from "./state-machine";
 import { createId, nowIso } from "./utils";
 import {
-  validateAndRepairDeck,
-  validateAndRepairNarrations,
+  validateDeck,
+  validateNarrations,
 } from "./validation";
 
 export interface CreatePresentationSessionInput {
@@ -85,6 +77,7 @@ export interface CreatePresentationSessionInput {
   targetDurationMinutes?: number | undefined;
   targetSlideCount?: number | undefined;
   theme?: PresentationTheme | undefined;
+  skipBackgroundEnrichment?: boolean | undefined;
 }
 
 export interface CreatePresentationSessionResult {
@@ -148,188 +141,35 @@ export class PresentationSessionService {
       ...input.pedagogicalProfile,
     };
 
-    let plan: PresentationPlan;
-    try {
-      plan = await this.planner.plan(
-        input.topic,
-        input.presentationBrief,
-        input.intent,
-        pedagogicalProfile,
-        input.groundingSummary,
-        input.groundingHighlights,
-        input.groundingExcerpts,
-        input.groundingCoverageGoals,
-        input.targetDurationMinutes,
-        input.targetSlideCount,
-      );
-    } catch (error) {
-      console.warn(
-        `[slidespeech] presentation plan fallback for topic "${input.topic}": ${(error as Error).message}`,
-      );
-      plan = buildDeterministicPresentationPlan({
-        topic: input.topic,
-        ...(input.presentationBrief
-          ? { presentationBrief: input.presentationBrief }
-          : {}),
-        ...(input.intent ? { intent: input.intent } : {}),
-        audienceLevel: pedagogicalProfile.audienceLevel,
-        ...(input.targetSlideCount ? { targetSlideCount: input.targetSlideCount } : {}),
-      });
-    }
-
-    const generationInput = {
-      topic: input.topic,
-      ...(input.presentationBrief
-        ? { presentationBrief: input.presentationBrief }
-        : {}),
-      ...(input.intent ? { intent: input.intent } : {}),
-      plan,
+    const plan = await this.planner.plan(
+      input.topic,
+      input.presentationBrief,
+      input.intent,
       pedagogicalProfile,
-      ...(input.groundingSummary
-        ? { groundingSummary: input.groundingSummary }
-        : {}),
-      ...(input.groundingHighlights?.length
-        ? { groundingHighlights: input.groundingHighlights }
-        : {}),
-      ...(input.groundingExcerpts?.length
-        ? { groundingExcerpts: input.groundingExcerpts }
-        : {}),
-      ...(input.groundingCoverageGoals?.length
-        ? { groundingCoverageGoals: input.groundingCoverageGoals }
-        : {}),
-      ...(input.groundingSourceIds
-        ? { groundingSourceIds: input.groundingSourceIds }
-        : {}),
-      ...(input.groundingFacts?.length
-        ? { groundingFacts: input.groundingFacts }
-        : {}),
-      ...(input.slideBriefs?.length ? { slideBriefs: input.slideBriefs } : {}),
-      ...(input.groundingSourceType
-        ? { groundingSourceType: input.groundingSourceType }
-        : {}),
-      ...(input.targetDurationMinutes
-        ? { targetDurationMinutes: input.targetDurationMinutes }
-        : {}),
-      ...(input.targetSlideCount
-        ? { targetSlideCount: input.targetSlideCount }
-        : {}),
-    };
+      input.groundingSummary,
+      input.groundingHighlights,
+      input.groundingExcerpts,
+      input.groundingCoverageGoals,
+      input.targetDurationMinutes,
+      input.targetSlideCount,
+      input.groundingFacts,
+    );
 
-    let generatedDeck: Deck | undefined;
-    let usedDeterministicDeckFallback = false;
-    let bestGeneratedDeck: Deck | null = null;
-    let bestDeckAssessment: DeckCandidateAssessment | null = null;
-    let lastGenerationError: Error | null = null;
-    let deckGenerationAttemptCount = 0;
+    const deckGeneration = await generatePresentationDeck({
+      planner: this.planner,
+      qualityReviewer: this.qualityReviewer,
+      request: input,
+      pedagogicalProfile,
+      plan,
+    });
 
-    for (
-      let attemptIndex = 0;
-      attemptIndex < MAX_DECK_GENERATION_ATTEMPTS;
-      attemptIndex += 1
-    ) {
-      deckGenerationAttemptCount += 1;
-      const deckAttemptInput =
-        attemptIndex === 0
-          ? generationInput
-          : {
-              ...generationInput,
-              revisionGuidance: buildDeckRevisionGuidance(
-                input.topic,
-                bestDeckAssessment ?? {
-                  retryable: true,
-                  fatal: false,
-                  score: 1,
-                  reasons: [
-                    "The previous draft was not concrete or audience-facing enough.",
-                  ],
-                  revisionNotes: [],
-                  failingCoreChecks: [],
-                },
-                generationInput.intent,
-              ),
-            };
-
-      try {
-        const candidateDeck = await this.planner.generateDeck(deckAttemptInput);
-        const locallyAcceptedDeck = tryAcceptDeckAfterLocalRepair(candidateDeck);
-        const deckForAssessment = locallyAcceptedDeck ?? candidateDeck;
-
-        const deterministicAssessment = evaluateDeckCandidateForRetry(
-          deckForAssessment,
-          input.intent,
-        );
-        const semanticAssessment = await this.reviewDeckSemanticsForRetry({
-          deck: deckForAssessment,
-          generationInput: deckAttemptInput,
-          pedagogicalProfile,
-          topic: input.topic,
-          shouldReview:
-            Boolean(locallyAcceptedDeck) ||
-            !deterministicAssessment.retryable ||
-            attemptIndex === MAX_DECK_GENERATION_ATTEMPTS - 1,
-        });
-        const candidateAssessment = semanticAssessment
-          ? mergeDeckCandidateAssessments(
-              deterministicAssessment,
-              semanticAssessment,
-            )
-          : deterministicAssessment;
-
-        if (
-          !bestGeneratedDeck ||
-          !bestDeckAssessment ||
-          candidateAssessment.score < bestDeckAssessment.score
-        ) {
-          bestGeneratedDeck = deckForAssessment;
-          bestDeckAssessment = candidateAssessment;
-        }
-
-        if (!candidateAssessment.retryable) {
-          generatedDeck = deckForAssessment;
-          break;
-        }
-
-        console.warn(
-          `[slidespeech] generated deck attempt ${attemptIndex + 1} for topic "${input.topic}" still needs repair-heavy cleanup: ${candidateAssessment.reasons.join(" | ")}${
-            candidateAssessment.failingCoreChecks.length > 0
-              ? ` | failing checks: ${candidateAssessment.failingCoreChecks.join(", ")}`
-              : ""
-          }`,
-        );
-      } catch (error) {
-        lastGenerationError = error as Error;
-        console.warn(
-          `[slidespeech] deck generation attempt ${attemptIndex + 1} failed for topic "${input.topic}": ${(error as Error).message}`,
-        );
-      }
-    }
-
-    if (!bestGeneratedDeck) {
-      console.warn(
-        `[slidespeech] no usable LLM-generated deck was produced for "${input.topic}" after ${deckGenerationAttemptCount} attempt(s); using deterministic fallback.${
-          lastGenerationError ? ` Last error: ${lastGenerationError.message}` : ""
-        }`,
+    const deckValidation = validateDeck(deckGeneration.deck);
+    if (deckValidation.issues.some(isBlockingDeckValidationIssue)) {
+      throw new Error(
+        `Presentation generation failed deck validation for "${input.topic}": ${formatBlockingDeckValidationIssues(deckValidation.issues)}`,
       );
-      generatedDeck = buildDeterministicDeck(generationInput);
-      usedDeterministicDeckFallback = true;
-    } else if (!generatedDeck) {
-      if (bestDeckAssessment?.fatal) {
-        console.warn(
-          `[slidespeech] best LLM-generated deck for "${input.topic}" still had fatal quality issues; using deterministic fallback: ${bestDeckAssessment.reasons.join(" | ")}`,
-        );
-        generatedDeck = buildDeterministicDeck(generationInput);
-        usedDeterministicDeckFallback = true;
-      } else if (bestDeckAssessment?.retryable) {
-        console.warn(
-          `[slidespeech] using best available LLM-generated deck for "${input.topic}" after retries: ${bestDeckAssessment.reasons.join(" | ")}`,
-        );
-        generatedDeck = bestGeneratedDeck;
-      } else {
-        generatedDeck = bestGeneratedDeck;
-      }
     }
 
-    const deckValidation = validateAndRepairDeck(generatedDeck);
     let deck = ensureDeckTheme({
       ...deckValidation.value,
       metadata: {
@@ -337,51 +177,67 @@ export class PresentationSessionService {
         generation: {
           narrationReadySlides: 0,
           totalSlides: deckValidation.value.slides.length,
-          backgroundEnrichmentPending: deckValidation.value.slides.length > 1,
+          backgroundEnrichmentPending:
+            !input.skipBackgroundEnrichment && deckValidation.value.slides.length > 1,
         },
       },
     }, input.theme);
+
+    await reviewDeckBeforePublishing({
+      qualityReviewer: this.qualityReviewer,
+      deck,
+      generationInput: deckGeneration.generationInput,
+      pedagogicalProfile,
+      topic: input.topic,
+    });
 
     const introSlide = deck.slides[0];
     const initialNarrations: SlideNarration[] = [];
 
     if (introSlide) {
-      if (usedDeterministicDeckFallback) {
+      try {
         initialNarrations.push(
-          buildDeterministicNarration({
+          await this.narrationEngine.generateNarration({
             deck,
             slide: introSlide,
             pedagogicalProfile,
           }),
         );
-      } else {
-        try {
-          initialNarrations.push(
-            await this.narrationEngine.generateNarration({
-              deck,
-              slide: introSlide,
-              pedagogicalProfile,
-            }),
-          );
-        } catch (error) {
-          console.warn(
-            `[slidespeech] intro narration fallback for slide "${introSlide.title}": ${(error as Error).message}`,
-          );
-        }
+      } catch (error) {
+        console.warn(
+          `[slidespeech] intro narration generation failed for slide "${introSlide.title}": ${(error as Error).message}`,
+        );
       }
     }
 
     const introNarrationValidation =
       introSlide && initialNarrations[0]
-        ? validateAndRepairNarrations(
+        ? validateNarrations(
             deck,
             initialNarrations,
+            { generateMissing: false },
           )
         : null;
     const introNarration = introNarrationValidation?.value[0]
       ? ensureNarrationSegments(introNarrationValidation.value[0])
       : undefined;
     const introNarrationIssues = introNarrationValidation?.issues ?? [];
+
+    if (introNarrationIssues.some(isBlockingDeckValidationIssue)) {
+      throw new Error(
+        `Presentation generation failed opening narration validation for "${input.topic}": ${formatBlockingDeckValidationIssues(introNarrationIssues)}`,
+      );
+    }
+
+    const backgroundEnrichmentPending =
+      !input.skipBackgroundEnrichment &&
+      deck.slides.length > (introNarration ? 1 : 0);
+
+    if (!introNarration && !backgroundEnrichmentPending && deck.slides.length > 0) {
+      throw new Error(
+        `Presentation generation failed narration validation for "${input.topic}": opening narration was not generated.`,
+      );
+    }
 
     deck = {
       ...deck,
@@ -391,21 +247,68 @@ export class PresentationSessionService {
         generation: buildGenerationStatus(
           deck,
           introNarration ? 1 : 0,
-          deck.slides.length > (introNarration ? 1 : 0),
+          backgroundEnrichmentPending,
         ),
       },
     };
 
+    let narrationsToPersist = introNarration ? [introNarration] : [];
+
+    if (
+      introNarration &&
+      (input.skipBackgroundEnrichment || deck.slides.length <= 1)
+    ) {
+      const review = await reviewPresentationWithLocalBaseline({
+        qualityReviewer: this.qualityReviewer,
+        deck,
+        narrations: [introNarration],
+        pedagogicalProfile,
+        validationIssues: introNarrationIssues,
+        baselineNote:
+          "Local review baseline used while completing the initial synchronous presentation.",
+        topic: input.topic,
+      });
+
+      if (reviewHasBlockingDeckIssues(review)) {
+        throw new Error(
+          `Presentation generation failed final quality review for "${input.topic}": ${formatBlockingReviewIssues(review)}`,
+        );
+      }
+
+      const reviewedNarrations = validateReviewedNarrationsForPublication({
+        deck,
+        narrations: [introNarration],
+        review,
+      });
+
+      if (reviewedNarrations.issues.some(isBlockingDeckValidationIssue)) {
+        throw new Error(
+          `Presentation generation failed narration validation for "${input.topic}": ${formatBlockingDeckValidationIssues(reviewedNarrations.issues)}`,
+        );
+      }
+
+      narrationsToPersist = reviewedNarrations.narrations;
+      deck = finalizeDeckMetadata(
+        deck,
+        narrationsToPersist,
+        review,
+        [
+          ...introNarrationIssues,
+          ...reviewedNarrations.issues,
+        ],
+      );
+    }
+
     await this.deckRepository.save(deck);
 
     const narrationBySlideId = Object.fromEntries(
-      (introNarration ? [introNarration] : []).map((narration) => [narration.slideId, narration]),
+      narrationsToPersist.map((narration) => [narration.slideId, narration]),
     );
 
     const session: Session = {
       id: createId("session"),
       deckId: deck.id,
-      state: "presenting",
+      state: backgroundEnrichmentPending ? "preparing_presentation" : "presenting",
       currentSlideId: deck.slides[0]?.id,
       currentSlideIndex: 0,
       currentNarrationIndex: 0,
@@ -437,65 +340,22 @@ export class PresentationSessionService {
     };
 
     await this.sessionRepository.save(persistedSession);
+    let finalSession = persistedSession;
 
-    if (deck.slides.length > 1) {
+    if (backgroundEnrichmentPending) {
       this.startBackgroundEnrichment({
         deck,
         sessionId: persistedSession.id,
+        generationInput: deckGeneration.generationInput,
         pedagogicalProfile,
-        initialNarrations: introNarration ? [introNarration] : [],
+        initialNarrations: narrationsToPersist,
         topic: input.topic,
-      });
-    } else if (introNarration) {
-      const review = await this.reviewPresentationWithFallback({
-        deck,
-        narrations: [introNarration],
-        pedagogicalProfile,
-        validationIssues: introNarrationIssues,
-        fallbackNote:
-          "Deterministic review used while completing the initial single-slide presentation.",
-        topic: input.topic,
-      });
-
-      const finalNarrations = mergeReviewedNarrations(
-        [introNarration],
-        review.repairedNarrations,
-      );
-      const reviewedNarrationValidation = validateAndRepairNarrations(
-        deck,
-        finalNarrations,
-        { generateMissing: false },
-      );
-      const locallyRepairedNarrations = applyLocalNarrationRepairsFromReview(
-        deck,
-        reviewedNarrationValidation.value,
-        review,
-      );
-      const finalizedDeck = finalizeDeckMetadata(
-        deck,
-        locallyRepairedNarrations.narrations,
-        review,
-        [
-          ...introNarrationIssues,
-          ...reviewedNarrationValidation.issues,
-          ...locallyRepairedNarrations.issues,
-        ],
-      );
-      await this.deckRepository.save(finalizedDeck);
-
-      await this.sessionRepository.save({
-        ...persistedSession,
-        narrationBySlideId: mergeNewNarrationsPreservingExisting(
-          persistedSession.narrationBySlideId,
-          locallyRepairedNarrations.narrations,
-        ),
-        updatedAt: nowIso(),
       });
     }
 
     return {
-      session: persistedSession,
-      narrations: introNarration ? [introNarration] : [],
+      session: finalSession,
+      narrations: narrationsToPersist,
     };
   }
 
@@ -691,6 +551,12 @@ export class PresentationSessionService {
         break;
       }
       case "ack_resume": {
+        if (session.state === "preparing_presentation") {
+          assistantMessage =
+            "Presentation is still being prepared. Playback will be available after narration and final review complete.";
+          break;
+        }
+
         session = this.resumeSession(session);
         narration = await this.getOrGenerateNarration(session.id, activeSlide.id);
         assistantMessage =
@@ -752,7 +618,6 @@ export class PresentationSessionService {
           deck,
           activeSlide,
           session,
-          text,
         );
         session = this.transitionIfPossible(
           session,
@@ -909,7 +774,7 @@ export class PresentationSessionService {
           );
         } catch (error) {
           console.warn(
-            `[slidespeech] background narration fallback for slide "${slide.title}": ${(error as Error).message}`,
+            `[slidespeech] background narration generation failed for slide "${slide.title}": ${(error as Error).message}`,
           );
         }
       }
@@ -918,55 +783,157 @@ export class PresentationSessionService {
         .map((slide) => narrationBySlideId.get(slide.id))
         .filter((narration): narration is SlideNarration => Boolean(narration))
         .map((narration) => ensureNarrationSegments(narration));
-      const narrationValidation = validateAndRepairNarrations(
+      const missingNarrationSlides = latestDeck.slides.filter(
+        (slide) => !narrationBySlideId.has(slide.id),
+      );
+      if (missingNarrationSlides.length > 0) {
+        const issue: ValidationIssue = {
+          code: "narration_missing",
+          message: `Background narration generation did not complete for ${missingNarrationSlides.length} slide(s): ${missingNarrationSlides.map((slide) => slide.title).join("; ")}`,
+          severity: "error",
+        };
+        const failedDeck: Deck = {
+          ...latestDeck,
+          updatedAt: nowIso(),
+          metadata: {
+            ...latestDeck.metadata,
+            validation: mergeValidationMetadata(
+              latestDeck,
+              [issue],
+              "Background narration generation did not complete.",
+              0,
+            ),
+            generation: buildGenerationStatus(
+              latestDeck,
+              combinedNarrations.length,
+              false,
+              nowIso(),
+            ),
+          },
+        };
+        await this.deckRepository.save(failedDeck);
+
+        const refreshedSession =
+          (await this.sessionRepository.getById(input.sessionId)) ?? latestSession;
+        await this.sessionRepository.save({
+          ...refreshedSession,
+          state: "error",
+          errorMessage: issue.message,
+          narrationBySlideId: mergeNewNarrationsPreservingExisting(
+            refreshedSession.narrationBySlideId,
+            combinedNarrations,
+          ),
+          updatedAt: nowIso(),
+        });
+        return;
+      }
+      const narrationValidation = validateNarrations(
         latestDeck,
         combinedNarrations,
         { generateMissing: false },
       );
 
-      const review = await this.reviewPresentationWithFallback({
+      const review = await reviewPresentationWithLocalBaseline({
+        qualityReviewer: this.qualityReviewer,
         deck: latestDeck,
         narrations: narrationValidation.value,
         pedagogicalProfile: input.pedagogicalProfile,
         validationIssues: narrationValidation.issues,
-        fallbackNote:
-          "Deterministic quality review used because the LLM review step was unavailable or overruled.",
+        baselineNote:
+          "Local review baseline used because the LLM review step was unavailable.",
         topic: input.topic,
       });
+      if (reviewHasBlockingDeckIssues(review)) {
+        console.warn(
+          `[slidespeech] final background review rejected generated deck for "${input.topic}"; marking session as failed.`,
+        );
+        const failedDeck = finalizeDeckMetadata(
+          latestDeck,
+          narrationValidation.value,
+          review,
+          narrationValidation.issues,
+        );
+        await this.deckRepository.save(failedDeck);
 
-      const finalNarrations = mergeReviewedNarrations(
-        narrationValidation.value,
-        review.repairedNarrations,
-      );
-      const reviewedNarrationValidation = validateAndRepairNarrations(
-        latestDeck,
-        finalNarrations,
-        { generateMissing: false },
-      );
-      const locallyRepairedNarrations = applyLocalNarrationRepairsFromReview(
-        latestDeck,
-        reviewedNarrationValidation.value,
+        const refreshedSession =
+          (await this.sessionRepository.getById(input.sessionId)) ?? latestSession;
+        await this.sessionRepository.save({
+          ...refreshedSession,
+          state: "error",
+          errorMessage: formatBlockingReviewIssues(review),
+          narrationBySlideId: mergeNewNarrationsPreservingExisting(
+            refreshedSession.narrationBySlideId,
+            narrationValidation.value,
+          ),
+          updatedAt: nowIso(),
+        });
+        return;
+      }
+
+      const reviewedNarrations = validateReviewedNarrationsForPublication({
+        deck: latestDeck,
+        narrations: narrationValidation.value,
         review,
-      );
+        priorValidationIssues: narrationValidation.issues,
+      });
+
+      if (reviewedNarrations.issues.some(isBlockingDeckValidationIssue)) {
+        const message = formatBlockingDeckValidationIssues(reviewedNarrations.issues);
+        console.warn(
+          `[slidespeech] final background narration validation rejected generated deck for "${input.topic}"; marking session as failed.`,
+        );
+        const failedDeck = finalizeDeckMetadata(
+          latestDeck,
+          reviewedNarrations.narrations,
+          {
+            ...review,
+            approved: false,
+            overallScore: 0,
+            summary: message,
+          },
+          reviewedNarrations.issues,
+        );
+        await this.deckRepository.save(failedDeck);
+
+        const refreshedSession =
+          (await this.sessionRepository.getById(input.sessionId)) ?? latestSession;
+        await this.sessionRepository.save({
+          ...refreshedSession,
+          state: "error",
+          errorMessage: message,
+          narrationBySlideId: mergeNewNarrationsPreservingExisting(
+            refreshedSession.narrationBySlideId,
+            reviewedNarrations.narrations,
+          ),
+          updatedAt: nowIso(),
+        });
+        return;
+      }
+
       const finalizedDeck = finalizeDeckMetadata(
         latestDeck,
-        locallyRepairedNarrations.narrations,
+        reviewedNarrations.narrations,
         review,
-        [
-          ...narrationValidation.issues,
-          ...reviewedNarrationValidation.issues,
-          ...locallyRepairedNarrations.issues,
-        ],
+        reviewedNarrations.issues,
       );
       await this.deckRepository.save(finalizedDeck);
 
       const refreshedSession =
         (await this.sessionRepository.getById(input.sessionId)) ?? latestSession;
+      const readySession = this.transitionIfPossible(
+        refreshedSession,
+        "presentation_ready",
+        "Background narration and final review completed.",
+      );
       await this.sessionRepository.save({
-        ...refreshedSession,
+        ...readySession,
+        errorMessage:
+          readySession.state === "presenting"
+            ? undefined
+            : refreshedSession.errorMessage,
         narrationBySlideId: mergeNewNarrationsPreservingExisting(
           refreshedSession.narrationBySlideId,
-          locallyRepairedNarrations.narrations,
+          reviewedNarrations.narrations,
         ),
         updatedAt: nowIso(),
       });
@@ -980,7 +947,7 @@ export class PresentationSessionService {
         const issue: ValidationIssue = {
           code: "background_enrichment_failed",
           message: `Background enrichment failed: ${(error as Error).message}`,
-          severity: "warning",
+          severity: "error",
         };
 
         await this.deckRepository.save({
@@ -1000,120 +967,21 @@ export class PresentationSessionService {
             ),
           },
         });
+
+        if (session) {
+          await this.sessionRepository.save({
+            ...session,
+            state: "error",
+            errorMessage: issue.message,
+            updatedAt: nowIso(),
+          });
+        }
       })
       .finally(() => {
         this.backgroundEnrichmentTasks.delete(input.sessionId);
       });
 
     this.backgroundEnrichmentTasks.set(input.sessionId, task);
-  }
-
-  private async reviewPresentationWithFallback(input: {
-    deck: Deck;
-    narrations: SlideNarration[];
-    pedagogicalProfile: PedagogicalProfile;
-    validationIssues: ValidationIssue[];
-    fallbackNote: string;
-    topic: string;
-  }): Promise<PresentationReview> {
-    const deterministicReview = buildDeterministicPresentationReview(
-      input.deck,
-      input.validationIssues,
-      input.narrations,
-      input.fallbackNote,
-    );
-
-    try {
-      const llmReview = await this.qualityReviewer.review({
-        deck: input.deck,
-        narrations: input.narrations,
-        pedagogicalProfile: input.pedagogicalProfile,
-      });
-
-      if (shouldPreferDeterministicReview(llmReview, deterministicReview)) {
-        console.warn(
-          `[slidespeech] review reconciliation fallback for topic "${input.topic}": LLM review contradicted the stronger deterministic baseline (llm_score=${llmReview.overallScore.toFixed(2)}, deterministic_score=${deterministicReview.overallScore.toFixed(2)}).`,
-        );
-        return deterministicReview;
-      }
-
-      return llmReview;
-    } catch (error) {
-      console.warn(
-        `[slidespeech] presentation review fallback for topic "${input.topic}": ${(error as Error).message}`,
-      );
-      return deterministicReview;
-    }
-  }
-
-  private async reviewDeckSemanticsForRetry(input: {
-    deck: Deck;
-    generationInput: GenerateDeckInput;
-    pedagogicalProfile: PedagogicalProfile;
-    topic: string;
-    shouldReview: boolean;
-  }): Promise<DeckCandidateAssessment | null> {
-    if (!input.shouldReview) {
-      return null;
-    }
-
-    try {
-      const review = await this.qualityReviewer.reviewDeckSemantics({
-        deck: input.deck,
-        generationInput: {
-          topic: input.generationInput.topic,
-          ...(input.generationInput.presentationBrief
-            ? { presentationBrief: input.generationInput.presentationBrief }
-            : {}),
-          ...(input.generationInput.intent
-            ? { intent: input.generationInput.intent }
-            : {}),
-          ...(input.generationInput.revisionGuidance
-            ? { revisionGuidance: input.generationInput.revisionGuidance }
-            : {}),
-          ...(input.generationInput.plan ? { plan: input.generationInput.plan } : {}),
-          pedagogicalProfile: input.pedagogicalProfile,
-          ...(input.generationInput.groundingSummary
-            ? { groundingSummary: input.generationInput.groundingSummary }
-            : {}),
-          ...(input.generationInput.groundingHighlights
-            ? { groundingHighlights: input.generationInput.groundingHighlights }
-            : {}),
-          ...(input.generationInput.groundingExcerpts
-            ? { groundingExcerpts: input.generationInput.groundingExcerpts }
-            : {}),
-          ...(input.generationInput.groundingCoverageGoals
-            ? { groundingCoverageGoals: input.generationInput.groundingCoverageGoals }
-            : {}),
-          ...(input.generationInput.groundingSourceIds
-            ? { groundingSourceIds: input.generationInput.groundingSourceIds }
-            : {}),
-          ...(input.generationInput.groundingSourceType
-            ? { groundingSourceType: input.generationInput.groundingSourceType }
-            : {}),
-          ...(input.generationInput.targetDurationMinutes
-            ? { targetDurationMinutes: input.generationInput.targetDurationMinutes }
-            : {}),
-          ...(input.generationInput.targetSlideCount
-            ? { targetSlideCount: input.generationInput.targetSlideCount }
-            : {}),
-        },
-        pedagogicalProfile: input.pedagogicalProfile,
-      });
-
-      const assessment = buildDeckSemanticReviewAssessment(review);
-      if (assessment.retryable) {
-        console.warn(
-          `[slidespeech] semantic deck review for topic "${input.topic}" requested revision: ${assessment.reasons.join(" | ")}`,
-        );
-      }
-      return assessment;
-    } catch (error) {
-      console.warn(
-        `[slidespeech] semantic deck review fallback for topic "${input.topic}": ${(error as Error).message}`,
-      );
-      return null;
-    }
   }
 
   private requireCurrentSlide(deck: Deck, session: Session): Slide {
@@ -1217,31 +1085,17 @@ export class PresentationSessionService {
     deck: Deck,
     slide: Slide,
     session: Session,
-    rawText: string,
   ): Promise<string> {
     try {
       switch (type) {
         case "simplify": {
-          const result =
-            /\?/.test(rawText) || /why|what|how|can you|could you/i.test(rawText)
-              ? await this.llmProvider.answerQuestion({
-                  deck,
-                  slide,
-                  session,
-                  pedagogicalProfile: {
-                    ...session.pedagogicalProfile,
-                    detailLevel: "light",
-                    pace: "slow",
-                  },
-                  question: `${rawText}\n\nPlease answer in simpler terms.`,
-                })
-              : await this.llmProvider.simplifyExplanation({
-                  deck,
-                  slide,
-                  session,
-                  pedagogicalProfile: session.pedagogicalProfile,
-                  reason: "User asked for a simpler explanation.",
-                });
+          const result = await this.llmProvider.simplifyExplanation({
+            deck,
+            slide,
+            session,
+            pedagogicalProfile: session.pedagogicalProfile,
+            reason: "User asked for a simpler explanation.",
+          });
           return result.text;
         }
         case "example": {
@@ -1279,37 +1133,28 @@ export class PresentationSessionService {
       }
     } catch (error) {
       console.warn(
-        `[slidespeech] branching request fallback for slide ${slide.id}: ${(error as Error).message}`,
+        `[slidespeech] branching request model path failed for slide ${slide.id}: ${(error as Error).message}`,
       );
-      return this.buildInteractionFallback(type, slide);
+      return this.buildInteractionUnavailableResponse(type, slide);
     }
   }
 
-  private buildInteractionFallback(
+  private buildInteractionUnavailableResponse(
     type: ConversationTurnDecision["responseMode"] | "question",
     slide: Slide,
   ): string {
-    const keyPoints = slide.keyPoints.slice(0, 3);
-    const mainIdea =
-      keyPoints.length > 0 ? keyPoints.join(", ") : slide.learningGoal;
+    const action =
+      type === "simplify"
+        ? "simplified explanation"
+        : type === "example"
+          ? "example"
+          : type === "deepen"
+            ? "deeper explanation"
+            : type === "repeat"
+              ? "repeat"
+              : "answer";
 
-    switch (type) {
-      case "simplify":
-        return `${slide.beginnerExplanation} In simple terms, the key idea here is ${mainIdea}.`;
-      case "example":
-        return slide.examples[0]
-          ? `A concrete example for this slide is: ${slide.examples[0]}`
-          : `A concrete way to think about this slide is to focus on ${mainIdea}.`;
-      case "deepen":
-        return slide.advancedExplanation.trim().length > 0
-          ? slide.advancedExplanation
-          : `Looking one level deeper, this slide is really about ${mainIdea}.`;
-      case "repeat":
-        return `${slide.beginnerExplanation} The main points are ${mainIdea}.`;
-      case "question":
-      default:
-        return `${slide.beginnerExplanation} On this slide, the important points are ${mainIdea}.`;
-    }
+    return `I could not generate a reliable ${action} right now. We are currently on "${slide.title}", so I will stay with the prepared material instead of guessing.`;
   }
 
   private applyRuntimeEffects(

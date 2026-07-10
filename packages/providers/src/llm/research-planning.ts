@@ -10,7 +10,7 @@ const normalizeResearchPlanningSubject = (value: string): string | undefined => 
   const normalized = stripPlanningBulletPrefix(value)
     .replace(/^(?:subject|topic)\s*[:\-]\s*/i, "")
     .replace(
-      /^(?:create|make|build|generate|write|prepare)\s+(?:a|an|the)?\s*(?:presentation|deck|overview)\s+(?:about|on)\s+/i,
+      /^(?:create|make|build|generate|write|prepare)\s+(?:a|an|the)?\s*(?:[\p{L}\p{M}-]+\s+){0,3}(?:presentation|deck|overview)\s+(?:about|on)\s+/iu,
       "",
     )
     .replace(
@@ -58,6 +58,61 @@ const normalizeResearchCoverageGoal = (value: string): string | null => {
   }
 
   return normalized;
+};
+
+const toPlanningStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item) => item.length > 0);
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value
+      .split(/\r?\n/)
+      .map((line) => stripPlanningBulletPrefix(line).trim())
+      .filter((line) => line.length > 0);
+  }
+
+  return [];
+};
+
+export const normalizeResearchPlanningSuggestion = (
+  value: unknown,
+  input: PlanResearchInput,
+): ResearchPlanningSuggestion => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return parseResearchPlanningText(String(value ?? ""), input);
+  }
+
+  const record = value as Record<string, unknown>;
+  const subject =
+    (typeof record.subject === "string"
+      ? normalizeResearchPlanningSubject(record.subject)
+      : undefined) ?? input.heuristicSubject;
+  const searchQueries = [
+    ...input.heuristicQueries,
+    ...toPlanningStringArray(record.searchQueries)
+      .map((item) => normalizeResearchPlanningQuery(item))
+      .filter((item): item is string => Boolean(item)),
+  ]
+    .filter((item, index, values) => values.indexOf(item) === index)
+    .slice(0, 5);
+  const coverageGoals = toPlanningStringArray(record.coverageGoals)
+    .map((item) => normalizeResearchCoverageGoal(item))
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 4);
+  const rationale = toPlanningStringArray(record.rationale)
+    .map((item) => stripPlanningBulletPrefix(item).replace(/\s+/g, " ").trim())
+    .filter((item) => item.length >= 8)
+    .slice(0, 4);
+
+  return {
+    subject,
+    searchQueries,
+    coverageGoals,
+    rationale,
+  };
 };
 
 export const parseResearchPlanningText = (
@@ -135,11 +190,3 @@ export const parseResearchPlanningText = (
     rationale,
   };
 };
-
-export const summarizeRevisionGuidance = (value: string): string =>
-  value
-    .split(/\n|[.;]/)
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0)
-    .slice(0, 6)
-    .join("; ");

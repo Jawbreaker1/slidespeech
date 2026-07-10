@@ -1,5 +1,15 @@
 # SlideSpeech MVP Architecture Plan
 
+Status: historical MVP snapshot
+
+This document is not an active architecture source for generation work. The
+current target generation architecture is
+[`generation-pipeline-v2.md`](./generation-pipeline-v2.md), and active cleanup
+status lives in [`generation-architecture-map.md`](./generation-architecture-map.md).
+
+The notes below describe the original MVP framing only. If they conflict with
+the V2 architecture, the V2 architecture wins.
+
 ## Product framing
 
 The MVP is an orchestrated teaching runtime, not a slide generator. Phase 1 keeps the runtime text-first while locking in the abstractions needed for later speech, multimodal slide analysis, and provider migration.
@@ -49,6 +59,8 @@ tests/
 
 ## Phase 1 implementation scope
 
+Historical scope only:
+
 - Topic input only
 - JSON deck generation
 - Slide narration generation
@@ -63,4 +75,3 @@ tests/
 - Step 2: swap to `OpenAICompatibleLLMProvider` against vLLM or another local server.
 - Step 3: swap individual speech/vision providers independently.
 - No core planner/session logic changes should be required.
-

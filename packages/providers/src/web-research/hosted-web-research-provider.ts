@@ -46,13 +46,6 @@ const TRUSTED_DOMAIN_PATTERNS = [
   /\.edu$/i,
   /(^|\.)wikipedia\.org$/i,
   /(^|\.)github\.com$/i,
-  /(^|\.)openai\.com$/i,
-  /(^|\.)anthropic\.com$/i,
-  /(^|\.)google\.com$/i,
-  /(^|\.)microsoft\.com$/i,
-  /(^|\.)nvidia\.com$/i,
-  /(^|\.)meta\.com$/i,
-  /(^|\.)amazon\.com$/i,
 ];
 const LOW_TRUST_DOMAIN_PATTERNS = [
   /(^|\.)zhihu\.com$/i,
@@ -132,16 +125,8 @@ export const sanitizeResearchQuery = (query: string): string => {
     .trim();
 };
 
-const slugifySubject = (value: string): string =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-
 export const buildSearchQueries = (query: string): string[] => {
   const normalized = sanitizeResearchQuery(query) || query.trim();
-  const lower = normalized.toLowerCase();
-  const slug = slugifySubject(normalized);
   const specializedQuery = SPECIALIZED_RESEARCH_QUERY_PATTERN.test(query);
   const queries = [normalized];
 
@@ -151,29 +136,6 @@ export const buildSearchQueries = (query: string): string[] => {
   } else {
     queries.push(`${normalized} official`);
     queries.push(`${normalized} announcement`);
-  }
-
-  if (!specializedQuery && slug.length >= 3 && slug.length <= 24 && !slug.includes(" ")) {
-    queries.push(`site:${slug}.com ${normalized}`);
-    if (/\b(car|cars|vehicle|vehicles|automotive|truck|trucks)\b/i.test(query)) {
-      queries.push(`site:${slug}cars.com ${normalized}`);
-    }
-  }
-
-  if (/\bopenai\b/i.test(lower)) {
-    queries.push(`site:openai.com ${normalized}`);
-  }
-
-  if (/\banthropic\b/i.test(lower)) {
-    queries.push(`site:anthropic.com ${normalized}`);
-  }
-
-  if (/\bgoogle\b|\bgemini\b/i.test(lower)) {
-    queries.push(`site:blog.google ${normalized}`);
-  }
-
-  if (/\bmicrosoft\b|\bazure\b/i.test(lower)) {
-    queries.push(`site:microsoft.com ${normalized}`);
   }
 
   return unique(queries).slice(0, 6);
@@ -375,9 +337,44 @@ export class HostedWebResearchProvider implements WebResearchProvider {
       throw new Error(`${this.name} fetch failed with status ${response.status}.`);
     }
 
-    const html = await response.text();
-    const title = extractTitle(html) ?? new URL(url).hostname;
-    const content = truncate(stripTags(html), 8000);
+    const body = await response.text();
+    const contentType = response.headers.get("content-type") ?? "";
+    if (/\bjson\b/i.test(contentType)) {
+      try {
+        const json = JSON.parse(body) as {
+          title?: unknown;
+          displaytitle?: unknown;
+          description?: unknown;
+          extract?: unknown;
+        };
+        const title =
+          typeof json.title === "string"
+            ? stripTags(json.title)
+            : typeof json.displaytitle === "string"
+              ? stripTags(json.displaytitle)
+              : new URL(url).hostname;
+        const content = truncate(
+          [
+            typeof json.description === "string" ? json.description : "",
+            typeof json.extract === "string" ? json.extract : "",
+          ]
+            .filter(Boolean)
+            .join(". "),
+          8000,
+        );
+
+        return {
+          url,
+          title,
+          content,
+        };
+      } catch {
+        // Fall through to text/HTML extraction for malformed JSON responses.
+      }
+    }
+
+    const title = extractTitle(body) ?? new URL(url).hostname;
+    const content = truncate(stripTags(body), 8000);
 
     return {
       url,

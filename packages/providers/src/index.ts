@@ -1,5 +1,4 @@
 export * from "./deck/pptxgenjs-deck-exporter";
-export * from "./deck/topic-only-mock-deck-ingestion-provider";
 export * from "./factory";
 export * from "./illustration/hosted-illustration-provider";
 export * from "./illustration/mock-illustration-provider";
@@ -12,10 +11,10 @@ export * from "./stt/faster-whisper-stt-provider";
 export * from "./stt/mock-stt-provider";
 export * from "./tts/mock-tts-provider";
 export * from "./tts/piper-tts-provider";
-export * from "./tts/system-tts-provider";
 export * from "./vad/mock-vad-provider";
 export * from "./vision/lmstudio-vision-provider";
 export * from "./vision/mock-vision-provider";
 export * from "./web-research/mock-web-research-provider";
 export * from "./web-research/hosted-web-research-provider";
 export { decodeHtmlEntities } from "./shared";
+export { looksOverlyPromotionalSourceCopy } from "./llm/deck-shape-text";

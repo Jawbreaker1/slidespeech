@@ -351,7 +351,7 @@ export const scoreSearchResultForIllustration = (
     score += 10;
   }
 
-  if (/official|about|our story|company|brand|cars|vehicle|automotive|character/i.test(result.title)) {
+  if (/official|about|our story|company|brand|character/i.test(result.title)) {
     score += 4;
   }
 
@@ -475,30 +475,6 @@ const preferredSourcePages = (input: RenderSlideIllustrationInput): string[] => 
   );
 
   return [...new Set(sourceIds)].slice(0, 4);
-};
-
-const guessedOfficialSourcePages = (
-  input: RenderSlideIllustrationInput,
-): string[] => {
-  const normalizedTopic = sanitizeResearchQuery(input.deck.topic);
-  const slug = normalizedTopic.toLowerCase().replace(/[^a-z0-9]+/g, "");
-
-  if (slug.length < 3 || slug.length > 24) {
-    return [];
-  }
-
-  const candidates = [
-    `https://www.${slug}.com/`,
-    `https://${slug}.com/`,
-  ];
-
-  if (
-    /\b(car|cars|vehicle|vehicles|automotive|truck|trucks)\b/i.test(input.deck.topic)
-  ) {
-    candidates.push(`https://www.${slug}cars.com/`);
-  }
-
-  return [...new Set(candidates)];
 };
 
 const arrayBufferToBase64 = (buffer: ArrayBuffer) =>
@@ -804,18 +780,6 @@ export class HostedIllustrationProvider implements SlideIllustrationProvider {
         const asset = await this.trySearchResult(input, {
           title: input.slide.title,
           url: sourcePageUrl,
-          snippet: input.deck.summary,
-        });
-
-        if (asset) {
-          return asset;
-        }
-      }
-
-      for (const guessedSourcePageUrl of guessedOfficialSourcePages(input)) {
-        const asset = await this.trySearchResult(input, {
-          title: input.slide.title,
-          url: guessedSourcePageUrl,
           snippet: input.deck.summary,
         });
 

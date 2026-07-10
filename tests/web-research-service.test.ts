@@ -2,10 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  buildDiscoveredKnowledgeUrls,
-  buildGuessedKnowledgeUrls,
-  buildExplicitSourceFallbackQuery,
-  buildSupportingExplicitSourceUrls,
+  buildExplicitSourceSupplementalQuery,
+  findingLooksRelevant,
   sanitizeFetchedFinding,
 } from "../apps/api/src/services/web-research-service";
 
@@ -158,7 +156,6 @@ test("sanitizeFetchedFinding removes scraped counters and faq questions from tru
 
   assert.ok(finding);
   assert.match(finding.content, /founded as Sweden’s first company dedicated exclusively to quality assurance/i);
-  assert.match(finding.content, /leading QA network in the Nordics/i);
   assert.doesNotMatch(finding.content, /0 Years|0 Locations|0 Employees|consultant rating/i);
   assert.doesNotMatch(finding.content, /What delivery models does System Verification offer/i);
 });
@@ -236,46 +233,100 @@ test("sanitizeFetchedFinding keeps informative entertainment prose with named en
   assert.match(finding.content, /Patrick Star|Squidward Tentacles/i);
 });
 
-test("buildGuessedKnowledgeUrls generates encyclopedic candidates for specialized named-entity queries", () => {
-  const urls = buildGuessedKnowledgeUrls(
-    "\"Corrupted Blood\" plague event researchers disease spread World of Warcraft",
+test("sanitizeFetchedFinding prefers query-year source sentences over adjacent release noise", () => {
+  const finding = sanitizeFetchedFinding(
+    "Donald Duck's first cartoon appearance released in 1934",
+    {
+      url: "https://en.wikipedia.org/wiki/The_Wise_Little_Hen",
+      title: "The Wise Little Hen - Wikipedia",
+      content:
+        "[ 11 ] Theatrical release [ edit ] The Wise Little Hen had its world premiere as the underbill to Gulliver Mickey at the Carthay Circle Theater in Los Angeles, California, on May 3, 1934. The first release was in 1986 on Betamax on Donald Duck Volume 1.",
+    },
+    {
+      allowTrustedExplicitSource: true,
+    },
   );
 
-  assert.ok(urls.includes("https://en.wikipedia.org/wiki/Corrupted_Blood"));
-  assert.ok(urls.includes("https://en.wikipedia.org/wiki/Corrupted_Blood_incident"));
-  assert.ok(urls.includes("https://en.wikipedia.org/wiki/World_of_Warcraft"));
+  assert.ok(finding);
+  assert.match(finding.content, /May 3, 1934/);
+  assert.doesNotMatch(finding.content, /1986 on Betamax/);
 });
 
-test("buildGuessedKnowledgeUrls generates episode-list candidates for premiere queries", () => {
-  const urls = buildGuessedKnowledgeUrls(
-    "SpongeBob SquarePants first episode aired in 1999",
+test("sanitizeFetchedFinding does not split source sentences at common abbreviations", () => {
+  const finding = sanitizeFetchedFinding(
+    "Donald Duck's first cartoon appearance released in 1934",
+    {
+      url: "https://en.wikipedia.org/api/rest_v1/page/summary/The_Wise_Little_Hen",
+      title: "The Wise Little Hen",
+      content:
+        'The Wise Little Hen is a 1934 Walt Disney produced Silly Symphonies animated short film. The film features the debut of Donald Duck. Donald and his friend Peter Pig try to avoid work by faking stomach aches until Mrs. Hen teaches them the value of labor.',
+    },
+    {
+      allowTrustedExplicitSource: true,
+    },
   );
 
-  assert.ok(urls.includes("https://en.wikipedia.org/wiki/SpongeBob_SquarePants"));
-  assert.ok(urls.includes("https://en.wikipedia.org/wiki/List_of_SpongeBob_SquarePants_episodes"));
-  assert.ok(urls.includes("https://en.wikipedia.org/wiki/SpongeBob_SquarePants_(season_1)"));
+  assert.ok(finding);
+  assert.match(finding.content, /Mrs\. Hen teaches them the value of labor/);
+  assert.doesNotMatch(finding.content, /until Mrs\.$/);
 });
 
-test("buildDiscoveredKnowledgeUrls follows episode page references from encyclopedic findings", () => {
-  const urls = buildDiscoveredKnowledgeUrls(
-    "SpongeBob SquarePants first episode aired in 1999",
-    [
+test("findingLooksRelevant rejects search false positives that miss the named phrase", () => {
+  assert.equal(
+    findingLooksRelevant(
+      "Donald Duck first cartoon appearance 1934",
       {
-        url: "https://en.wikipedia.org/wiki/SpongeBob_SquarePants_(season_1)",
-        title: "SpongeBob SquarePants season 1",
+        url: "https://www.whitehouse.gov/administration/donald-j-trump/",
+        title: "President Donald J. Trump",
         content:
-          "Production details. See also: History of SpongeBob SquarePants and Help Wanted (SpongeBob SquarePants). Stephen Hillenburg developed the show.",
+          "His first book, The Art of the Deal, is considered a business classic. President Donald J. Trump won the Presidency in his first run for political office.",
       },
-    ],
+    ),
+    false,
   );
 
-  assert.ok(
-    urls.includes("https://en.wikipedia.org/wiki/Help_Wanted_(SpongeBob_SquarePants)"),
+  assert.equal(
+    findingLooksRelevant(
+      "The Wise Little Hen 1934 Donald Duck debut",
+      {
+        url: "https://wise.com/",
+        title: "Wise: The international account",
+        content:
+          "It takes a little more time for your money to reach Wise when bank transfers are usually the cheapest option.",
+      },
+    ),
+    false,
+  );
+
+  assert.equal(
+    findingLooksRelevant(
+      "Donald Duck first cartoon appearance 1934",
+      {
+        url: "https://en.wikipedia.org/wiki/Donald_Duck",
+        title: "Donald Duck - Wikipedia",
+        content:
+          "Donald's first appearance was in The Wise Little Hen (1934), before later cartoons developed his temperamental comic foil role.",
+      },
+    ),
+    true,
+  );
+
+  assert.equal(
+    findingLooksRelevant(
+      "Donald Duck first cartoon appearance 1934",
+      {
+        url: "https://en.wikipedia.org/wiki/The_Wise_Little_Hen",
+        title: "The Wise Little Hen - Wikipedia",
+        content:
+          "The cartoon featured Donald Duck's first appearance and premiered in 1934.",
+      },
+    ),
+    true,
   );
 });
 
-test("buildExplicitSourceFallbackQuery prefers site-scoped search terms over raw host concatenation", () => {
-  const query = buildExplicitSourceFallbackQuery({
+test("buildExplicitSourceSupplementalQuery prefers site-scoped search terms over raw host concatenation", () => {
+  const query = buildExplicitSourceSupplementalQuery({
     topic: "Using AI tools in their daily work",
     urls: ["https://www.vgregion.se/"],
   });
@@ -285,8 +336,8 @@ test("buildExplicitSourceFallbackQuery prefers site-scoped search terms over raw
   assert.doesNotMatch(query, /^Using\b/);
 });
 
-test("buildExplicitSourceFallbackQuery adds organization support terms for company-grounded prompts", () => {
-  const query = buildExplicitSourceFallbackQuery({
+test("buildExplicitSourceSupplementalQuery keeps company-grounded prompts site-scoped without guessed paths", () => {
+  const query = buildExplicitSourceSupplementalQuery({
     topic: "System Verification",
     urls: ["https://www.systemverification.com/"],
     organization: "System Verification",
@@ -296,13 +347,11 @@ test("buildExplicitSourceFallbackQuery adds organization support terms for compa
 
   assert.match(query, /site:systemverification\.com/i);
   assert.match(query, /"System Verification"/);
-  assert.match(query, /\babout\b/i);
-  assert.match(query, /\bservices\b/i);
-  assert.match(query, /\blocations\b|\boffices\b/i);
+  assert.doesNotMatch(query, /\babout\b|\bservices\b|\blocations\b|\boffices\b/i);
 });
 
-test("buildExplicitSourceFallbackQuery prefers the quoted organization name over malformed duplicate topic text", () => {
-  const query = buildExplicitSourceFallbackQuery({
+test("buildExplicitSourceSupplementalQuery prefers the quoted organization name over malformed duplicate topic text", () => {
+  const query = buildExplicitSourceSupplementalQuery({
     topic: "Systemverification",
     urls: ["https://www.systemverification.com/"],
     organization: "System Verification",
@@ -312,20 +361,4 @@ test("buildExplicitSourceFallbackQuery prefers the quoted organization name over
 
   assert.match(query, /"System Verification"/);
   assert.doesNotMatch(query, /\bSystemverification\b/);
-});
-
-test("buildSupportingExplicitSourceUrls guesses same-domain support pages for organization prompts", () => {
-  const urls = buildSupportingExplicitSourceUrls({
-    urls: ["https://www.systemverification.com/"],
-    presentationFrame: "organization",
-    deliveryFormat: "presentation",
-  });
-
-  assert.deepEqual(urls, [
-    "https://www.systemverification.com/about",
-    "https://www.systemverification.com/about-us",
-    "https://www.systemverification.com/services",
-    "https://www.systemverification.com/locations",
-    "https://www.systemverification.com/offices",
-  ]);
 });

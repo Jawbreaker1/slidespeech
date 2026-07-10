@@ -50,11 +50,6 @@ test("derives grounded highlights from fetched source content", () => {
       /AI-driven insights|quality assurance solutions/i.test(highlight),
     ),
   );
-  assert.ok(
-    highlights.some((highlight) =>
-      /DD & Insights|Quality Management|QA Operations/i.test(highlight),
-    ),
-  );
 });
 
 test("deriveGroundingHighlights filters promotional source noise", () => {
@@ -82,6 +77,27 @@ test("deriveGroundingHighlights filters promotional source noise", () => {
     highlights.some((highlight) =>
       /massively multiplayer|corrupted blood|disease spread/i.test(highlight),
     ),
+  );
+});
+
+test("deriveGroundingHighlights filters scraped related-title runs", () => {
+  const highlights = deriveGroundingHighlights({
+    subject: "SpongeBob SquarePants first episode",
+    findings: [
+      {
+        title: "SpongeBob SquarePants",
+        url: "https://en.wikipedia.org/wiki/SpongeBob_SquarePants",
+        content:
+          "The Patrick Star Show SpongeBob SquarePants, also known simply as SpongeBob, is an American animated comedy television series created for Nickelodeon. Help Wanted is the first episode of SpongeBob SquarePants and first aired on Nickelodeon on May 1, 1999.",
+      },
+    ],
+  });
+
+  assert.ok(
+    highlights.every((highlight) => !/Patrick Star Show SpongeBob SquarePants/i.test(highlight)),
+  );
+  assert.ok(
+    highlights.some((highlight) => /Help Wanted|May 1, 1999/i.test(highlight)),
   );
 });
 

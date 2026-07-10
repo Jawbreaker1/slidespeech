@@ -29,14 +29,14 @@ loadDotEnv(dotEnvPath ? { path: dotEnvPath } : undefined);
 const EnvSchema = z.object({
   API_PORT: z.coerce.number().default(4000),
   LLM_PROVIDER: z
-    .enum(["mock", "lmstudio", "openai-compatible", "hosted"])
-    .default("mock"),
+    .enum(["mock", "lmstudio", "openai-compatible"])
+    .default("lmstudio"),
   ILLUSTRATION_PROVIDER: z.enum(["mock", "hosted"]).default("mock"),
-  VISION_PROVIDER: z.enum(["mock", "lmstudio", "hosted"]).default("mock"),
-  STT_PROVIDER: z.enum(["mock", "faster-whisper", "hosted"]).default("mock"),
-  TTS_PROVIDER: z.enum(["mock", "piper", "system", "hosted"]).default("mock"),
-  VAD_PROVIDER: z.enum(["mock", "silero"]).default("mock"),
-  WEB_RESEARCH_PROVIDER: z.enum(["mock", "hosted"]).default("mock"),
+  VISION_PROVIDER: z.enum(["mock", "lmstudio"]).default("mock"),
+  STT_PROVIDER: z.enum(["mock", "faster-whisper"]).default("mock"),
+  TTS_PROVIDER: z.enum(["mock", "piper"]).default("mock"),
+  VAD_PROVIDER: z.enum(["mock"]).default("mock"),
+  WEB_RESEARCH_PROVIDER: z.enum(["mock", "hosted"]).default("hosted"),
   STORAGE_PROVIDER: z.enum(["file", "sqlite"]).default("file"),
   LMSTUDIO_BASE_URL: z.string().default("http://127.0.0.1:1234/v1"),
   LMSTUDIO_MODEL: z.string().default("local-model"),
@@ -45,7 +45,7 @@ const EnvSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().default(45000),
   LLM_FALLBACK_TO_MOCK_ON_ERROR: z
     .enum(["true", "false"])
-    .default("true")
+    .default("false")
     .transform((value) => value === "true"),
   WEB_RESEARCH_TIMEOUT_MS: z.coerce.number().default(15000),
   VOICE_MAX_AUDIO_BYTES: z.coerce.number().default(5_000_000),
@@ -70,8 +70,6 @@ const EnvSchema = z.object({
         : Number.parseInt(value, 10),
     ),
   PIPER_TTS_SENTENCE_SILENCE_MS: z.coerce.number().default(80),
-  SYSTEM_TTS_VOICE: z.string().default("Daniel"),
-  SYSTEM_TTS_RATE_WPM: z.coerce.number().default(180),
   STORAGE_ROOT: z.string().default("data"),
 });
 

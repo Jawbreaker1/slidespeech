@@ -14,8 +14,9 @@
     "dev:web": "npm run dev --workspace @slidespeech/web",
     "setup:tts": "node --import tsx scripts/setup_piper_voices.ts",
     "verify:api": "./scripts/verify_api_fixed_port.sh",
-    "eval:decks": "tsx scripts/evaluate_decks.ts",
-    "bench:structured": "tsx scripts/benchmark_structured_output.ts",
+    "verify:llm": "REQUIRE_LLM_HEALTH=1 ./scripts/verify_api_fixed_port.sh",
+    "arch:graph": "tsx scripts/generate_architecture_graph.ts",
+    "arch:check": "tsx scripts/check_generation_architecture.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "tsx --test tests/**/*.test.ts"
   },

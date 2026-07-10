@@ -5,8 +5,8 @@ guards toward multilingual semantic review.
 
 ## Principle
 
-Deterministic code should protect structure. The LLM should judge and repair
-meaning.
+Deterministic code should protect structure. The LLM should judge meaning and
+generate revised artifacts through explicit stages.
 
 This means regex/string guards are allowed for:
 - schema and structured-output validation
@@ -25,9 +25,11 @@ Regex/string guards should not become the long-term mechanism for:
 
 ## Current Debt
 
-The current generator still contains English/template phrase guards that were
-added to catch real bad decks quickly. They are useful as temporary alarms, but
-they are not a multilingual quality system.
+The previous generator contained English/template phrase guards that were added
+to catch real bad decks quickly. Those modules have been removed from the
+generation path. Any remaining deterministic checks should be treated as smoke
+alarms for structure, duplication, transport, or source hygiene, not as semantic
+deck authors.
 
 Examples of legacy phrase debt:
 - prompt leakage such as "specific case study requested in the prompt"
@@ -35,9 +37,10 @@ Examples of legacy phrase debt:
 - English presentation meta language such as "this slide" or "deck"
 - English fragment checks around dangling prepositions and imperative bullets
 
-Core-level guard lists now live in
-`packages/core/src/text-quality-guards.ts` so new debt does not spread across
-the codebase.
+Core-level semantic phrase guard lists should not be reintroduced. If a
+temporary deterministic alarm is unavoidable, document it in
+`docs/generation-architecture-map.md`, keep it language-generic, and make the
+failure actionable for a V2 stage.
 
 ## Target Pipeline
 
@@ -54,35 +57,35 @@ Generation should use this split:
 - uses the requested/deck language as context
 - returns structured issue labels and revision guidance
 
-3. LLM semantic repair
-- rewrites only the affected fields or slides
+3. LLM regeneration
+- regenerates the affected artifact through the owning stage
 - preserves slide role, grounding, and deck language
-- does not use local hardcoded phrase substitutions as the primary repair path
+- does not use local hardcoded phrase substitutions as a repair path
 
 4. Deterministic final gate
-- verifies that the repaired output is structurally valid
-- keeps smoke detectors as a fallback alarm
+- verifies that the reviewed output is structurally valid
+- keeps smoke detectors as safety alarms only
 - fails visibly if quality is still uncertain
 
 ## Implementation Rules
 
 - Do not add scattered regex/string fixes in generation modules.
-- If a temporary deterministic guard is needed, put it behind a named guard in
-  `text-quality-guards.ts` or the relevant provider guard module.
+- If a temporary deterministic guard is needed, put it behind a named V2 stage
+  boundary and document why it is not semantic content repair.
 - Every new language-specific guard must have a test and a task note explaining
   when it should be replaced by LLM semantic review.
 - Prefer structured LLM tool calls over free-text parsing for semantic review.
-- Keep deterministic local recovery conservative; if the system has to invent
-  semantic content, ask the LLM or fail visibly.
+- Keep deterministic local recovery structural only; if the system has to
+  invent semantic content, use the owning LLM stage or fail visibly.
 
 ## Next Migration Steps
 
-1. Add a structured `reviewGeneratedDeckSemantics` provider path that returns
-   issue labels such as `prompt_leakage`, `wrong_language`, `role_drift`,
-   `template_language`, `unsupported_claim`, and `fragmentary_copy`.
-2. Feed those labels into deck retry guidance before accepting a generated deck.
-3. Replace English/template phrase checks in `evaluation.ts`,
-   `session-deck-quality.ts`, and provider slide assessment with semantic review
-   results where possible.
-4. Keep the current deterministic guards only as smoke alarms until live
-   multilingual scenarios are stable.
+1. Build V2 `PromptClassification`, `ResearchPlan`, `FactBank`, `DeckStrategy`,
+   `SlidePlan[]`, and `SlideDraft[]` artifacts.
+2. Use structured semantic review labels such as `prompt_leakage`,
+   `wrong_language`, `role_drift`, `template_language`, `unsupported_claim`,
+   and `fragmentary_copy` as retry/rejection signals.
+3. Keep structural checks in `validation.ts`, `session-deck-quality.ts`, and
+   publication review as gates, not copy-repair systems.
+4. Run live scenarios in multiple domains before adding new deterministic
+   checks, so the code does not overfit to one prompt.

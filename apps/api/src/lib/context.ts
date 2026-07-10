@@ -47,8 +47,6 @@ const llmProvider = createLLMProvider({
   piperTtsModelPath,
   piperTtsConfigPath,
   piperTtsSentenceSilenceMs: env.PIPER_TTS_SENTENCE_SILENCE_MS,
-  systemTtsVoice: env.SYSTEM_TTS_VOICE,
-  systemTtsRateWpm: env.SYSTEM_TTS_RATE_WPM,
   lmstudioBaseUrl: env.LMSTUDIO_BASE_URL,
   lmstudioModel: env.LMSTUDIO_MODEL,
   lmstudioVisionModel: env.LMSTUDIO_VISION_MODEL,
@@ -92,8 +90,6 @@ const ttsProvider = createTextToSpeechProvider({
   piperTtsModelPath,
   piperTtsConfigPath,
   piperTtsSentenceSilenceMs: env.PIPER_TTS_SENTENCE_SILENCE_MS,
-  systemTtsVoice: env.SYSTEM_TTS_VOICE,
-  systemTtsRateWpm: env.SYSTEM_TTS_RATE_WPM,
   ...(env.PIPER_TTS_SPEAKER_ID !== undefined
     ? { piperTtsSpeakerId: env.PIPER_TTS_SPEAKER_ID }
     : {}),

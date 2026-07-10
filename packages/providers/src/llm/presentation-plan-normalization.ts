@@ -1,24 +1,17 @@
-import type { GenerateDeckInput } from "@slidespeech/types";
+import type { GenerateDeckInput, GroundingFact } from "@slidespeech/types";
 
 import {
-  DECK_SHAPE_INSTRUCTIONAL_PATTERNS,
-  DECK_SHAPE_META_PATTERNS,
-  contractTextSimilarity,
-  looksAbstractForIntro,
-} from "./deck-shape-text";
+  inferContentLanguageFromInput,
+  textAppearsOutsideContentLanguage,
+} from "./content-language";
+import { semanticTextSimilarity } from "./deck-shape-text";
 import { normalizeAudienceLevel } from "./pedagogical-profile-normalization";
-import { sanitizePromptShapingText } from "./prompt-shaping";
-import {
-  deriveSlideArcPolicy,
-  isWorkshopPresentation,
-} from "./slide-arc-policy";
-import type { ArcPolicyInput } from "./slide-contract-types";
+import { deriveSlideArcPolicy } from "./slide-arc-policy";
+import type { ArcPolicyInput } from "./slide-arc-policy";
 import { toStringArray } from "./structured-normalization";
-import {
-  looksLikeWorkshopBriefEcho,
-  subjectToActionPhrase,
-  subjectToWorkshopNounPhrase,
-} from "./workshop-text";
+
+const normalizePlanText = (value: string): string =>
+  value.replace(/\s+/g, " ").trim().replace(/[.,;:!?]+$/g, "");
 
 const uniqueCleanStoryline = (values: string[]): string[] => {
   const seen = new Set<string>();
@@ -38,86 +31,22 @@ const uniqueCleanStoryline = (values: string[]): string[] => {
   return result;
 };
 
-const buildDefaultStoryline = (input: {
-  subject: string;
-  arcInput: ArcPolicyInput;
-  workshop: boolean;
-  workshopNounPhrase: string;
-  focusAnchor?: string | undefined;
-}): string[] => {
-  const { subject, arcInput, workshop, workshopNounPhrase, focusAnchor } = input;
-
-  switch (deriveSlideArcPolicy(arcInput)) {
-    case "procedural":
-      return [
-        `What ${subject} depends on`,
-        `How ${subject} comes together`,
-        `What changes the final quality`,
-        `Common failure modes in ${subject}`,
-        `How to recognize the finished result`,
-        `A practical check before using ${subject}`,
-        `Questions and next steps for ${subject}`,
-      ];
-    case "organization-overview":
-      if (workshop) {
-        return [
-          `${workshopNounPhrase} starts as reviewable drafts`,
-          `Role-based daily use cases`,
-          `Safe boundaries before sharing`,
-          `Practical exercise: ${subjectToActionPhrase(subject)}`,
-          `Review checks before using the output`,
-          `Shared debrief on what changed`,
-          `Questions and next steps for ${subject}`,
-        ];
-      }
-      return [
-        `Who ${subject} is`,
-        `Where ${subject} operates`,
-        `How ${subject} works`,
-        `What ${subject} offers`,
-        `How the capabilities fit delivery`,
-        `One practical outcome from ${subject}`,
-        `What to remember and ask about`,
-      ];
-    case "source-backed-subject":
-      return [
-        `What ${subject} is`,
-        focusAnchor || `One concrete detail or event`,
-        workshop ? `Practical exercise: apply the case` : `Why the detail matters`,
-        workshop ? `Applied takeaway` : `What it teaches`,
-        `Context around ${focusAnchor || subject}`,
-        workshop ? `Review the applied decision` : `What changes because of the detail`,
-        `Questions and next steps for ${subject}`,
-      ];
-    default:
-      return [
-        `What ${subject} is`,
-        `One concrete detail`,
-        workshop ? `Practical exercise` : `Why it matters`,
-        workshop ? `Review the applied decision` : `How the idea works in practice`,
-        `A concrete example from ${subject}`,
-        workshop ? `Applied takeaway` : `Key takeaway`,
-        `Questions and next steps for ${subject}`,
-      ];
-  }
-};
-
-const fitStorylineToTarget = (
-  storyline: string[],
-  fallbackStoryline: string[],
-  targetCount: number,
-): string[] => {
-  const fitted = uniqueCleanStoryline([
-    ...storyline,
-    ...fallbackStoryline,
-  ]).slice(0, targetCount);
-
-  while (fitted.length < targetCount) {
-    const fallback = fallbackStoryline[fitted.length % fallbackStoryline.length];
-    fitted.push(fallback ? `${fallback}` : `Questions and next steps`);
+const factSupportedSlideCount = (
+  facts: GroundingFact[] | undefined,
+): number | null => {
+  if (!facts?.length) {
+    return null;
   }
 
-  return fitted;
+  const concreteFacts = facts.filter(
+    (fact) => fact.role !== "background" && fact.role !== "reference",
+  );
+  const usableFactCount = concreteFacts.length || facts.length;
+  const concreteRoleCount = new Set(concreteFacts.map((fact) => fact.role)).size;
+  if (usableFactCount > 2 && concreteRoleCount <= 2) {
+    return Math.min(4, usableFactCount + 1);
+  }
+  return Math.max(3, Math.min(7, usableFactCount + 1));
 };
 
 export const normalizePresentationPlan = (
@@ -130,6 +59,7 @@ export const normalizePresentationPlan = (
     groundingHighlights?: string[] | undefined;
     groundingCoverageGoals?: string[] | undefined;
     groundingSourceIds?: string[] | undefined;
+    groundingFacts?: GroundingFact[] | undefined;
   },
 ): unknown => {
   if (!value || typeof value !== "object") {
@@ -139,91 +69,96 @@ export const normalizePresentationPlan = (
   const candidate = value as Record<string, unknown>;
   const topic = overrides?.topic ?? "the topic";
   const subject = overrides?.subject ?? topic;
-  const recommendedSlideCount =
+  const requestedSlideCount =
     overrides?.targetSlideCount ??
     (typeof candidate.recommendedSlideCount === "number"
       ? candidate.recommendedSlideCount
       : 4);
-  const targetStorylineCount = Math.max(1, Math.round(recommendedSlideCount));
+  const sourceBackedFactCap =
+    deriveSlideArcPolicy({
+      intent: overrides?.intent,
+      groundingHighlights: overrides?.groundingHighlights,
+      groundingCoverageGoals: overrides?.groundingCoverageGoals,
+      groundingSourceIds: overrides?.groundingSourceIds,
+      groundingFacts: overrides?.groundingFacts,
+    }) === "source-backed-subject"
+      ? factSupportedSlideCount(overrides?.groundingFacts)
+      : null;
+  const cappedRequestedSlideCount =
+    sourceBackedFactCap === null
+      ? requestedSlideCount
+      : Math.min(requestedSlideCount, sourceBackedFactCap);
   const arcInput: ArcPolicyInput = {
     intent: overrides?.intent,
     groundingHighlights: overrides?.groundingHighlights,
     groundingCoverageGoals: overrides?.groundingCoverageGoals,
     groundingSourceIds: overrides?.groundingSourceIds,
+    groundingFacts: overrides?.groundingFacts,
   };
-  const workshop = isWorkshopPresentation(arcInput as Pick<GenerateDeckInput, "intent">);
-  const focusAnchor = arcInput.intent?.focusAnchor?.trim();
-  const workshopNounPhrase = subjectToWorkshopNounPhrase(subject);
-  const defaultStorylineForArc = buildDefaultStoryline({
-    subject,
-    arcInput,
-    workshop,
-    workshopNounPhrase,
-    focusAnchor,
-  }).slice(0, targetStorylineCount);
-  const normalizedStoryline = toStringArray(candidate.storyline).map((step) =>
-    sanitizePromptShapingText(step, topic),
+  const language = inferContentLanguageFromInput({
+    topic,
+    presentationBrief: undefined,
+    intent: overrides?.intent,
+    plan: typeof candidate === "object" && candidate !== null
+      ? {
+          title: typeof candidate.title === "string" ? candidate.title : "",
+          learningObjectives: toStringArray(candidate.learningObjectives),
+          storyline: toStringArray(candidate.storyline),
+          recommendedSlideCount: Math.max(1, Math.round(cappedRequestedSlideCount)),
+          audienceLevel: normalizeAudienceLevel(candidate.audienceLevel),
+        }
+      : undefined,
+  });
+  const storyline: string[] = [];
+  for (const step of uniqueCleanStoryline(
+    toStringArray(candidate.storyline).map(normalizePlanText),
+  )) {
+    const wrongLanguage = textAppearsOutsideContentLanguage(step, language);
+    const tooSimilar = storyline.some(
+      (previousStep) => semanticTextSimilarity(step, previousStep) >= 0.72,
+    );
+
+    if (!wrongLanguage && !tooSimilar) {
+      storyline.push(step);
+    }
+  }
+
+  if (storyline.length === 0) {
+    throw new Error("Generated presentation plan has no usable storyline beats.");
+  }
+
+  const recommendedSlideCount = Math.max(
+    1,
+    Math.min(Math.round(cappedRequestedSlideCount), storyline.length),
   );
-  const storyline = normalizedStoryline.length > 0
-    ? normalizedStoryline.map((step, index) => {
-        const previousAccepted = normalizedStoryline.slice(0, index);
-        const tooMeta =
-          DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(step)) ||
-          DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(step));
-        const tooAbstract = looksAbstractForIntro(step) && index > 0;
-        const tooSimilar = previousAccepted.some(
-          (previousStep) =>
-            contractTextSimilarity(step, previousStep) >= 0.72,
-        );
-        return tooMeta || tooAbstract || tooSimilar
-          ? defaultStorylineForArc[index] ?? step
-          : step;
-      })
-    : defaultStorylineForArc;
   const normalizedTitle =
     typeof candidate.title === "string"
-      ? sanitizePromptShapingText(candidate.title, topic)
+      ? normalizePlanText(candidate.title)
       : "";
-  const title =
-    normalizedTitle &&
-    !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(normalizedTitle)) &&
-    !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(normalizedTitle))
-      ? normalizedTitle
-      : `${subject}: presentation outline`;
+  if (
+    !normalizedTitle ||
+    textAppearsOutsideContentLanguage(normalizedTitle, language)
+  ) {
+    throw new Error("Generated presentation plan has no usable title.");
+  }
+
+  const learningObjectives = toStringArray(candidate.learningObjectives)
+    .map(normalizePlanText)
+    .filter(
+      (objective) =>
+        objective.length > 0 &&
+        !textAppearsOutsideContentLanguage(objective, language),
+    );
+
+  if (learningObjectives.length === 0) {
+    throw new Error("Generated presentation plan has no usable learning objectives.");
+  }
 
   return {
     ...candidate,
-    title,
-    learningObjectives: (() => {
-      const defaultObjectives = workshop
-        ? [
-            `Identify one reviewable output from ${workshopNounPhrase}.`,
-            `Apply source, data, policy, and human-review checks before sharing work.`,
-            `Complete one practice task with a real work artifact.`,
-          ]
-        : [
-            "Understand the main idea.",
-            "See how the idea is structured.",
-            "Connect the idea to one concrete example.",
-          ];
-      const objectives = toStringArray(candidate.learningObjectives)
-        .map((objective) => sanitizePromptShapingText(objective, topic))
-        .filter(
-          (objective) =>
-            objective.length > 0 &&
-            !(workshop && looksLikeWorkshopBriefEcho(objective)) &&
-            !DECK_SHAPE_META_PATTERNS.some((pattern) => pattern.test(objective)) &&
-            !DECK_SHAPE_INSTRUCTIONAL_PATTERNS.some((pattern) => pattern.test(objective)),
-        );
-      return objectives.length > 0
-        ? objectives
-        : defaultObjectives;
-    })(),
-    storyline: fitStorylineToTarget(
-      storyline.length > 0 ? storyline : defaultStorylineForArc,
-      defaultStorylineForArc,
-      targetStorylineCount,
-    ),
+    title: normalizedTitle,
+    learningObjectives,
+    storyline: storyline.slice(0, recommendedSlideCount),
     recommendedSlideCount,
     audienceLevel: normalizeAudienceLevel(candidate.audienceLevel),
   };

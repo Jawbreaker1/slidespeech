@@ -1,363 +1,408 @@
 # SlideSpeech Tasks
 
-Last updated: 2026-05-03
+Last updated: 2026-07-10
 
-This file is the canonical active task tracker for the repo.
+This is the active task tracker and implementation strategy. It should track
+what is implemented, what remains, and which validation gates must run before
+work is considered complete.
 
-Use this file for:
-- current phases
-- status per workstream
-- active subtasks
-- definition of done
+It must not define a competing architecture. If this file conflicts with
+`docs/generation-pipeline-v2.md`, the V2 architecture wins and this file should
+be corrected in the same change.
 
-Do not treat these files as competing task trackers:
-- [README.md](/Users/johanengwall/github_repos/slidespeech/README.md): product and status narrative
-- [architecture-plan.md](/Users/johanengwall/github_repos/slidespeech/docs/architecture-plan.md): architecture reference
-- [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md): canonical type reference for deck arcs and slide roles
+Legend:
+- `[x]` implemented or completed
+- `[ ]` not completed yet
 
-## Phase Overview
+Canonical references:
+- [README.md](/Users/johanengwall/github_repos/slidespeech/README.md): product narrative
+- [docs/generation-pipeline-v2.md](/Users/johanengwall/github_repos/slidespeech/docs/generation-pipeline-v2.md): target generation architecture
+- [docs/generation-architecture-map.md](/Users/johanengwall/github_repos/slidespeech/docs/generation-architecture-map.md): active architecture map and legacy removal queue
+- [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md): deck and slide type inventory
 
-### 1. Demo hardening
-Status: done enough
+## Always-On Rules
 
-Notes:
-- demo was held
-- runtime is usable
-- services are up and stable enough for active development
+- Before each major code change, state the V2 stage, artifact, expected input, expected output, and validation gate.
+- Do not add prompt-specific production strings, scenario-specific regexes, or static semantic fallback decks.
+- Prefer deleting or isolating legacy paths over wrapping them with another recovery layer.
+- Keep deterministic code responsible for structure, routing, source hygiene, and safety.
+- Keep semantic deck content in LLM stages, or fail the stage.
+- Keep natural-language classification, relevance, planning, and quality judgment agentic; do not implement them with keyword inventories, language-specific regexes, or weighted phrase heuristics.
+- Pass one named artifact between stages instead of rebuilding semantic context from parallel summaries, excerpts, hints, and fallback instructions.
+- If a fix cannot be mapped to a stage contract, stop and update the V2 architecture before editing code.
+- After substantial generation/research changes, update the architecture map, run `npm run arch:graph`, and run `npm run arch:check`.
 
-### 2. Q&A / STT robustness
-Status: done enough for now
+## Recurring Validation Gates
+
+Use this checklist for every implementation phase.
+
+Before coding:
+- [ ] Identify the V2 stage and artifact being changed.
+- [ ] Identify the legacy path being removed, bypassed, or left untouched.
+- [ ] Define the failure mode the change is meant to address.
+- [ ] Confirm the change is not a quick patch or prompt-specific guardrail.
+
+During coding:
+- [ ] Keep the stage function small and named after its artifact responsibility.
+- [ ] Add tests for the artifact contract, not one scenario string.
+- [ ] Avoid changing unrelated runtime behavior in the same patch.
+- [ ] Update docs only when the phase boundary or implementation status changes.
+
+After each major phase:
+- [ ] Run `npm run arch:graph`.
+- [ ] Run `npm run arch:check`.
+- [ ] Run `git diff --check`.
+- [ ] Run `npm run typecheck --workspaces --if-present -- --pretty false`.
+- [ ] Run targeted tests for the changed stage.
+
+After every publishable generation milestone:
+- [ ] Run `npm test`.
+- [ ] Run one live scenario not used to design the fix.
+- [ ] Run one source-grounded live scenario.
+- [ ] Run one topic-only live scenario.
+- [ ] Run one scenario with non-English source material but English deck output.
+
+Fail criteria:
+- Generated semantic slide copy comes from fallback, labels, or repair code.
+- A malformed or rejected LLM stage is accepted as publishable.
+- A deck can publish without required narration.
+- Validation silently rewrites weak content into public-looking content.
+- Production code adds prompt-specific regex/string correction.
+
+## Phase 1: Cleanup Before V2 Generation
+
+Status: completed
 
 Goal:
-- make typed Q&A, Record question, and Live voice feel like one coherent product flow
-- make voice input understandable and cancellable
-- stop low-quality transcripts from turning into nonsense answers
-- ensure the answer path has enough grounded context to produce relevant answers when the material exists
-- decide whether a question is actually relevant to the presentation before spending answer effort on it
-- fetch more information when a relevant question cannot be answered from the current deck/session context alone
-- treat English as the primary quality bar for this phase while keeping the architecture compatible with later multilingual support
+- Remove old V1 generation/recovery complexity so V2 is built on clean stage boundaries.
+
+Implemented:
+- [x] Remove production deterministic deck generation and static deck recovery.
+- [x] Remove legacy slide-contract, deck-normalization, slide-enrichment, slide-recovery, and draft-assessment modules.
+- [x] Remove workbench/debug UI and obsolete benchmark/evaluation scripts.
+- [x] Disable `OpenAICompatibleLLMProvider.generateDeck` fail-closed until V2 generation exists.
+- [x] Split publication review policy out of `SessionService`.
+- [x] Split OpenAI-compatible provider tasks into named modules for grounding classification, presentation planning, narration generation, semantic deck review, and final presentation review.
+- [x] Split research and grounding orchestration into named API-stage modules.
+- [x] Rename validation entry points away from repair language: `validateDeck` and `validateNarrations`.
+- [x] Remove API/example defaults that selected mock LLM and mock web research for generation.
+- [x] Add API guard so `LLM_PROVIDER=mock` remains test-only and cannot publish user-facing presentations.
+- [x] Remove regex-based review-code matching and English slide-number parsing from local narration review follow-up.
+- [x] Document remaining fallback categories as runtime safety, render safety, transport compatibility, test-only, or documented temporary routing.
+- [x] Mark the historical MVP architecture plan as non-authoritative.
+- [x] Make `tasks.md` a checkbox-based implementation tracker.
+
+Still to implement or verify:
+- [x] Review [openai-compatible.ts](/Users/johanengwall/github_repos/slidespeech/packages/providers/src/llm/openai-compatible.ts) for accidental V1 behavior.
+- [x] Review [session-service.ts](/Users/johanengwall/github_repos/slidespeech/packages/core/src/session-service.ts) for accidental V1 behavior.
+- [x] Review [grounding-selection.ts](/Users/johanengwall/github_repos/slidespeech/apps/api/src/services/grounding-selection.ts) for accidental V1 behavior.
+- [x] Review [grounding-source-analysis.ts](/Users/johanengwall/github_repos/slidespeech/apps/api/src/services/grounding-source-analysis.ts) for accidental V1 behavior.
+- [x] Review [question-answer-service.ts](/Users/johanengwall/github_repos/slidespeech/packages/core/src/question-answer-service.ts) for accidental V1 behavior.
+- [x] Re-check remaining fallback/regex references before Phase 2 closes.
+- [x] Confirm no production generation module can create a publishable semantic deck without the planned V2 pipeline.
+- [x] Confirm no removed V1 module is imported from production code.
+- [x] Remove production final-review `repairedNarrations` behavior so narration review cannot become a hidden repair layer.
+- [x] Run the full automated validation checklist before starting V2 implementation.
+- [x] Run the manual code validation sweep before starting V2 implementation.
+
+Phase 1 validation:
+- [x] `npm run arch:check` passed after documentation alignment.
+- [x] `git diff --check` passed after documentation alignment.
+- [x] `npm run arch:graph` before closing Phase 1.
+- [x] `npm run arch:check` before closing Phase 1.
+- [x] `git diff --check` before closing Phase 1.
+- [x] `npm run typecheck --workspaces --if-present -- --pretty false` before closing Phase 1.
+- [x] `npm test` before closing Phase 1.
 
 Definition of done:
-- typed Q&A shows a clear modal while the answer is being generated
-- Record question shows a clear listening/transcribing flow
-- Live voice has stricter gates than Record question
-- user can cancel a question before it is sent
-- transcript is visible before or while answer generation happens
-- obviously bad transcripts do not go straight into backend Q&A
-- one English and one Swedish voice question work end-to-end without obvious nonsense
+- [x] No production generation module can create a publishable semantic deck without the planned V2 pipeline.
+- [x] No removed V1 module is imported from production code.
+- [x] Architecture map and import graph are current.
+- [x] Recurring automated validation passes.
+- [x] Manual code validation sweep has been run before V2 implementation starts.
 
-Subtasks:
-- [x] Add a shared question-flow state machine for typed Q&A, Record question, and Live voice
-- [x] Add a shared question-flow modal with states for listening, transcribing, transcript review, generating answer, and speaking answer
-- [ ] Add `Cancel question` support to the modal and wire it through all three entry paths
-- [x] Route typed Q&A through the same modal instead of only disabling the send button
-- [x] Show transcript text prominently for voice questions
-- [x] Add transcript quality gates on backend voice input before calling session interaction
-- [x] Remove English hardcodes from browser voice defaults where possible
-- [x] Stop assuming English-only backend STT by default
-- [x] Tighten Live voice gating so ambient speech/noise is ignored more often than it interrupts
-- [x] Enrich Q&A answer context so factual and contextual questions see enough relevant slide, deck, and source material
-- [x] Add an explicit relevance classification step so off-topic questions are recognized as off-topic instead of forced into deck-shaped answers
-- [x] Distinguish between:
-  - relevant and answerable from current deck/session context
-  - relevant but missing context
-  - not relevant to the current presentation
-- [x] For relevant-but-missing questions, add a controlled follow-up research/fetch path before answering
-- [ ] Decide what sources that follow-up fetch may use:
-  - current deck sources first
-  - trusted web research second
-  - explicit refusal when grounding still is not sufficient
-- [x] Add a final answer-validation gate so obviously non-answers are rejected before they reach the learner
-- [x] Add clearer fallback behavior when the available material is insufficient for a reliable answer
-- [ ] Verify typed Q&A, Record question, and Live voice separately
+## Phase 2: Validation Sweep
 
-Current progress:
-- initial shared modal/state machine is implemented in the presenter
-- typed Q&A now goes through the same visible flow as voice
-- backend voice transcripts are now gated before Q&A is called
-- browser speech now follows deck/browser language instead of hardcoded `en-US`
-- backend STT code paths now support multilingual/auto mode, and the local runtime is now running `faster-whisper` with model `base`
-- Live voice now auto-sends only clear presenter questions and holds uncertain ambient transcripts for review
-- answer-path relevance classification is implemented and tested
-- relevant grounded factual questions can now trigger controlled follow-up research when the initial source grounding is too weak
-- grounded factual answers now go through a final answer-validation gate before they are returned
-- rejected homepage/source sludge can now be repaired into a tighter grounded factual snippet instead of only falling back to a refusal
-- backend `Record question` still works after the STT switch on an English voice-turn smoke test
-- Swedish runtime verification is still pending real microphone/browser input; synthetic `say` audio was not a reliable proxy
-- English live Q&A is now materially better on:
-  - `System Verification`
-  - `VGR`
-  - `iPhone`
-  - `SpongeBob`
-
-Latest live validation findings:
-- `System Verification` fresh generation was still slow (`~195s`) and drifted to a generic “Ensuring Quality in Software” framing instead of clear onboarding/company framing
-- `System Verification` typed Q&A for `What countries are System Verification in?` now returns `Sweden, Germany, Bosnia and Herzegovina, Poland, Denmark.`
-- `System Verification` backend voice-turn for `Who is the CEO of System Verification?` now gives an honest grounded fallback instead of generic homepage/source sludge
-- `System Verification` off-topic rejection worked as intended
-- `VGR` typed English Q&A worked for the workshop exercise question
-- `VGR` typed Swedish Q&A failed by misclassifying a clearly relevant workshop question as off-topic
-- `VGR` backend voice-turn worked for an English contextual usage question
-- `SpongeBob` typed off-topic handling now redirects honestly instead of producing a deck-shaped answer
-- `SpongeBob` typed factual Q&A for `When did SpongeBob first premiere?` now succeeds in isolated live validation with:
-  - `The first episode that actually aired to the public was called 'Help Wanted.' It came out on May 1, 1999, and has the production number 001.`
-  - this required a stricter factual-answer gate and better deck-context fallback prioritization
-- `SpongeBob` still showed variability in broader chained validation runs earlier, so topic-only English decks are improved but still worth watching
-- `iPhone`
-  - `Which company created the iPhone?` now returns the clean factual answer `Apple.`
-  - `Why was the iPhone important to the history of smartphones?` now returns an acceptable contextual answer in isolated live voice-turn validation, including the fallback path when the model answer times out
-- the new answer-validation gate therefore looks useful beyond `System Verification`; it is helping on `iPhone` and `SpongeBob` too, not just the company-grounded case
-- `Live voice` browser-specific UI behavior is not yet fully validated in-browser from automation; only the shared transcript/Q&A path has been validated through tests and backend voice-turn checks
-
-### 3. Generation quality
-Status: active
+Status: completed
 
 Goal:
-- return to deck quality after the current Q&A/STT stream is complete
-- shift effort upstream into better generation inputs so validation repairs become a safety net, not the main quality mechanism
+- Confirm the cleaned codebase is stable before adding V2 generation.
 
-Definition of done for the next pass:
-- hard prompts do not collapse into obviously repetitive or generic slide structure
-- onboarding/company prompts stay company-specific
-- workshop prompts keep a clear practice/exercise slide
-- fresh subject prompts do not drift into unsupported abstract claims
-- factual grounding is converted into role-scoped facts before slide generation
-- each slide receives a focused brief with allowed evidence instead of the whole grounding pool
-- semantic validation remains language-neutral and LLM-assisted where possible
+Required automated checks:
+- [x] `npm run arch:graph`
+- [x] `npm run arch:check`
+- [x] `git diff --check`
+- [x] `npm run typecheck --workspaces --if-present -- --pretty false`
+- [x] `npm test`
+- [x] `npm run verify:api` as a read-only API smoke check; generation endpoints are intentionally excluded until Pipeline 2.0 exists.
+- [x] `npm run verify:llm` fails when `.env` points at an unloaded model and passes when `LMSTUDIO_MODEL` is explicitly set to the currently loaded model.
 
-Known open problems:
-- `System Verification` still drifts into generic company/value language
-- `VGR` still risks weak workshop structure
-- evaluator is still more generous than the actual saved deck quality
-- whole-deck retries spend too much time repairing decks that were under-specified before generation
-- recent System Verification live generation still fell into deterministic fallback after semantic review rejected repeated LLM deck attempts
-- fallback must remain safe, but it should not be the normal route for weak-but-repairable decks
+Required manual/live scenarios:
+- [x] Topic-only stable subject: Donald Duck context built without web research.
+- [x] Explicit single URL: Molted Email context built from `https://molted.email/`.
+- [x] Multiple explicit URLs: Donald Duck context built from Wikipedia and Britannica.
+- [x] User asks to research/googla: VGR-style prompt failed closed when no trustworthy sources were fetched.
+- [x] Company onboarding: Atlassian context built with grounded facts.
+- [x] Workshop/practice deck: real-estate marketing workshop intent classified as workshop.
+- [x] Entertainment/factual event: Donald Duck topic classified without SpongeBob-specific code.
+- [x] Swedish-source grounding with English deck output: currently fail-closed without explicit sources; improve research strategy in Phase 4 instead of patching.
+- [x] Typed Q&A: copied an existing session into `/tmp`, asked a typed question, received a relevant answer, and session paused after answering.
+- [x] Q&A fallback inspection: removed deterministic context/source answer generation after LLM answer failure; Q&A now fails closed unless the answer LLM and answer validation accept the response.
+- [x] Research fallback inspection: removed guessed Wikipedia/direct same-domain URLs; supplemental explicit-source research now uses explicit URLs plus site-scoped search, not hardcoded path candidates.
+- [x] Planning fallback inspection: removed duplicated/static arc prompt templates and local focus-anchor derivation; plan prompts now require intro/distinct beats/closing without choosing a fixed semantic arc.
+- [x] Source-hygiene inspection: removed abstract marketing semantic blacklists and synthetic "notable focus areas" highlights; local filters now focus on navigation, CTA, scrape, and source-quality noise.
+- [x] Record question deferred to Phase 7 because it requires a publishable V2 session.
+- [x] Live voice deferred to Phase 7 because it requires a publishable V2 session and browser microphone access.
 
-Current progress:
-- outline-first hardening has started:
-  - presentation planning now receives coverage goals separately from visible grounding summary
-  - plan generation is explicitly treated as an outline stage with one audience-facing storyline beat per final slide
-  - plan normalization expands/trims storyline to the requested slide count so long decks do not need generic extension slides
-  - research scaffold labels such as `Research coverage goals` and `Curated grounding highlights` are stripped away before they can become fallback slide text
-  - deterministic fallback now prefers curated highlights and grounding facts over raw research summaries when it has to build extra slides
-  - scaffold-like outline phrases such as `Explanation of ...` and truncated `into daily` endings are now treated as quality failures before slide text is accepted
-- explicit-source organization grounding now tries same-domain support pages before broader web fallback
-- explicit-source support search is now host-filtered, so off-domain results cannot silently become grounding
-- `System Verification` no longer regresses through the earlier `SIS Global` false-positive support search path
-- supporting explicit-source findings are now sanitized more aggressively to remove scraped counters and faq-style question headings before they can seed slide contracts
-- fetched research findings now pass through a new LLM-assisted grounding classification step before generation:
-  - it curates high-signal grounding highlights and excerpts
-  - it marks source roles/relevance and narrows `groundingSourceIds` when it has confidence
-  - it feeds a curated grounding summary into generation instead of only the older raw research summary
-  - the old heuristic highlight/excerpt path remains as fallback when the classifier fails or returns too little
-- `System Verification` now opens with a harder onboarding role and later organization contracts bias toward operational grounding before generic value language
-- organization role separation is now stricter in the contract and repair layers:
-  - seed acceptance is role-aware for `entity-operations`, `entity-capabilities`, and `entity-value`
-  - plan-driven repair now rejects headings and key points that clearly signal the wrong organization role
-  - `entity-value` now prefers concrete outcome evidence instead of treating the bare word `value` as enough signal
-- role-specific recovery and assessment are now stricter against repair-heavy slide meta:
-  - recovered org and subject slides no longer rely on `this slide should...` style fallback language
-  - `entity-operations` now requires a concrete operating anchor
-  - `entity-value` now requires a concrete example slot only when the evidence contains a real customer case
-  - `entity-value` now falls back to an evidence-backed practical consequence when sources do not contain customer-case evidence
-  - fabricated customer/client/provider scenarios are rejected across organization-role slides when no supporting case evidence exists
-  - onboarding slides now reject common second-person marketing phrases and unsupported customer-impact labels
-  - organization contract seed selection now separates operations, capabilities, and value anchors more strictly so service/framework text is not reused as operating-model evidence
-  - organization deck titles are now normalized away from marketing-guide phrasing such as `Your Guide`, `excellence`, and `journey`
-  - no-case organization value slides now reject tool/framework/CI pipeline detail as the value story unless it is backed by explicit customer-case evidence
-  - operations slides now reject service/tool/AI/pipeline stories when the slide is supposed to explain operating model, footprint, teams, and workflow
-  - no-case organization value slides now also reject invented ERP transformation, migration project, deployment-delay, proprietary-application, and portal examples
-  - workshop-practice evidence now prefers the activity requirement or concrete grounded task instead of a generic learning objective
-- fallback slide-point filtering is now stricter:
-  - short fragmentary evidence phrases are filtered out more aggressively
-  - workshop-practice titles and learning goals are stabilized around a reusable audience-facing action phrase
-  - recovery paths now treat more malformed plan text as unusable point candidates instead of leaking it directly into slide copy
-- generation latency regression found 2026-04-27:
-  - launchpad text made a long-running generation look like it was blocked in `Preparing presenter mode`, even though the API was still retrying deck generation and slide enrichment
-  - presenter start now only waits for the active slide narration instead of all slide narrations
-  - background narration prefetch now pauses while presenter startup or speech playback is active
-  - full deck retries now stop earlier when the only remaining hard failure is cross-slide distinctness
-  - plain-text slide enrichment fallback is now limited to one attempt before deterministic recovery
-- direct contract inspection for the explicit multi-URL System Verification prompt now shows a healthier arc:
-  - orientation
-  - operations
-  - capabilities
-  - value
-- `System Verification` still over-indexes service/capability language from same-domain material, so the remaining blocker is now later-slide role fidelity and repair quality rather than domain filtering alone
-- latest live signal says the new grounding layer is directionally right but not sufficient yet:
-  - it reduces some junk and source duplication
-  - but LLM slide enrichment still drags organization slides toward self-promotional service language
-- 2026-05-03 System Verification onboarding live check after outline-first hardening:
-  - job `genjob_sg51nfmu` completed as `deck_37w28oaf`
-  - deck-level deterministic fallback did not appear to trigger, and raw research labels no longer leaked into visible slide text
-  - latency was still poor at about 5 minutes 20 seconds
-  - content is still not acceptable: slides 4-6 contain fragmentary/recovery-heavy copy such as `Explanation of QA delivery...`, `QA delivery is integrated into daily`, and generic capability/value language
-  - next blocker is slide-brief/slide-enrichment quality after the outline, not the existence of an outline stage itself
-- generation-first rebuild phase 1 has started:
-  - grounding classification can now return role-scoped facts
-  - API grounding builds a fallback fact bank from curated highlights/excerpts when the classifier does not return facts
-  - provider slide generation now builds slide briefs from contracts and routes scoped facts into outline/enrichment prompts
-  - compact fallback prompts now include role-scoped facts and slide briefs
-- generation-first phase 2 has started:
-  - deterministic recovery paths now prefer scoped slide-brief evidence before global grounding
-  - final-slide recovery now preserves a visible closing/questions-welcome role
-  - added regression coverage so recovery cannot silently use unrelated global grounding when a slide brief exists
+Definition of done:
+- [x] The codebase is stable with generation intentionally fail-closed.
+- [x] Remaining fallback/regex references are classified and justified.
+- [x] No cleanup item can create or approve publishable semantic deck content.
+- [x] Open questions are documented before Phase 3 starts.
 
-Subtasks:
-- [x] Phase 1: Build a language-neutral generation fact bank from curated grounding:
-  - role, claim, evidence, source ids, confidence
-  - no output-specific correction rules
-- [x] Phase 1: Build slide briefs from deck arc + slide contracts:
-  - slide role
-  - audience question
-  - required claims
-  - allowed evidence fact ids
-  - forbidden overlap with earlier slide briefs
-- [x] Phase 1: Pass slide briefs into outline and enrichment prompts so each slide sees scoped evidence first
-- [ ] Phase 2: Make slide generation role-first:
-  - generate from brief before fallback
-  - keep final slide as an explicit closing/invite-to-questions role
-  - keep first slide as explicit intro/orientation role
-- [ ] Phase 3: Replace whole-deck retry bias with slide-local repair where the failure is isolated
-- [ ] Phase 4: Strengthen structured LLM semantic deck review for:
-  - source support
-  - role drift
-  - repeated explanation
-  - language consistency
-  - weak opening/closing
-- [ ] Phase 5: Live validation matrix across several deck types:
-  - organization onboarding
-  - public-sector/workshop prompt
-  - pop-culture factual prompt
-  - product/technology prompt
-  - multi-URL grounding prompt
-- [ ] Phase 5: Track generation latency separately from quality so we know which fixes improve output versus only adding time
-- [ ] Tighten the new grounding classifier so unsupported superlatives and homepage self-description are demoted more aggressively
-- [ ] Revisit organization onboarding framing now that cleaner grounding is entering the pipeline
-- [ ] Revisit workshop slide-role separation
-- [ ] Revisit topic-only subject decks so early slides become concrete faster
-- [ ] Add structured LLM semantic deck review before deck acceptance so language consistency, role drift, prompt leakage, and template copy are judged semantically instead of through English phrase lists
-- [ ] Re-run the live regression suite after the next generation pass
+Open findings carried into their owning phases:
+- [x] LLM readiness requires both API health and the configured model id; `.env` currently expects `qwen/qwen3.6-35b-a3b`.
+- [x] Phase 4 must improve source acquisition for specific non-English public-sector prompts without relaxing fail-closed gates.
+- [x] Phase 4 must budget source-bundle size and LLM calls because larger grounding classification calls can time out.
+- [x] Phase 7 must remove Q&A dependence on reasoning-content extraction by using an explicit agentic answer contract.
+- [x] Q&A no longer converts ranked slide/source snippets into semantic answers when answer generation fails.
+- [x] Research/source hygiene no longer prefetches guessed encyclopedia pages or same-domain support paths as hidden semantic fallback.
+- [x] Slide planning no longer gets duplicated static arc instructions from intent context.
+- [x] Recorded question and live voice are explicitly scheduled for Phase 7 browser/manual validation.
 
-### 4. Visual polish
-Status: active
+## Phase 3: V2 Types, Interfaces, And Logging
+
+Status: in progress
+
+Owned V2 stages:
+- `PromptClassification`
+- `ResearchPlan`
+- `ResearchBundle`
+- `FactBank`
+- `DeckStrategy`
+- `SlidePlan[]`
+- `SlideDesignSpec[]`
+- `SlideDraft[]`
+- `ReviewResult`
+- `NarrationScript[]`
+- `PublishablePresentation`
+- `Grounded Q&A`
 
 Goal:
-- improve slide and presenter clarity without destabilizing the runtime
+- Add the typed artifacts and stage interfaces before implementing semantic behavior.
 
-Definition of done for the next pass:
-- presentation overview looks intentional and readable
-- question/answer states are visually obvious
-- image use remains relevant and non-gimmicky
+Implementation tasks:
+- [ ] Define `PromptClassification` schema/type.
+- [ ] Define `ResearchPlan` schema/type.
+- [ ] Define `ResearchBundle` schema/type.
+- [ ] Define `FactBank` schema/type.
+- [ ] Define `DeckStrategy` schema/type.
+- [ ] Define `SlidePlan[]` schema/type.
+- [ ] Define `SlideDesignSpec[]` schema/type.
+- [ ] Define `SlideDraft[]` schema/type.
+- [ ] Define `ReviewResult` schema/type.
+- [ ] Define `NarrationScript[]` schema/type.
+- [ ] Define `PublishablePresentation` schema/type.
+- [ ] Define `GroundedAnswer` and resume-plan runtime types.
+- [ ] Add stage result metadata for `status`, `warnings`, `errors`, and source traceability.
+- [ ] Add development logging so every failed generation can be inspected by stage.
+- [ ] Keep production generation fail-closed until downstream phases are complete.
 
-Subtasks:
-- [x] Harden PowerPoint export layout so downloaded decks reserve non-overlapping regions for title, hero, visuals, key points, and footer
-- [ ] Revisit presenter overview/thumbnail polish
-- [ ] Improve presentation-theme consistency where it clearly helps readability
-- [ ] Keep image pipeline honest: real relevant images first, curated fallback only when needed
+Validation:
+- [ ] Type-level tests for artifact shape.
+- [ ] Unit tests for stage result success/reject/error states.
+- [ ] `npm run arch:graph`
+- [ ] `npm run arch:check`
+- [ ] `npm run typecheck --workspaces --if-present -- --pretty false`
+- [ ] Targeted tests for V2 artifact contracts.
 
-Current progress:
-- PowerPoint export no longer renders cards, callouts, flow diagrams, images, and key points on top of each other; the exporter now chooses one primary content layout per slide
-- Exported SVG illustration data is normalized to base64 for `pptxgenjs`, avoiding broken image insertion in downloaded decks
-- Export accent fills now use valid 6-digit PowerPoint colors plus transparency instead of invalid 8-digit hex strings
-- Added a PPTX package-level regression that inspects generated slide XML and fails when named text boxes overlap or exceed slide bounds
+Definition of done:
+- [ ] All V2 artifacts have explicit schemas or TypeScript types.
+- [ ] No stage writes visible slide copy before `SlideDraft[]`.
+- [ ] Failure states are representable without throwing away diagnostics.
 
-### 5. Code health / refactoring
-Status: active
+## Phase 4: Classification, Research, And Fact Bank
+
+Status: pending
+
+Owned V2 stages:
+- `PromptClassification`
+- `ResearchPlan`
+- `ResearchBundle`
+- `FactBank`
 
 Goal:
-- reduce the largest files before the next full logic review
-- preserve behavior while moving isolated helpers into cohesive modules
-- make generation, Q&A, presenter UI, and validation easier to reason about separately
+- Build trustworthy context before slide planning.
 
-Definition of done for the next pass:
-- no duplicate helper modules with overlapping responsibility
-- `openai-compatible.ts`, `session-service.ts`, `question-answer-service.ts`, `session-presenter.tsx`, and validation code have clearer boundaries
-- each refactor batch passes typecheck and targeted tests before deeper logic changes resume
+Implementation tasks:
+- [ ] Implement prompt intent classification.
+- [ ] Classify language, audience, presentation goal, and deck mode.
+- [ ] Classify grounding mode, requested sources, requested coverage, and requested slide count.
+- [ ] Plan research from explicit requirements instead of broad scraping.
+- [ ] Execute explicit URLs first.
+- [ ] Execute same-domain support pages only when the research plan requires them.
+- [ ] Execute broader web research only when the prompt or risk profile requires it.
+- [ ] Curate a traceable fact bank.
+- [ ] Preserve missing facts and contradictions.
+- [ ] Pass `FactBank` downstream instead of raw scraped text.
 
-Current progress:
-- Q&A grounding and session review helpers are already extracted from core services
-- generation helper extraction is underway
-- `openai-compatible.ts` is reduced from roughly 8.7k lines earlier in the refactor stream to roughly 2.3k lines
-- core prompt/template quality guardrails are now centralized in `packages/core/src/text-quality-guards.ts` and explicitly documented as temporary smoke detectors, not multilingual repair logic
-- extracted provider modules now own structured-output parsing, normalization, presentation plan normalization, grounding classification normalization, narration review normalization, visual derivation, prompt shaping, slide enrichment prompt construction, slide draft assessment, slide draft anchor matching, slide contract title/learning-goal copy, slide contract point selection, slide contract builder/seed selection, slide recovery/orientation builders, deck normalization/outline shaping, slide contract types, arc policy, deck title normalization, plain-text slide parsing, organization role guards, slide contract rules, slide contract text hygiene, source-backed anchor selection, and workshop text helpers
-- removed the duplicate unused `organization-role-guards.ts` module in favor of the imported `organization-role-contracts.ts`
-- latest logic validation removed a redundant duplicate `pickContractText` concrete-selection branch while preserving the intended fallback order
-- latest validation passed provider typecheck, targeted generation contract/intent tests (`72/72`), full repo typecheck, full `npm test` (`244/244`), and `git diff --check` after extracting deck normalization/outline shaping
+Validation:
+- [ ] Unit test explicit single URL prompt.
+- [ ] Unit test multiple URL prompt.
+- [ ] Unit test topic-only prompt.
+- [ ] Unit test "research/googla" prompt.
+- [ ] Unit test requested side coverage preservation.
+- [ ] Unit test missing required facts.
+- [ ] Live test one company/source deck.
+- [ ] Live test one non-company topic.
 
-Next refactor candidates:
-- replace English/template regex quality decisions with structured LLM semantic review as described in [docs/multilingual-quality-strategy.md](/Users/johanengwall/github_repos/slidespeech/docs/multilingual-quality-strategy.md)
-- consider extracting `buildIntentPromptLines` only if/when prompt construction grows further
-- revisit `apps/web/components/session-presenter.tsx` after the provider split
-- revisit `packages/core/src/validation.ts` once generation behavior stabilizes
+Definition of done:
+- [ ] Generation receives a `FactBank`, not raw scraped text.
+- [ ] Missing required facts fail the stage or become explicit user-facing limitations.
+- [ ] Source-grounded facts carry source ids and confidence.
 
-## Recently completed
+## Phase 5: Deck Strategy, Slide Allocation, And Design Selection
 
-- [x] Removed the unstable Qwen3-TTS Apple Silicon experiment from the codebase and local machine
-- [x] Documented the Apple Silicon / MLX instability in [README.md](/Users/johanengwall/github_repos/slidespeech/README.md)
-- [x] Restored the active TTS path to Piper
-- [x] Verified the current app stack is healthy again
-- [x] Documented adjacent product references and what SlideSpeech should copy or avoid in [docs/product-landscape.md](/Users/johanengwall/github_repos/slidespeech/docs/product-landscape.md)
-- [x] Documented canonical deck arc and slide role definitions in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md)
-- [x] Tightened organization-grounded research so explicit-source support fetch prefers same-domain pages and rejects off-domain fallback matches
-- [x] Hardened `organization-overview` slide roles so onboarding opens with identity/orientation and later slides bias toward operations before capabilities/value
-- [x] Hardened downloaded PowerPoint export layout and added non-overlap regression coverage
-- [x] Extracted another provider refactor batch and validated it with repo typecheck plus the full test suite
+Status: pending
 
-## Latest generation validation
+Owned V2 stages:
+- `DeckStrategy`
+- `SlidePlan[]`
+- `SlideDesignSpec[]`
 
-- 2026-04-26 alternating live generation pass:
-  - `SpongeBob 1999 premiere` now fetches the linked `Help Wanted (SpongeBob SquarePants)` encyclopedia page instead of stopping at the broad series pages
-  - latest SpongeBob artifact: [deck_qvn7fvny.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_qvn7fvny.json)
-  - SpongeBob is materially better grounded, but still has one cross-slide warning and occasional over-interpretive later-slide copy
-  - `VGR AI workshop` no longer passes as clean when weak fallback copy leaks through; latest run correctly reports a `language_quality` warning
-  - latest VGR artifact: [deck_lnlcovt3.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_lnlcovt3.json)
-  - VGR still needs workshop-recovery work: exercise slides can repeat practical-exercise text, create fragmentary examples, and duplicate `daily work`
-  - `System Verification` still exposes the biggest organization-recovery blocker
-  - latest System Verification artifact: [deck_jdibpta0.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_jdibpta0.json)
-  - the stricter gates catch more tool/CI/customer-case drift during enrichment, but deterministic recovery can still create generic role-template slides if role-specific source facts are too thin
-  - next generation step: make organization/workshop recovery either use grounded facts from the research bundle or fail visibly; do not allow generic repair-template text to score as a good deck
-- Fresh `System Verification` live generation still shows a real problem in the middle of the deck:
-  - opening slide now lands closer to identity/orientation
-  - but `what we offer` and `how we work` still cross over or collapse into each other
-  - later recovery can still drift back into broad predictive-testing / strategic-intelligence / value-proposition language
-- Direct live generation against the current code confirms that:
-  - on `2026-04-24`, LM Studio health is currently failing with `fetch failed`
-  - live generation passes are therefore exercising the deterministic/recovery path much more than the intended enrichment path
-  - the recovery path is cleaner than before, but still not good enough to call `System Verification` or `VGR` done
-  - the contract layer is healthier than before
-  - but LLM slide enrichment still tends to drag `entity-operations` toward service catalog language
-  - and `entity-value` still tends to drift into abstract capability/value messaging unless recovery takes over
-  - so the remaining work is primarily in the generation/enrichment layer, not in prompt parsing or same-domain research selection
-- Completed live artifacts from this pass:
-  - [deck_a2z3o4r8.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_a2z3o4r8.json)
-  - [deck_ps4e1d88.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_ps4e1d88.json)
-- Honest read:
-  - structure is better than before
-  - grounding is cleaner than before
-  - generation is still not good enough for `System Verification`
-  - the next fix should target slide-role fidelity/recovery for `entity-operations`, `entity-capabilities`, and `entity-value`, not more search-domain work
-- Multiple explicit source URLs work as intended at the research/runtime layer:
-  - the direct grounding set carries both URLs through to `sourceIds`
-  - example artifact: [deck_7p1lcpst.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_7p1lcpst.json)
-- `Use Google for additional information` now behaves materially better in prompt parsing:
-  - it no longer leaks into the subject or search queries for source-backed subject prompts
-  - example artifact: [deck_6w4ceeot.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_6w4ceeot.json)
-- `Googla information about ...` without explicit URLs is still much weaker than explicit-source grounding:
-  - prompt parsing now keeps the organization identity (`System Verification`)
-  - but generation quality still falls back toward generic AI/value language
-  - example artifact: [deck_66qfdlvr.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_66qfdlvr.json)
-- Latest live fallback-focused validation now passes again for:
-  - [deck_yip51v51.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_yip51v51.json)
-  - [deck_ogbtny9k.json](/Users/johanengwall/github_repos/slidespeech/data/decks/deck_ogbtny9k.json)
-- Honest read on those new artifacts:
-  - they now pass the stricter repair gate even when LM Studio slide enrichment is falling back
-  - `System Verification` is structurally cleaner than before, especially on slide roles and titles
-  - but the actual slide copy is still too generic and repetitive
-  - `VGR` workshop structure passes, but slide 2 and slide 4 still contain weak phrasing and fallback-heavy copy
-  - the next blocker is no longer role drift alone; it is weak `focus/objective` text quality leaking into final copy, especially in organization and workshop decks
+Goal:
+- Decide the deck story, slide jobs, fact allocation, and layout intent before any visible prose is generated.
 
-## Not active now
+Implementation tasks:
+- [ ] Implement deck strategy generation from classification and fact bank.
+- [ ] Allocate first slide as `intro`.
+- [ ] Allocate last slide as `conclusion`.
+- [ ] Allocate body slides with distinct jobs.
+- [ ] Allocate allowed facts per slide.
+- [ ] Define overlap policy per slide when needed.
+- [ ] Select design specs from content needs.
+- [ ] Prevent role labels and internal planning text from becoming visible slide copy.
+- [ ] Ensure design specs do not rewrite facts.
 
-- TTS model replacement
-- new LLM experiments
+Validation:
+- [ ] Unit test first slide is `intro`.
+- [ ] Unit test final slide is `conclusion`.
+- [ ] Unit test body slide distinctness.
+- [ ] Unit test fact allocation.
+- [ ] Unit test overlap policy.
+- [ ] Unit test unsupported slide requests.
+- [ ] Live test onboarding prompt.
+- [ ] Live test teaching prompt.
+- [ ] Live test workshop/how-to prompt.
+- [ ] Live test strategy/report prompt.
+
+Definition of done:
+- [ ] Every slide has a distinct reason to exist before prose generation.
+- [ ] No slide plan relies on static fallback copy.
+- [ ] Layout intent is separated from semantic content.
+
+## Phase 6: Slide Draft Generation And Stage Review
+
+Status: pending
+
+Owned V2 stages:
+- `SlideDraft[]`
+- `ReviewResult`
+
+Goal:
+- Generate visible slide content from allocated facts and design specs, then fail or retry the owning stage when quality is insufficient.
+
+Implementation tasks:
+- [ ] Generate slide drafts from `SlidePlan[]`, `FactBank`, and `SlideDesignSpec[]`.
+- [ ] Review slide drafts for grounding.
+- [ ] Review slide drafts for role fidelity.
+- [ ] Review slide drafts for repetition.
+- [ ] Review slide drafts for language consistency.
+- [ ] Review slide drafts for renderer compatibility.
+- [ ] Retry failed slide/content stages with structured feedback.
+- [ ] Fail closed after repeated stage failure.
+- [ ] Ensure review rejection blocks publication.
+
+Validation:
+- [ ] Unit test malformed LLM output.
+- [ ] Unit test rejected review output.
+- [ ] Unit test missing facts.
+- [ ] Unit test repeated main claims.
+- [ ] Unit test language mismatch.
+- [ ] Live test one previously failing prompt.
+- [ ] Live test one unrelated prompt.
+
+Definition of done:
+- [ ] Bad slide drafts are rejected, not repaired into generic decks.
+- [ ] Repeated content is a failure unless explicitly planned.
+- [ ] Review rejection blocks publication.
+
+## Phase 7: Narration, Publication, And Runtime Handoff
+
+Status: pending
+
+Owned V2 stages:
+- `NarrationScript[]`
+- `PublishablePresentation`
+- `Grounded Q&A`
+
+Goal:
+- Produce a coherent presenter script and publish only complete, reviewed presentations.
+
+Implementation tasks:
+- [ ] Generate narration after slide drafts are stable.
+- [ ] Review narration as presenter speech.
+- [ ] Reject narration that repeats slide bullets instead of presenting the material.
+- [ ] Publish only after slide review passes.
+- [ ] Publish only after narration review passes.
+- [ ] Publish only after final publication review passes.
+- [ ] Keep Q&A on the runtime path with grounded answer and resume planning.
+- [ ] Ensure Q&A answers bridge back to the current presentation.
+
+Validation:
+- [ ] Unit test missing narration.
+- [ ] Unit test malformed final review.
+- [ ] Unit test rejected final review.
+- [ ] Unit test Q&A answer validation fail-closed behavior.
+- [ ] Live test typed Q&A.
+- [ ] Live test recorded question.
+- [ ] Live test presenter resume.
+
+Definition of done:
+- [ ] First narration introduces the presentation.
+- [ ] Final narration closes and invites questions.
+- [ ] A presentation cannot become user-facing with partial narration.
+- [ ] Q&A answers bridge back to the current presentation.
+
+## Phase 8: Cross-Scenario Live Validation And Release Candidate
+
+Status: pending
+
+Goal:
+- Prove the new pipeline is not overfit to one deck type.
+
+Required live scenarios:
+- [ ] System Verification onboarding
+- [ ] VGR / public-sector AI workshop
+- [ ] SpongeBob or Donald Duck factual entertainment topic
+- [ ] Marketing strategy for newly built properties
+- [ ] Product/site deck from a single explicit URL
+- [ ] Multi-URL grounded deck
+- [ ] Topic-only strategy/report deck
+- [ ] Swedish-source grounding with English output
+
+Validation:
+- [ ] Record stage diagnostics for each scenario.
+- [ ] Compare failures by stage rather than patching visible symptoms.
+- [ ] Update the architecture document only if a phase boundary is proven wrong.
+- [ ] Run `npm run arch:graph`.
+- [ ] Run `npm run arch:check`.
+- [ ] Run `git diff --check`.
+- [ ] Run `npm run typecheck --workspaces --if-present -- --pretty false`.
+- [ ] Run `npm test`.
+- [ ] Commit only after automated checks and the agreed live scenario set have completed.
+
+Definition of done:
+- [ ] The pipeline produces materially better first drafts across unrelated scenarios.
+- [ ] Failures are explainable by stage artifact, not hidden fallback behavior.
+- [ ] Remaining issues are documented as explicit next-phase work.

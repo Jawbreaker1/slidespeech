@@ -23,7 +23,8 @@ The architecture is intentionally modular so LLM, vision, STT, TTS, VAD, storage
 Active implementation tracking lives in [tasks.md](/Users/johanengwall/github_repos/slidespeech/tasks.md).
 This README is the product and status narrative, not the canonical task list.
 Competitive and product-reference notes live in [docs/product-landscape.md](/Users/johanengwall/github_repos/slidespeech/docs/product-landscape.md).
-Canonical deck-arc and slide-role definitions live in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
+The canonical target generation architecture lives in [docs/generation-pipeline-v2.md](/Users/johanengwall/github_repos/slidespeech/docs/generation-pipeline-v2.md).
+Deck-mode and slide-role inventory/mapping lives in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
 
 ## What makes SlideSpeech interesting
 
@@ -48,7 +49,7 @@ That is the real product shape:
 Classification is central to the system.
 SlideSpeech tries to make explicit decisions early instead of relying on one giant prompt.
 
-The canonical definitions for generation-time deck arcs and slide roles live in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
+The target Pipeline 2.0 artifacts are defined in [docs/generation-pipeline-v2.md](/Users/johanengwall/github_repos/slidespeech/docs/generation-pipeline-v2.md). Deck-mode and slide-role mapping lives in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
 
 At generation time, the system classifies things like:
 
@@ -92,7 +93,7 @@ This is the core idea behind the codebase:
 - validate locally
 - keep the runtime fast and recoverable
 
-## Current generation pipeline
+## Current generation status
 
 SlideSpeech is not meant to be "one prompt in, one static deck out".
 The product goal is a grounded teaching pipeline with two modes:
@@ -100,57 +101,66 @@ The product goal is a grounded teaching pipeline with two modes:
 - a generation pipeline that turns a topic or source bundle into a teachable presentation
 - a runtime pipeline that presents, answers questions, adapts, and resumes in context
 
-### Current generation pipeline
+### Pipeline 2.0 migration state
 
-Today, generation is quality-first and still more conservative than fast.
-In plain terms, the system currently does this:
+The old generation path is intentionally being dismantled before V2 generation
+is rebuilt. Production deck generation is fail-closed until the typed V2 stages
+exist.
 
-1. Interpret the user prompt into a structured teaching intent.
-2. Decide whether live web research is needed, and if so fetch and summarize sources.
-3. Build a grounded presentation plan.
-4. Generate a deck draft, often through multiple guarded attempts.
-5. Enrich slides one by one into the internal slide schema.
-6. Validate and repair the deck when quality checks fail.
-7. Generate the first narration so presenter mode can start.
-8. Continue background enrichment for later narrations and final review.
+The target runtime will do this:
+
+1. Classify the prompt into `PromptClassification`.
+2. Plan and execute research only when it is needed.
+3. Curate a traceable `FactBank`.
+4. Plan `DeckStrategy` and `SlidePlan[]` before any visible slide copy is
+   written.
+5. Select `SlideDesignSpec[]` from content needs.
+6. Generate `SlideDraft[]` from allocated facts and design specs.
+7. Generate presenter-style `NarrationScript[]`.
+8. Review each stage and fail closed when material or quality is insufficient.
 
 ```mermaid
 flowchart TD
-    A["Prompt or source-aware request"] --> B["Intent extraction"]
-    B --> C["Research planning"]
-    C --> D["Explicit source fetch and search"]
-    D --> E["Grounding bundle"]
-    E --> F["Presentation plan"]
-    F --> G["Deck generation"]
-    G --> H["Slide-by-slide enrichment"]
-    H --> I["Validation and repair"]
-    I --> J["Save deck and generate intro narration"]
-    J --> K["Background narration and review"]
+    A["Prompt or source-aware request"] --> B["PromptClassification"]
+    B --> C["ResearchPlan"]
+    C --> D["ResearchBundle"]
+    D --> E["FactBank"]
+    E --> F["DeckStrategy"]
+    F --> G["SlidePlan[]"]
+    G --> H["SlideDesignSpec[]"]
+    H --> I["SlideDraft[]"]
+    I --> J["NarrationScript[]"]
+    I --> K["Stage reviews"]
+    J --> L["Publication review"]
+    K --> L
 ```
 
-This is why SlideSpeech can already produce grounded, narration-aware decks, but also why generation can still take too long: several LLM-heavy stages are still serialized and guarded.
+The critical rule is that validation protects publication. It must not repair a
+bad deck into something that merely looks publishable.
 
-## Demo focus, temporary freeze, and current reality
+## Current implementation reality
 
-The project is temporarily shifting focus from deep generator work to end-to-end demo readiness.
-That does **not** mean presentation generation is solved.
+The legacy semantic generator, recovery builders, and static fallback decks have
+been removed. Production deck generation is intentionally fail-closed while the
+typed Pipeline 2.0 stages are implemented.
 
-Current reality:
+What currently works independently of new deck generation:
 
-- presentation generation is still **not close to done**
-- the generator still relies on too many retries, repairs, and guarded fallback paths
-- opening-slide quality, deck-wide topic discipline, and narration consistency are still not reliable enough
-- generation latency is still too high for the final product shape
+- the web application and saved-presentation runtime
+- session state, interruption handling, and typed Q&A infrastructure
+- backend Faster Whisper STT and Piper TTS provider boundaries
+- hosted image resolution with renderer-safe visual fallback
+- PowerPoint export infrastructure
 
-What this temporary shift means:
+What is being built now:
 
-- we will build and polish the full user flow needed for a demo
-- we will use a curated set of prompts that currently behave well enough
-- we will continue measuring generation quality during that work
-- we are **not** treating current generation as production-ready, general-purpose, or even broadly reliable yet
+- explicit V2 artifact schemas and stage diagnostics
+- agentic prompt classification, research planning, and fact curation
+- deck strategy and per-slide fact allocation before prose generation
+- layout-specific slide drafts and coherent deck-level narration
 
-In other words: SlideSpeech may become demoable before its generation pipeline is truly good.
-That is acceptable for a POC, but it should not be mistaken for the generator being finished.
+The application must not claim successful generation until a complete
+`PublishablePresentation` has passed all V2 review gates.
 
 ## Experimental note: Qwen3-TTS on Apple Silicon
 
@@ -165,41 +175,42 @@ If we revisit `Qwen3-TTS`, it should happen on a separate machine or with a diff
 
 ### Target pipeline
 
-The target architecture is faster, cleaner, and more progressive.
-The goal is to make the first usable deck appear quickly while keeping quality high through structured enrichment afterward.
+The target architecture is faster, cleaner, and stage-driven.
+The goal is to generate a good deck from the right facts and plan, not to
+recover a weak deck after the fact.
 
 In plain terms, the target system should do this:
 
-1. Turn the prompt into a clean intent contract: subject, audience, format, constraints, and required activities.
-2. Build a strong evidence bundle from trusted sources only when grounding is actually needed.
-3. Generate a coherent deck from that contract with fewer retries and less repair.
-4. Return a usable first result early.
-5. Enrich narration, illustrations, QA, and presenter assets progressively in the background.
-6. Keep question answering, STT, and TTS on a separate fast runtime path instead of blocking generation.
+1. Turn the prompt into a clean classification artifact.
+2. Build a fact bank from trusted sources when grounding is needed.
+3. Allocate facts and slide jobs before prose generation.
+4. Generate visible slides from allocated material and design specs.
+5. Generate presenter narration after slide drafts are stable.
+6. Keep question answering, STT, and TTS on a separate fast runtime path.
 
 ```mermaid
 flowchart TD
-    A["Prompt or source bundle"] --> B["Intent contract"]
-    B --> C["Research planner"]
-    C --> D["Trusted evidence bundle"]
-    D --> E["Deck scaffold and content generation"]
-    E --> F["Usable first deck returned early"]
-    F --> G["Progressive enrichment"]
-    G --> H["Narration"]
-    G --> I["Illustrations"]
-    G --> J["QA and review"]
-    F --> K["Fast interactive runtime"]
+    A["Prompt or source bundle"] --> B["PromptClassification"]
+    B --> C["ResearchPlan"]
+    C --> D["FactBank"]
+    D --> E["DeckStrategy + SlidePlan[]"]
+    E --> F["SlideDesignSpec[]"]
+    F --> G["SlideDraft[]"]
+    G --> H["NarrationScript[]"]
+    G --> I["Review gates"]
+    H --> J["Publishable presentation"]
+    I --> J
+    J --> K["Fast interactive runtime"]
     K --> L["Speech-to-text"]
-    K --> M["Question answering"]
+    K --> M["Grounded Q&A"]
     K --> N["Text-to-speech"]
 ```
 
 ### What this means in practice
 
-- The current system is already architected around provider boundaries and grounded generation.
-- The target system keeps that architecture, but moves toward fewer retries, less repair, earlier first render, and much faster interaction.
-- This is the path to a demo-worthy product: good presentations in a reasonable time, then fast question answering on top.
-- We are not there yet. The current generator is still under active correction and should be treated as an unfinished subsystem.
+- The current system is already architected around provider boundaries and grounded runtime behavior.
+- The target system keeps those boundaries, but removes hidden semantic fallback and post-hoc content repair.
+- We are not there yet. Generation should be treated as an unfinished subsystem until Pipeline 2.0 is implemented and validated.
 
 ## Runtime Q&A pipeline
 
@@ -284,23 +295,28 @@ This matters for multilingual support too:
 
 Active implementation tracking now lives in [tasks.md](/Users/johanengwall/github_repos/slidespeech/tasks.md). This README is a product/status narrative, not the canonical task list.
 
-Implemented now:
+Available infrastructure:
 
-- topic to internal deck JSON
 - web presenter runtime
 - per-slide narration generation
 - segmented narration with per-slide progress tracking
 - text-based conversational interruption flow
 - browser-native speech recognition when available, with backend audio upload as fallback
 - browser playback through a backend TTS provider for narration points and answers
-- real local TTS through the macOS system voice backend
+- server-side Piper TTS assets for browser-accessible narration and answers
 - structured visual slides with layouts, cards, callouts, flow blocks, and local illustration slots
 - provider-driven slide illustration pipeline with mock-local rendering and hosted web-image lookup
 - session state machine and narration-aware resume planning
-- automatic web-grounded deck generation for time-sensitive topics when hosted research is enabled
 - LM Studio integration behind an `LLMProvider`
 - explicit external web research API and UI panel
 - file-based persistence for decks, sessions, and transcripts
+
+Temporarily disabled or pending under Pipeline 2.0:
+
+- user-facing topic/source to publishable deck generation
+- automatic web-grounded deck generation for time-sensitive topics
+- production `PromptClassification` -> `ResearchPlan` -> `FactBank` -> `SlidePlan[]` -> `SlideDraft[]`
+- publication of generated decks before V2 stage review passes
 
 Not implemented yet:
 
@@ -314,23 +330,23 @@ Not implemented yet:
 
 - provider interfaces first
 - no vendor logic in core orchestration
-- internal deck JSON is the source of truth
+- internal deck JSON is the runtime presentation state; Pipeline 2.0 documents define generation architecture
 - simple, testable modules over clever but fragile abstractions
 - explicit state transitions
 - explicit provenance when external knowledge is used
 
 ## Current-topic grounding
 
-Deck generation is topic-only by default, but time-sensitive topics can be
-web-grounded automatically before the LLM builds the deck.
+Current-topic grounding is a target behavior for Pipeline 2.0, not an active
+publishable-deck path while generation is fail-closed.
 
 - examples: `latest`, `current`, `today`, `recent`, year-based topics like `2026`
-- hosted web research runs first
-- its summary and source URLs are passed into deck generation as grounding
-- resulting decks should use `source.type = "mixed"` with external `sourceIds`
+- hosted web research should run before generation when grounding is required
+- curated facts and source URLs should be passed into V2 fact curation and slide planning
+- resulting decks should preserve explicit source provenance
 
-If hosted web research is not enabled, the API now fails fast for topics that
-look time-sensitive instead of silently pretending the model has fresh facts.
+If hosted web research is required but unavailable, generation should fail
+instead of silently pretending the model has fresh facts.
 
 ## Architecture
 

@@ -2,6 +2,7 @@ import type {
   Deck,
   GenerateDeckInput,
   GenerateNarrationInput,
+  GroundingFact,
   LLMProvider,
   PedagogicalProfile,
   PresentationIntent,
@@ -27,6 +28,7 @@ export class PresentationPlanner {
     groundingCoverageGoals?: string[],
     targetDurationMinutes?: number,
     targetSlideCount?: number,
+    groundingFacts?: GroundingFact[],
   ): Promise<PresentationPlan> {
     return this.llmProvider.planPresentation({
       topic,
@@ -37,6 +39,7 @@ export class PresentationPlanner {
       ...(groundingHighlights?.length ? { groundingHighlights } : {}),
       ...(groundingExcerpts?.length ? { groundingExcerpts } : {}),
       ...(groundingCoverageGoals?.length ? { groundingCoverageGoals } : {}),
+      ...(groundingFacts?.length ? { groundingFacts } : {}),
       ...(targetDurationMinutes ? { targetDurationMinutes } : {}),
       ...(targetSlideCount ? { targetSlideCount } : {}),
     });
@@ -77,12 +80,9 @@ export class PresentationQualityReviewer {
     input: ReviewDeckSemanticsInput,
   ): Promise<DeckSemanticReviewResult> {
     if (typeof this.llmProvider.reviewDeckSemantics !== "function") {
-      return Promise.resolve({
-        approved: true,
-        score: 1,
-        summary: "Deck semantic review unavailable; deterministic checks remain active.",
-        issues: [],
-      });
+      return Promise.reject(
+        new Error("Deck semantic review is not supported by the configured LLM provider."),
+      );
     }
 
     return this.llmProvider.reviewDeckSemantics(input);

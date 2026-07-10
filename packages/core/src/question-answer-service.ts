@@ -9,20 +9,14 @@ import type {
 } from "@slidespeech/types";
 import {
   computeContextQualityPenalty,
-  countRelevanceOverlap,
   countTokenOverlap,
-  domainFromUrl,
   ensureSentenceEnding,
   FACTUAL_INFORMATION_PATTERN,
   FACTUAL_RESEARCH_CUE_TOKENS,
-  formatGroundedSourceAnswer,
   hasRepeatedWordWindow,
-  isResponsiveGroundedAnswer,
   looksLikeInternalPresentationScaffold,
   looksLikeTaxonomyNoise,
   normalizeContextText,
-  normalizeExampleLeadIn,
-  PRESENTATION_REFERENTIAL_PATTERN,
   tokenizeContext,
   uniqueNonEmptyStrings,
 } from "./question-answer-heuristics";
@@ -43,16 +37,17 @@ type QuestionAnswerInput = {
   turnDecision: ConversationTurnDecision;
 };
 
-type ContextAnswerCandidate = {
-  snippet: string;
-  score: number;
-  kind: "current_slide" | "deck" | "source";
-};
-
 type QuestionScopeClassification =
   | "presentation_relevant"
-  | "presentation_relevant_needs_more_context"
-  | "off_topic";
+  | "presentation_relevant_needs_more_context";
+
+const SOURCE_NAVIGATION_ANSWER_NOISE_PATTERN =
+  /\b(?:home|knowledge hub|press release|article|blog|career|careers|open positions|contact|privacy|newsletter|search|read more|learn more|view all news|follow us|sign up)\b/gi;
+
+const looksLikeSourceNavigationAnswerNoise = (value: string): boolean => {
+  const matches = value.match(SOURCE_NAVIGATION_ANSWER_NOISE_PATTERN) ?? [];
+  return matches.length >= 3;
+};
 
 export class QuestionAnswerService {
   private readonly groundingService: QuestionAnswerGroundingService;
@@ -73,10 +68,6 @@ export class QuestionAnswerService {
       question: input.question,
     });
 
-    if (scope === "off_topic") {
-      return "That question does not seem to be about the current presentation. Ask about the current slide, the deck topic, or the attached source material.";
-    }
-
     const questionContext = await this.buildQuestionContext({
       answerMode,
       deck: input.deck,
@@ -84,42 +75,6 @@ export class QuestionAnswerService {
       question: input.question,
       scope,
     });
-    const localAnswer = this.buildLocalAnswer(
-      answerMode,
-      input.slide,
-      input.turnDecision,
-    );
-
-    if (localAnswer) {
-      return localAnswer;
-    }
-
-    const deterministicAnswer = this.buildDeterministicContextAnswer({
-      answerMode,
-      deck: input.deck,
-      slide: input.slide,
-      question: input.question,
-      ...(questionContext.broaderDeckContext
-        ? { broaderDeckContext: questionContext.broaderDeckContext }
-        : {}),
-      ...(questionContext.sourceGroundingContext
-        ? { sourceGroundingContext: questionContext.sourceGroundingContext }
-        : {}),
-    });
-
-    if (
-      deterministicAnswer &&
-      (await this.shouldAcceptAnswerCandidate({
-        deck: input.deck,
-        slide: input.slide,
-        question: input.question,
-        answerMode,
-        proposedAnswer: deterministicAnswer,
-        ...questionContext,
-      }))
-    ) {
-      return deterministicAnswer;
-    }
 
     try {
       const answer = await this.llmProvider.answerQuestion({
@@ -157,30 +112,8 @@ export class QuestionAnswerService {
       }
     } catch (error) {
       console.warn(
-        `[slidespeech] question answering fallback for slide ${input.slide.id}: ${(error as Error).message}`,
+        `[slidespeech] question answering model path failed for slide ${input.slide.id}: ${(error as Error).message}`,
       );
-    }
-
-    const fallbackAnswer = this.buildFallbackAnswer({
-      answerMode,
-      deck: input.deck,
-      slide: input.slide,
-      question: input.question,
-      turnDecision: input.turnDecision,
-      ...questionContext,
-    });
-
-    if (
-      await this.shouldAcceptAnswerCandidate({
-        deck: input.deck,
-        slide: input.slide,
-        question: input.question,
-        answerMode,
-        proposedAnswer: fallbackAnswer,
-        ...questionContext,
-      })
-    ) {
-      return fallbackAnswer;
     }
 
     return this.buildUnavailableAnswer(answerMode);
@@ -205,43 +138,6 @@ export class QuestionAnswerService {
       default:
         return "general_contextual";
     }
-  }
-
-  private buildLocalAnswer(
-    answerMode: QuestionAnswerMode,
-    slide: Slide,
-    turnDecision: ConversationTurnDecision,
-  ): string | null {
-    const beginnerExplanation = slide.beginnerExplanation.trim();
-    const primaryPoint = (slide.keyPoints[0] ?? slide.learningGoal).trim();
-
-    if (answerMode === "summarize_current_slide") {
-      return beginnerExplanation || ensureSentenceEnding(primaryPoint);
-    }
-
-    if (answerMode === "example") {
-      const exampleSeed = this.selectExampleSeed(slide);
-      return exampleSeed
-        ? `One concrete example is ${ensureSentenceEnding(
-            normalizeExampleLeadIn(exampleSeed),
-          )}`
-        : null;
-    }
-
-    if (turnDecision.inferredNeeds.includes("confusion")) {
-      return beginnerExplanation || ensureSentenceEnding(primaryPoint);
-    }
-
-    return null;
-  }
-
-  private selectExampleSeed(slide: Slide): string | null {
-    const slideExample = slide.examples[0]?.trim();
-    if (slideExample) {
-      return slideExample;
-    }
-
-    return null;
   }
 
   private buildBroaderDeckContext(
@@ -335,60 +231,17 @@ export class QuestionAnswerService {
     slide: Slide;
     question: string;
   }): QuestionScopeClassification {
-    if (
-      input.answerMode === "summarize_current_slide" ||
-      input.answerMode === "example"
-    ) {
-      return "presentation_relevant";
-    }
-
-    if (PRESENTATION_REFERENTIAL_PATTERN.test(input.question)) {
-      return "presentation_relevant";
-    }
-
-    const sourceHostnames = uniqueNonEmptyStrings(
-      input.deck.source.sourceIds.map((sourceId) => domainFromUrl(sourceId)),
-    );
-    const sourceDomainPhrase = sourceHostnames.join(" ");
-    const anchorCorpus = uniqueNonEmptyStrings([
-      input.deck.topic,
-      input.deck.title,
-      input.deck.summary,
-      input.slide.title,
-      input.slide.learningGoal,
-      ...input.slide.keyPoints.slice(0, 3),
-      sourceDomainPhrase,
-    ]).join(" ");
-
-    const topicSignal =
-      countRelevanceOverlap(input.question, input.deck.topic) +
-      countRelevanceOverlap(input.question, input.slide.title) +
-      countRelevanceOverlap(input.question, input.slide.learningGoal);
-    const anchorSignal = countRelevanceOverlap(input.question, anchorCorpus);
-    const sourceSignal = sourceDomainPhrase
-      ? countRelevanceOverlap(input.question, sourceDomainPhrase)
-      : 0;
     const looksFactual = FACTUAL_INFORMATION_PATTERN.test(input.question);
 
-    if (topicSignal >= 2 || anchorSignal >= 3 || sourceSignal >= 1) {
-      return looksFactual
-        ? "presentation_relevant_needs_more_context"
-        : "presentation_relevant";
-    }
-
-    if (looksFactual && (topicSignal >= 1 || anchorSignal >= 2)) {
+    if (input.answerMode === "grounded_factual") {
       return "presentation_relevant_needs_more_context";
     }
 
-    if (
-      looksFactual &&
-      input.deck.source.sourceIds.length > 0 &&
-      countRelevanceOverlap(input.question, input.deck.topic) >= 1
-    ) {
+    if (looksFactual && input.deck.source.sourceIds.length > 0) {
       return "presentation_relevant_needs_more_context";
     }
 
-    return "off_topic";
+    return "presentation_relevant";
   }
 
   private shouldAttemptFollowUpResearch(input: {
@@ -402,10 +255,6 @@ export class QuestionAnswerService {
       !this.groundingService.hasProvider() ||
       input.deck.source.sourceIds.length === 0
     ) {
-      return false;
-    }
-
-    if (input.scope === "off_topic") {
       return false;
     }
 
@@ -442,43 +291,6 @@ export class QuestionAnswerService {
     return strongestOverlap < 2;
   }
 
-  private buildDeterministicContextAnswer(input: {
-    answerMode: QuestionAnswerMode;
-    deck: Deck;
-    slide: Slide;
-    question: string;
-    broaderDeckContext?: string;
-    sourceGroundingContext?: string;
-  }): string | null {
-    const rankedCandidates = this.rankContextCandidates(input);
-    const bestCandidate = rankedCandidates[0];
-    const secondBestScore = rankedCandidates[1]?.score ?? 0;
-
-    if (!bestCandidate) {
-      return null;
-    }
-
-    if (
-      bestCandidate.kind === "source" &&
-      bestCandidate.score >= 8 &&
-      bestCandidate.score >= secondBestScore + 2
-    ) {
-      const formatted = formatGroundedSourceAnswer(
-        bestCandidate.snippet,
-        input.question,
-      );
-      if (!isResponsiveGroundedAnswer(formatted, input.question)) {
-        return null;
-      }
-
-      return ensureSentenceEnding(
-        formatted,
-      );
-    }
-
-    return null;
-  }
-
   private async shouldAcceptAnswerCandidate(input: {
     deck: Deck;
     slide: Slide;
@@ -505,7 +317,10 @@ export class QuestionAnswerService {
     }
 
     if (typeof this.llmProvider.validateQuestionAnswer !== "function") {
-      return true;
+      console.warn(
+        `[slidespeech] rejected candidate answer for slide ${input.slide.id}: answer validation is not supported by the configured LLM provider.`,
+      );
+      return false;
     }
 
     try {
@@ -531,12 +346,12 @@ export class QuestionAnswerService {
       }
 
       return validation.isValid;
-    } catch (error) {
-      console.warn(
-        `[slidespeech] answer validation fallback for slide ${input.slide.id}: ${(error as Error).message}`,
-      );
-      return true;
-    }
+      } catch (error) {
+        console.warn(
+          `[slidespeech] answer validation unavailable for slide ${input.slide.id}; rejecting candidate: ${(error as Error).message}`,
+        );
+        return false;
+      }
   }
 
   private shouldRejectAnswerCandidateHeuristically(
@@ -569,11 +384,7 @@ export class QuestionAnswerService {
       return false;
     }
 
-    if (
-      /system verification - home|knowledge hub|press release|our qa solutions|quality assurance integrated|faster code|hidden risks/i.test(
-        normalizedAnswer,
-      )
-    ) {
+    if (looksLikeSourceNavigationAnswerNoise(normalizedAnswer)) {
       return true;
     }
 
@@ -605,93 +416,6 @@ export class QuestionAnswerService {
     return normalized;
   }
 
-  private buildFallbackAnswer(input: {
-    answerMode: QuestionAnswerMode;
-    deck: Deck;
-    slide: Slide;
-    question: string;
-    turnDecision: ConversationTurnDecision;
-    broaderDeckContext?: string;
-    sourceGroundingContext?: string;
-  }): string {
-    const localAnswer = this.buildLocalAnswer(
-      input.answerMode,
-      input.slide,
-      input.turnDecision,
-    );
-    if (localAnswer) {
-      return localAnswer;
-    }
-
-    const questionTopicSignal =
-      countTokenOverlap(input.question, input.deck.topic) +
-      countTokenOverlap(input.question, input.slide.title);
-    const rankedCandidates = this.rankContextCandidates(input);
-    if (
-      input.answerMode === "grounded_factual" &&
-      input.deck.source.sourceIds.length > 0 &&
-      questionTopicSignal >= 2
-    ) {
-      const bestGroundedCandidate = rankedCandidates.find(
-        (candidate) => candidate.kind === "source",
-      );
-      const formattedGroundedAnswer =
-        bestGroundedCandidate && bestGroundedCandidate.kind === "source"
-          ? formatGroundedSourceAnswer(bestGroundedCandidate.snippet, input.question)
-          : "";
-      if (
-        bestGroundedCandidate &&
-        bestGroundedCandidate.kind === "source" &&
-        isResponsiveGroundedAnswer(formattedGroundedAnswer, input.question)
-      ) {
-        return ensureSentenceEnding(formattedGroundedAnswer);
-      }
-    }
-
-    const fallbackCandidate = rankedCandidates[0];
-    const currentSlideCandidate = rankedCandidates.find(
-      (candidate) => candidate.kind === "current_slide",
-    );
-    if (input.answerMode === "grounded_factual") {
-      const formattedDeckFact = fallbackCandidate
-        ? formatGroundedSourceAnswer(fallbackCandidate.snippet, input.question)
-        : "";
-      if (isResponsiveGroundedAnswer(formattedDeckFact, input.question)) {
-        return ensureSentenceEnding(formattedDeckFact);
-      }
-
-      const formattedCurrentSlideFact = currentSlideCandidate
-        ? formatGroundedSourceAnswer(currentSlideCandidate.snippet, input.question)
-        : "";
-      if (isResponsiveGroundedAnswer(formattedCurrentSlideFact, input.question)) {
-        return ensureSentenceEnding(formattedCurrentSlideFact);
-      }
-    }
-
-    const deckFallbackOutranksCurrentSlideClearly =
-      fallbackCandidate?.kind === "deck" &&
-      currentSlideCandidate !== undefined &&
-      fallbackCandidate.score >= currentSlideCandidate.score + 4 &&
-      countTokenOverlap(fallbackCandidate.snippet, input.question) >=
-        countTokenOverlap(currentSlideCandidate.snippet, input.question) + 1;
-    const preferCurrentSlideFallback =
-      fallbackCandidate &&
-      fallbackCandidate.kind !== "current_slide" &&
-      currentSlideCandidate &&
-      (!deckFallbackOutranksCurrentSlideClearly ||
-        currentSlideCandidate.score >= fallbackCandidate.score - 2);
-
-    if (preferCurrentSlideFallback && currentSlideCandidate) {
-      return ensureSentenceEnding(normalizeContextText(currentSlideCandidate.snippet));
-    }
-
-    if (fallbackCandidate && input.answerMode !== "example") {
-      return ensureSentenceEnding(normalizeContextText(fallbackCandidate.snippet));
-    }
-
-    return "I do not have a reliable answer to that from the current slide or the available source material.";
-  }
-
   private buildUnavailableAnswer(answerMode: QuestionAnswerMode): string {
     if (answerMode === "grounded_factual") {
       return "I do not have a reliable answer to that from the current slide or the available source material.";
@@ -700,77 +424,4 @@ export class QuestionAnswerService {
     return "I do not have a reliable answer to that from the current slide or the broader presentation context.";
   }
 
-  private rankContextCandidates(input: {
-    answerMode: QuestionAnswerMode;
-    deck: Deck;
-    slide: Slide;
-    question: string;
-    broaderDeckContext?: string;
-    sourceGroundingContext?: string;
-  }): ContextAnswerCandidate[] {
-    const currentSlideSummary =
-      input.slide.beginnerExplanation ||
-      input.slide.keyPoints[0] ||
-      input.slide.learningGoal;
-    const currentSlideCandidate = normalizeContextText(
-      currentSlideSummary,
-    );
-    const broaderDeckCandidates =
-      input.answerMode === "grounded_factual" && input.sourceGroundingContext
-        ? []
-        : uniqueNonEmptyStrings(input.broaderDeckContext?.split("|") ?? []);
-    const sourceCandidates = uniqueNonEmptyStrings(
-      input.sourceGroundingContext?.split("|") ?? [],
-    );
-    const questionTopicSignal =
-      countTokenOverlap(input.question, input.deck.topic) +
-      countTokenOverlap(input.question, input.slide.title);
-    const sourceBiasActive =
-      sourceCandidates.length > 0 && questionTopicSignal >= 2;
-    const includeCurrentSlideCandidate = !(
-      input.answerMode === "grounded_factual" && sourceCandidates.length > 0
-    );
-    return [
-      ...(includeCurrentSlideCandidate && currentSlideCandidate
-        ? [
-            {
-              kind: "current_slide" as const,
-              snippet: currentSlideCandidate,
-              score:
-                countTokenOverlap(currentSlideCandidate, input.question) * 4 +
-                countTokenOverlap(currentSlideCandidate, input.slide.title) * 2 +
-                countTokenOverlap(currentSlideCandidate, input.slide.learningGoal) * 2 +
-                (input.answerMode === "grounded_factual"
-                  ? 0
-                  : sourceBiasActive
-                    ? 1
-                    : 4) -
-                computeContextQualityPenalty(currentSlideCandidate),
-            },
-          ]
-        : []),
-      ...broaderDeckCandidates.map((snippet) => ({
-        kind: "deck" as const,
-        snippet,
-        score:
-          countTokenOverlap(snippet, input.question) * 5 +
-          countTokenOverlap(snippet, input.slide.title) * 2 +
-          countTokenOverlap(snippet, input.slide.learningGoal) * 2 +
-          countTokenOverlap(snippet, input.deck.topic) -
-          computeContextQualityPenalty(snippet),
-      })),
-      ...sourceCandidates.map((snippet) => ({
-        kind: "source" as const,
-        snippet,
-        score:
-          countTokenOverlap(snippet, input.question) * 6 +
-          countTokenOverlap(snippet, input.slide.title) +
-          countTokenOverlap(snippet, input.slide.learningGoal) +
-          countTokenOverlap(snippet, input.deck.topic) * 2 +
-          (input.answerMode === "grounded_factual" ? 4 : 0) +
-          (sourceBiasActive ? 6 : 0) -
-          computeContextQualityPenalty(snippet),
-      })),
-    ].sort((left, right) => right.score - left.score);
-  }
 }

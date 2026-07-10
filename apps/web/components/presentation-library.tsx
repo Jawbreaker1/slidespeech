@@ -145,12 +145,6 @@ export const PresentationLibrary = () => {
               >
                 Back to launchpad
               </Link>
-              <Link
-                className="rounded-full border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-white"
-                href="/workbench"
-              >
-                Open workbench
-              </Link>
             </div>
           </div>
         </header>

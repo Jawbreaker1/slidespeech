@@ -1,5 +1,6 @@
 import type {
   AnswerQuestionInput,
+  AnswerValidationResult,
   ClassifyGroundingInput,
   ConversationTurnPlan,
   GenerateDeckInput,
@@ -15,6 +16,7 @@ import type {
   ReviewDeckSemanticsInput,
   SummarizeSectionInput,
   TransformExplanationInput,
+  ValidateQuestionAnswerInput,
   PresentationPlan,
   ReviewPresentationInput,
   Deck,
@@ -22,7 +24,7 @@ import type {
   SlideNarration,
 } from "@slidespeech/types";
 
-import { createId, healthy, nowIso, splitTextIntoSegments } from "../shared";
+import { createId, healthy, nowIso } from "../shared";
 
 const makePlan = (
   topic: string,
@@ -60,7 +62,7 @@ const makeCards = (
 ) =>
   points.slice(0, 3).map((point, index) => {
     const [head, ...rest] = point.split(":");
-    const fallbackTitle = point
+    const derivedTitle = point
       .replace(/\s+/g, " ")
       .trim()
       .replace(/^[^\p{L}\p{N}]+/gu, "")
@@ -73,7 +75,7 @@ const makeCards = (
     const title =
       rest.length > 0 && typeof head === "string" && head.trim().length > 0
         ? head.trim()
-        : fallbackTitle || "Main idea";
+        : derivedTitle || "Main idea";
     const body = (rest.length > 0 ? rest.join(":") : point).trim();
 
     return {
@@ -84,362 +86,133 @@ const makeCards = (
     };
   });
 
+const mockSlideRoles = [
+  {
+    title: "purpose and value",
+    layoutTemplate: "hero-focus",
+    accentColor: "0F766E",
+    tone: "accent",
+    eyebrow: "Why it matters",
+  },
+  {
+    title: "core structure",
+    layoutTemplate: "three-step-flow",
+    accentColor: "2563EB",
+    tone: "info",
+    eyebrow: "Core structure",
+  },
+  {
+    title: "applied scenario",
+    layoutTemplate: "two-column-callouts",
+    accentColor: "B45309",
+    tone: "warning",
+    eyebrow: "Concrete scenario",
+  },
+  {
+    title: "what to remember",
+    layoutTemplate: "summary-board",
+    accentColor: "7C3AED",
+    tone: "success",
+    eyebrow: "Wrap-up",
+  },
+] as const;
+
+const buildMockSlide = (
+  topic: string,
+  order: number,
+): Deck["slides"][number] => {
+  const role = mockSlideRoles[order] ?? {
+    ...mockSlideRoles[order % mockSlideRoles.length]!,
+    title: `focused teaching point ${order - mockSlideRoles.length + 1}`,
+  };
+  const keyPoints = [
+    `${topic} should be introduced with a clear learner-facing value.`,
+    `${topic} needs a simple structure before details are added.`,
+    `${topic} becomes easier to remember when one concrete example is visible.`,
+  ];
+
+  return {
+    id: createId("slide"),
+    order,
+    title: `${topic}: ${role.title}`,
+    learningGoal: `Explain ${topic} through ${role.title}.`,
+    keyPoints,
+    requiredContext: order === 0 ? [] : [`The earlier explanation of ${topic}.`],
+    speakerNotes: [
+      `Use this mock slide only as test support for ${topic}; real decks must come from the V2 generation pipeline.`,
+    ],
+    beginnerExplanation: `${topic} is easier to understand when the learner can connect value, structure, and an example.`,
+    advancedExplanation: `${topic} can be tested by checking whether each slide has a distinct role, grounded content, and a clear transition.`,
+    examples: [
+      `A useful test example for ${topic} connects the main idea to one concrete user situation.`,
+    ],
+    likelyQuestions: [
+      `What is the most important thing to remember about ${topic}?`,
+      `Can you give a concrete example of ${topic}?`,
+    ],
+    canSkip: order > 2,
+    dependenciesOnOtherSlides: [],
+    visualNotes: [`Render a simple ${role.layoutTemplate} mock visual.`],
+    visuals: {
+      layoutTemplate: role.layoutTemplate,
+      accentColor: role.accentColor,
+      eyebrow: role.eyebrow,
+      heroStatement: `${topic} needs one clear idea on this slide, not a full static deck template.`,
+      cards: makeCards(
+        [
+          `Value: ${topic} should answer a learner need.`,
+          `Structure: ${topic} should have a visible mental model.`,
+          `Example: ${topic} should include one concrete use case.`,
+        ],
+        ["accent", "info", "success"],
+      ),
+      callouts: [
+        {
+          id: createId("callout"),
+          label: "Mock scope",
+          text: "This slide exists only to keep tests schema-valid while real generation is rebuilt.",
+          tone: "neutral",
+        },
+      ],
+      diagramNodes:
+        role.layoutTemplate === "three-step-flow"
+          ? [
+              { id: "value", label: "Value", tone: "info" },
+              { id: "structure", label: "Structure", tone: "accent" },
+              { id: "example", label: "Example", tone: "success" },
+            ]
+          : [],
+      diagramEdges:
+        role.layoutTemplate === "three-step-flow"
+          ? [
+              { from: "value", to: "structure", label: "frames" },
+              { from: "structure", to: "example", label: "grounds" },
+            ]
+          : [],
+      imagePrompt: `A simple test-only visual for ${topic} using the ${role.layoutTemplate} layout.`,
+      imageSlots: [
+        {
+          id: createId("image"),
+          prompt: `Create a generic test visual for ${topic} that matches ${role.title}.`,
+          caption: "Test-only visual placeholder.",
+          altText: `${topic} mock visual`,
+          style: "diagram",
+          tone: role.tone,
+        },
+      ],
+    },
+  };
+};
+
 const buildDeck = (input: GenerateDeckInput): Deck => {
   const topic = input.topic.trim();
   const title = `${topic}: practical foundations`;
   const createdAt = nowIso();
-  const wasGrounded = Boolean(input.groundingSummary?.trim());
-
-  const baseSlides: Deck["slides"] = [
-    {
-      id: createId("slide"),
-      order: 0,
-      title: `${topic}: purpose and value`,
-      learningGoal: `See what ${topic} does, why it matters, and how its parts fit together.`,
-      keyPoints: [
-        `${topic} is a practical response to a concrete need or capability gap.`,
-        `${topic} is clearer when its purpose, structure, and example are visible together.`,
-        `A simple mental model helps people explain and apply ${topic}.`,
-        `${topic} is easiest to learn through concrete use rather than isolated terminology.`,
-      ],
-      requiredContext: [],
-      speakerNotes: [
-        "Start from the learner's everyday context, explain why the topic matters now, and preview the path through the presentation.",
-      ],
-      beginnerExplanation: `${topic} matters because it helps someone move from vague intuition to a clearer way of thinking and acting. The clearest first step is to connect the topic to a simple mental model, then show its main parts, and finally tie those parts to one concrete example. That makes it easier to understand not just what ${topic} is, but why it is useful and how the pieces fit together.`,
-      advancedExplanation: `${topic} combines a conceptual model, a method, and often an operational workflow that generalizes across multiple problems. A useful opening makes the value, boundaries, and main mechanism visible before the topic becomes more detailed.`,
-      examples: [
-        `If you need to explain ${topic} to a colleague, start with why someone should care.`,
-        `A learner usually understands ${topic} faster once they can connect the main idea to one concrete outcome or example.`,
-      ],
-      likelyQuestions: [
-        `What is ${topic} used for in practice?`,
-        `Do I need a technical background to understand ${topic}?`,
-      ],
-      canSkip: false,
-      dependenciesOnOtherSlides: [],
-      visualNotes: [
-        "The visual should foreground the learner problem, the topic value, and one clear mental model.",
-      ],
-      visuals: {
-        layoutTemplate: "hero-focus",
-        accentColor: "0F766E",
-        eyebrow: "Why it matters",
-        heroStatement: `${topic} becomes easier to trust and apply when the learner can see its value before the details.`,
-        cards: makeCards(
-          [
-            `Practical value: ${topic} responds to a concrete learner or user need.`,
-            `Mental model: one simple structure makes ${topic} easier to explain.`,
-            `Working understanding: a clear example makes ${topic} easier to retain.`,
-          ],
-          ["accent", "info", "success"],
-        ),
-        callouts: [
-          {
-            id: createId("callout"),
-            label: "Teaching cue",
-            text: `The first useful question is what changes for the learner once ${topic} is understood clearly.`,
-            tone: "warning",
-          },
-        ],
-        diagramNodes: [],
-        diagramEdges: [],
-        imagePrompt: `A clean educational keynote-style slide about why ${topic} matters, with warm accent color and simple cards.`,
-        imageSlots: [
-          {
-            id: createId("image"),
-            prompt: `Create an editorial-style visual that shows why ${topic} matters to a learner before any technical detail is introduced.`,
-            caption: "Lead with motivation, then structure.",
-            altText: `${topic} value illustration`,
-            style: "editorial",
-            tone: "accent",
-          },
-        ],
-      },
-    },
-    {
-      id: createId("slide"),
-      order: 1,
-      title: `${topic} in three building blocks`,
-      learningGoal: `Break ${topic} into simple components.`,
-      keyPoints: [
-        `An input provides ${topic} with concrete information, signals, or material to work on.`,
-        `Processing shows how ${topic} turns that input into something useful.`,
-        `An output provides the result that ${topic} delivers to the learner or user.`,
-      ],
-      requiredContext: [`The overall value of ${topic}.`],
-      speakerNotes: [
-        "Use simple words before jargon and compare the flow to something familiar.",
-      ],
-      beginnerExplanation: `${topic} becomes easier to understand if we split it into what goes in, what happens in the middle, and what comes out.`,
-      advancedExplanation: `${topic} can often be described as a pipeline with clear interfaces between ingestion, processing, and delivery.`,
-      examples: [
-        `Think of ${topic} like a kitchen: ingredients come in, cooking happens in the middle, and a finished dish is served.`,
-      ],
-      likelyQuestions: [
-        "Which part is hardest to build first?",
-        "Can one part be replaced without rebuilding everything?",
-      ],
-      canSkip: false,
-      dependenciesOnOtherSlides: [],
-      visualNotes: ["Three blocks with clear arrows between the steps."],
-      visuals: {
-        layoutTemplate: "three-step-flow",
-        accentColor: "2563EB",
-        eyebrow: "Core structure",
-        heroStatement: `${topic} is easiest to learn when the learner can track a simple flow from input to output.`,
-        cards: makeCards(
-          [
-            "Input: what enters the system or lesson.",
-            "Processing: where reasoning, transformation, or teaching happens.",
-            "Output: what the learner or user gets back.",
-          ],
-          ["info", "accent", "success"],
-        ),
-        callouts: [
-          {
-            id: createId("callout"),
-            label: "Design principle",
-            text: "Clear interfaces make it easier to inspect one part without losing the whole system.",
-            tone: "neutral",
-          },
-        ],
-        diagramNodes: [
-          { id: "input", label: "Input", tone: "info" },
-          { id: "processing", label: "Processing", tone: "accent" },
-          { id: "output", label: "Output", tone: "success" },
-        ],
-        diagramEdges: [
-          { from: "input", to: "processing", label: "enters" },
-          { from: "processing", to: "output", label: "becomes" },
-        ],
-        imagePrompt: `A clear three-step process diagram for ${topic}, with modern boxes and directional arrows.`,
-        imageSlots: [
-          {
-            id: createId("image"),
-            prompt: `Create a process-oriented diagram for ${topic} with three clear stages and strong directional flow.`,
-            caption: "Three visible stages make the system teachable.",
-            altText: `${topic} flow diagram`,
-            style: "diagram",
-            tone: "info",
-          },
-        ],
-      },
-    },
-    {
-      id: createId("slide"),
-      order: 2,
-      title: `A concrete example of ${topic}`,
-      learningGoal: `Ground the topic in a concrete scenario.`,
-      keyPoints: [
-        `A clear user scenario shows where ${topic} creates value or reduces risk.`,
-        `The flow of data or decisions shows how ${topic} behaves in practice.`,
-        `User-facing outcomes show whether the quality of ${topic} is visible and easier to test.`,
-      ],
-      requiredContext: [`The three building blocks of ${topic}.`],
-      speakerNotes: [
-        "Keep the example consistent and tie it back to the building blocks.",
-      ],
-      beginnerExplanation: `When ${topic} is tied to a concrete use case, it becomes clearer why each part of the solution exists.`,
-      advancedExplanation: `Following a realistic use case makes it possible to reason about tradeoffs, failure modes, and responsibility boundaries between modules.`,
-      examples: [
-        `If the topic is machine learning, the example could be a system that sorts incoming support tickets.`,
-      ],
-      likelyQuestions: [
-        "What happens if the input quality is poor?",
-        "How do you know the result is good?",
-      ],
-      canSkip: false,
-      dependenciesOnOtherSlides: [],
-      visualNotes: ["A scenario with input, a decision point, and an outcome."],
-      visuals: {
-        layoutTemplate: "two-column-callouts",
-        accentColor: "B45309",
-        eyebrow: "Concrete scenario",
-        heroStatement: `A believable example makes ${topic} easier to remember and critique.`,
-        cards: makeCards(
-          [
-            "Scenario: pick one learner-facing use case.",
-            "Decision point: show what the system or teacher must choose.",
-            "Outcome: explain what quality feels like to the user.",
-          ],
-          ["accent", "warning", "success"],
-        ),
-        callouts: [
-          {
-            id: createId("callout"),
-            label: "Example",
-            text: `Imagine using ${topic} in a support workflow where the system must make one clear decision before producing an answer.`,
-            tone: "info",
-          },
-          {
-            id: createId("callout"),
-            label: "Learner check",
-            text: "One useful question is what breaks first if the input becomes noisy or incomplete.",
-            tone: "warning",
-          },
-        ],
-        diagramNodes: [
-          { id: "scenario", label: "Scenario", tone: "info" },
-          { id: "decision", label: "Decision", tone: "warning" },
-          { id: "outcome", label: "Outcome", tone: "success" },
-        ],
-        diagramEdges: [
-          { from: "scenario", to: "decision", label: "triggers" },
-          { from: "decision", to: "outcome", label: "shapes" },
-        ],
-        imagePrompt: `A polished case-study slide for ${topic} with a scenario panel and highlighted decision point.`,
-        imageSlots: [
-          {
-            id: createId("image"),
-            prompt: `Create a case-study illustration for ${topic} with one realistic scenario, a highlighted decision point, and a visible outcome.`,
-            caption: "Concrete scenarios make abstract systems memorable.",
-            altText: `${topic} case-study illustration`,
-            style: "editorial",
-            tone: "warning",
-          },
-        ],
-      },
-    },
-    {
-      id: createId("slide"),
-      order: 3,
-      title: `${topic}: what to remember`,
-      learningGoal: `Synthesize the most important ideas behind ${topic}.`,
-      keyPoints: [
-        `${topic} is easiest to retain when its value, structure, and example are connected.`,
-        `The same mental model helps people explain ${topic} in new situations.`,
-        `One practical next step helps turn ${topic} from theory into usable understanding.`,
-      ],
-      requiredContext: [`The full introduction to ${topic}.`],
-      speakerNotes: [
-        "End with a short recap and one question that checks understanding.",
-      ],
-      beginnerExplanation: `A good summary helps the most important ideas stick even if the details fade.`,
-      advancedExplanation: `The closing synthesis should reduce cognitive load while opening the door to deeper study.`,
-      examples: [
-        `Ask the learner to describe the topic in one sentence and give their own example.`,
-      ],
-      likelyQuestions: [
-        "What should I try on my own after this?",
-      ],
-      canSkip: true,
-      dependenciesOnOtherSlides: [],
-      visualNotes: ["A short checklist and one clear next step."],
-      visuals: {
-        layoutTemplate: "summary-board",
-        accentColor: "7C3AED",
-        eyebrow: "Wrap-up",
-        heroStatement: `A strong finish compresses ${topic} into a few reusable ideas and one next action.`,
-        cards: makeCards(
-          [
-            "Core value: why the topic matters.",
-            "Working model: the simple structure to remember.",
-            "Next step: one concrete action after the lesson.",
-          ],
-          ["accent", "neutral", "success"],
-        ),
-        callouts: [
-          {
-            id: createId("callout"),
-            label: "Prompt",
-            text: "A useful recap question is whether the learner can restate the topic in one sentence and add their own example.",
-            tone: "info",
-          },
-          {
-            id: createId("callout"),
-            label: "Next move",
-            text: `One practical next step is to explain ${topic} aloud using only the three most important ideas.`,
-            tone: "success",
-          },
-        ],
-        diagramNodes: [],
-        diagramEdges: [],
-        imagePrompt: `A summary slide for ${topic} with a checklist board, one highlighted next step, and refined editorial styling.`,
-        imageSlots: [
-          {
-            id: createId("image"),
-            prompt: `Create a refined summary board for ${topic} with a checklist feel and one highlighted next step.`,
-            caption: "End with a picture the learner can remember.",
-            altText: `${topic} summary visual`,
-            style: "abstract",
-            tone: "success",
-          },
-        ],
-      },
-    },
-  ];
-
   const targetSlideCount = resolveTargetSlideCount(input);
-  const slides =
-    targetSlideCount <= baseSlides.length
-      ? baseSlides.slice(0, targetSlideCount).map((slide, index) => ({
-          ...slide,
-          order: index,
-        }))
-      : [
-          ...baseSlides.map((slide, index) => ({
-            ...slide,
-            order: index,
-          })),
-          ...Array.from({ length: targetSlideCount - baseSlides.length }, (_, extraIndex) => {
-            const order = baseSlides.length + extraIndex;
-            return {
-              id: createId("slide"),
-              order,
-              title: `${topic}: focused teaching point ${extraIndex + 1}`,
-              learningGoal: `Extend understanding of ${topic} with one additional concrete angle.`,
-              keyPoints: [
-                `${topic} is still coherent when it is deepened without changing the main explanation path.`,
-                `One additional concrete angle helps make ${topic} easier to apply.`,
-                `${topic} stays coherent when each added point still serves the same core model.`,
-              ],
-              requiredContext: [`The earlier explanation of ${topic}.`],
-              speakerNotes: [
-                "Use this slide only when the requested presentation length needs more depth or pacing.",
-              ],
-              beginnerExplanation: `This extra slide adds one more concrete angle so ${topic} becomes easier to understand without changing the main story.`,
-              advancedExplanation: `This slide extends coverage while staying aligned with the same subject, mental model, and explanatory structure.`,
-              examples: [
-                `Use an extra example, comparison, or recap element to deepen understanding of ${topic}.`,
-              ],
-              likelyQuestions: [
-                `How does this extra point strengthen understanding of ${topic}?`,
-              ],
-              canSkip: true,
-              dependenciesOnOtherSlides: [],
-              visualNotes: ["Keep the visual simple and consistent with the surrounding slides."],
-              visuals: {
-                layoutTemplate: "two-column-callouts" as const,
-                accentColor: "1C7C7D",
-                eyebrow: "Extended pacing",
-                heroStatement: `An extra teaching beat keeps the presentation aligned with the requested duration.`,
-                cards: makeCards(
-                  [
-                    "Depth: add one more clear point.",
-                    "Pacing: give the learner time to absorb the topic.",
-                    "Coherence: stay on the same main thread.",
-                  ],
-                  ["accent", "info", "success"],
-                ),
-                callouts: [],
-                diagramNodes: [],
-                diagramEdges: [],
-                imagePrompt: `An editorial teaching visual for an extra pacing slide about ${topic}.`,
-                imageSlots: [
-                  {
-                    id: createId("image"),
-                    prompt: `Create a consistent editorial visual for an additional pacing slide about ${topic}.`,
-                    caption: "Extra depth without changing the story.",
-                    altText: `${topic} extended pacing illustration`,
-                    style: "editorial" as const,
-                    tone: "accent" as const,
-                  },
-                ],
-              },
-            };
-          }),
-        ];
+  const wasGrounded = Boolean(input.groundingSummary?.trim());
+  const slides = Array.from({ length: targetSlideCount }, (_, order) =>
+    buildMockSlide(topic, order),
+  );
 
   return {
     id: createId("deck"),
@@ -471,25 +244,32 @@ const buildDeck = (input: GenerateDeckInput): Deck => {
 };
 
 const buildNarration = (input: GenerateNarrationInput): SlideNarration => {
-  const narration =
-    input.slide.order === 0
-      ? [
-          `${input.slide.title}.`,
-          `First, let us establish why ${input.deck.topic} matters to the learner.`,
-          input.slide.beginnerExplanation,
-          `As you listen, keep these anchors in mind: ${input.slide.keyPoints.slice(0, 3).join(", ")}.`,
-          `In the next slide, we will turn that motivation into a clearer structure.`,
-        ].join(" ")
-      : [
-          `${input.slide.title}.`,
-          input.slide.beginnerExplanation,
-          `Focus especially on: ${input.slide.keyPoints.join(", ")}.`,
-        ].join(" ");
+  const isOpening = input.slide.order === 0;
+  const isFinal = input.slide.order === input.deck.slides.length - 1;
+  const middleSegments = isOpening
+    ? [
+        `Welcome everyone. We will start by grounding ${input.deck.topic} in the first idea on this slide.`,
+        `First, let us establish why ${input.deck.topic} matters to the learner.`,
+        input.slide.beginnerExplanation,
+        `In practice, keep these anchors in mind: ${input.slide.keyPoints.slice(0, 3).join(", ")}.`,
+      ]
+    : [
+        `${input.slide.title}.`,
+        input.slide.beginnerExplanation,
+        `In practice, focus especially on: ${input.slide.keyPoints.join(", ")}.`,
+      ];
+  const segments = [
+    ...middleSegments,
+    isFinal
+      ? `I will pause here because questions are welcome about ${input.deck.topic}.`
+      : `Next, we will connect this idea to ${input.deck.slides[input.slide.order + 1]?.title ?? "the next slide"}.`,
+  ];
+  const narration = segments.join(" ");
 
   return {
     slideId: input.slide.id,
     narration,
-    segments: splitTextIntoSegments(narration),
+    segments,
     summaryLine: input.slide.learningGoal,
     promptsForPauses: [
       "Say stop if you want to pause.",
@@ -571,8 +351,8 @@ export class MockLLMProvider implements LLMProvider {
         relevance: index < relevantFindings.length ? "high" : "low",
         notes:
           index < relevantFindings.length
-            ? "Kept as a mock high-signal grounding source."
-            : "Not selected by the mock grounding classifier.",
+            ? "Selected by the test-only mock grounding classifier."
+            : "Rejected by the test-only mock grounding classifier.",
       })),
     };
   }
@@ -602,6 +382,24 @@ export class MockLLMProvider implements LLMProvider {
     return {
       text: `Short answer to "${input.question}": ${input.slide.beginnerExplanation} A concrete example is: ${input.slide.examples[0] ?? "start with a simple user scenario."}`,
       followUpPrompt: "Do you want a simpler explanation or a deeper one?",
+    };
+  }
+
+  async validateQuestionAnswer(
+    input: ValidateQuestionAnswerInput,
+  ): Promise<AnswerValidationResult> {
+    const proposedAnswer = input.proposedAnswer.trim();
+
+    if (!proposedAnswer) {
+      return {
+        isValid: false,
+        reason: "Mock validation rejected an empty answer.",
+      };
+    }
+
+    return {
+      isValid: true,
+      reason: "Mock validation accepted the candidate answer.",
     };
   }
 
@@ -687,11 +485,13 @@ export class MockLLMProvider implements LLMProvider {
       ];
     });
 
+    const hasRepairs = repairedNarrations.length > 0;
+
     return {
-      approved: repairedNarrations.length === 0,
-      overallScore: repairedNarrations.length === 0 ? 0.92 : 0.74,
+      approved: true,
+      overallScore: hasRepairs ? 0.82 : 0.92,
       summary:
-        repairedNarrations.length === 0
+        !hasRepairs
           ? "The deck and narrations are coherent enough to present."
           : "Some narrations were too weakly anchored to their slides and were rewritten.",
       issues: repairedNarrations.map((narration) => ({

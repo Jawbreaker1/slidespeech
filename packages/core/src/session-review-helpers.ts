@@ -1,19 +1,18 @@
 import type {
   Deck,
+  PresentationQualityIssue,
   PresentationReview,
   SlideNarration,
 } from "@slidespeech/types";
 
-import { buildDeterministicReview } from "./deterministic-generation";
 import { evaluateDeckQuality } from "./evaluation";
 import {
   ensureDeckTheme,
   ensureNarrationSegments,
-  REVIEW_NARRATION_REPAIR_CODE_PATTERN,
+  reviewIssueCodeRequiresNarrationRepair,
   type ValidationIssue,
 } from "./session-deck-quality";
 import { nowIso } from "./utils";
-import { rebuildNarrationFromSlideAnchors } from "./validation";
 
 export const countReadySlides = (
   deck: Deck,
@@ -68,8 +67,7 @@ export const mergeValidationMetadata = (
 
   return {
     passed: !combinedIssues.some((issue) => issue.severity === "error"),
-    repaired:
-      Boolean(deck.metadata.validation?.repaired) || additionalIssues.length > 0,
+    repaired: Boolean(deck.metadata.validation?.repaired),
     validatedAt: nowIso(),
     ...((summary ?? deck.metadata.validation?.summary) !== undefined
       ? { summary: summary ?? deck.metadata.validation?.summary }
@@ -84,61 +82,47 @@ export const mergeValidationMetadata = (
   };
 };
 
-export const buildDeterministicPresentationReview = (
-  deck: Deck,
+export const buildLocalBaselinePresentationReview = (
   validationIssues: ValidationIssue[],
-  repairedNarrations: SlideNarration[],
   note?: string,
-): PresentationReview =>
-  buildDeterministicReview({
-    deck,
-    validationIssues: validationIssues.map((issue) => ({
-      code: issue.code,
-      message: issue.message,
-      severity: issue.severity,
-      ...(issue.slideId ? { slideId: issue.slideId } : {}),
-    })),
-    repairedNarrations,
-    ...(note ? { note } : {}),
-  });
+): PresentationReview => {
+  const issues: PresentationQualityIssue[] = validationIssues.map((issue) => ({
+    code: issue.code,
+    severity: issue.severity,
+    dimension:
+      issue.code.includes("narration")
+        ? "narration"
+        : issue.code.includes("visual")
+          ? "visual"
+          : issue.code.includes("ground")
+            ? "grounding"
+            : "coherence",
+    message: issue.message,
+    ...(issue.slideId ? { slideId: issue.slideId } : {}),
+  }));
 
-export const shouldPreferDeterministicReview = (
-  llmReview: PresentationReview,
-  deterministicReview: PresentationReview,
-): boolean => {
-  if (llmReview.repairedNarrations.length > 0) {
-    return false;
-  }
+  const hasError = issues.some((issue) => issue.severity === "error");
+  const scorePenalty = issues.reduce((sum, issue) => {
+    switch (issue.severity) {
+      case "error":
+        return sum + 0.18;
+      case "warning":
+        return sum + 0.06;
+      case "info":
+      default:
+        return sum + 0.02;
+    }
+  }, 0);
 
-  const scoreGap = deterministicReview.overallScore - llmReview.overallScore;
-  const issueGap = llmReview.issues.length - deterministicReview.issues.length;
-  const llmIsMuchHarsher =
-    deterministicReview.approved &&
-    !llmReview.approved &&
-    scoreGap >= 0.15;
-
-  return (
-    llmIsMuchHarsher ||
-    scoreGap >= 0.25 ||
-    (scoreGap >= 0.15 && issueGap >= 2)
-  );
-};
-
-export const mergeReviewedNarrations = (
-  narrations: SlideNarration[],
-  repairedNarrations: SlideNarration[],
-): SlideNarration[] => {
-  const repairedBySlideId = new Map(
-    repairedNarrations.map((narration) => [
-      narration.slideId,
-      ensureNarrationSegments(narration),
-    ]),
-  );
-
-  return narrations.map((narration) =>
-    repairedBySlideId.get(narration.slideId) ??
-    ensureNarrationSegments(narration),
-  );
+  return {
+    approved: !hasError,
+    overallScore: Math.max(0.55, Number((0.92 - scorePenalty).toFixed(2))),
+    summary:
+      note ??
+      "Local presentation quality baseline used because the LLM review step was unavailable.",
+    issues,
+    repairedNarrations: [],
+  };
 };
 
 export const mergeNewNarrationsPreservingExisting = (
@@ -166,65 +150,28 @@ const resolveSlideIdFromReviewIssue = (
     return issue.slideId;
   }
 
-  const slideIdNumberMatch = issue.slideId?.match(/\bSlide\s+(\d+)\b/i);
-  if (slideIdNumberMatch) {
-    const slideIndex = Number(slideIdNumberMatch[1]) - 1;
-    return deck.slides[slideIndex]?.id ?? null;
-  }
-
-  const slideNumberMatch = issue.message.match(/\bSlide\s+(\d+)\b/i);
-  if (!slideNumberMatch) {
-    return null;
-  }
-
-  const slideIndex = Number(slideNumberMatch[1]) - 1;
-  return deck.slides[slideIndex]?.id ?? null;
+  return null;
 };
 
-export const applyLocalNarrationRepairsFromReview = (
+export const collectNarrationRevisionIssuesFromReview = (
   deck: Deck,
-  narrations: SlideNarration[],
   review: PresentationReview,
-): { narrations: SlideNarration[]; issues: ValidationIssue[] } => {
-  const narrationBySlideId = new Map(
-    narrations.map((narration) => [narration.slideId, ensureNarrationSegments(narration)]),
-  );
-  const issues: ValidationIssue[] = [];
+): ValidationIssue[] =>
+  review.issues
+    .filter((reviewIssue) => reviewIssueCodeRequiresNarrationRepair(reviewIssue.code))
+    .map((reviewIssue) => {
+      const slideId = resolveSlideIdFromReviewIssue(deck, reviewIssue);
+      const slide = slideId
+        ? deck.slides.find((candidate) => candidate.id === slideId)
+        : undefined;
 
-  for (const reviewIssue of review.issues) {
-    if (!REVIEW_NARRATION_REPAIR_CODE_PATTERN.test(reviewIssue.code)) {
-      continue;
-    }
-
-    const slideId = resolveSlideIdFromReviewIssue(deck, reviewIssue);
-    if (!slideId) {
-      continue;
-    }
-
-    const slide = deck.slides.find((candidate) => candidate.id === slideId);
-    if (!slide) {
-      continue;
-    }
-
-    narrationBySlideId.set(
-      slide.id,
-      rebuildNarrationFromSlideAnchors(deck, slide, narrationBySlideId.get(slide.id)),
-    );
-    issues.push({
-      code: "narration_review_repaired",
-      message: `Narration for "${slide.title}" was rebuilt locally after review flagged ${reviewIssue.code.toLowerCase()}.`,
-      severity: "warning",
-      slideId: slide.id,
+      return {
+        code: "narration_revision_required",
+        message: `Narration for "${slide?.title ?? slideId ?? "an unknown slide"}" was rejected by review and must be regenerated by the narration stage.`,
+        severity: "error" as const,
+        ...(slideId ? { slideId } : {}),
+      };
     });
-  }
-
-  return {
-    narrations: deck.slides
-      .map((slide) => narrationBySlideId.get(slide.id))
-      .filter((narration): narration is SlideNarration => Boolean(narration)),
-    issues,
-  };
-};
 
 export const finalizeDeckMetadata = (
   deck: Deck,
@@ -232,7 +179,6 @@ export const finalizeDeckMetadata = (
   review: PresentationReview,
   additionalValidationIssues: ValidationIssue[] = [],
 ): Deck => {
-  const evaluation = evaluateDeckQuality(deck, narrations);
   const reviewIssues: ValidationIssue[] = review.issues.map((issue) => ({
     code: issue.code,
     message: issue.message,
@@ -245,16 +191,23 @@ export const finalizeDeckMetadata = (
     review.summary,
     review.overallScore,
   );
-
-  return ensureDeckTheme({
+  const deckWithValidation: Deck = {
     ...deck,
-    updatedAt: nowIso(),
     metadata: {
       ...deck.metadata,
       validation: {
         ...validation,
         passed: validation.passed && review.approved,
       },
+    },
+  };
+  const evaluation = evaluateDeckQuality(deckWithValidation, narrations);
+
+  return ensureDeckTheme({
+    ...deckWithValidation,
+    updatedAt: nowIso(),
+    metadata: {
+      ...deckWithValidation.metadata,
       evaluation,
       generation: buildGenerationStatus(
         deck,
