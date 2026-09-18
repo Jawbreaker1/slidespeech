@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 
 import "./globals.css";
+import "../../../packages/providers/assets/fonts/presenter.css";
 
 export const metadata: Metadata = {
-  title: "SlideSpeech MVP",
-  description: "Interactive AI presenter MVP with modular providers.",
+  title: "SlideSpeech | Presentation Studio",
+  description: "Research, shape and present a story worth listening to.",
 };
 
 export default function RootLayout({

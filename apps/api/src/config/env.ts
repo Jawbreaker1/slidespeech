@@ -28,6 +28,7 @@ loadDotEnv(dotEnvPath ? { path: dotEnvPath } : undefined);
 
 const EnvSchema = z.object({
   API_PORT: z.coerce.number().default(4000),
+  API_HOST: z.string().default("127.0.0.1"),
   LLM_PROVIDER: z
     .enum(["mock", "lmstudio", "openai-compatible"])
     .default("lmstudio"),

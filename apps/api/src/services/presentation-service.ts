@@ -1,12 +1,9 @@
 import { resolve } from "node:path";
 
 import {
-  DeletePresentationResponseSchema,
-  ListSavedPresentationsResponseSchema,
   NarrationProgressResponseSchema,
   SelectSlideResponseSchema,
   SessionSnapshotResponseSchema,
-  SessionInteractionResponseSchema,
   SlideIllustrationResponseSchema,
   SlideNarrationSchema,
 } from "@slidespeech/types";
@@ -111,26 +108,6 @@ export const getSlideIllustration = async (input: {
   });
 };
 
-export const interactWithSession = async (input: {
-  sessionId: string;
-  text: string;
-}) => {
-  const result = await appContext.sessionService.interact(
-    input.sessionId,
-    input.text,
-  );
-
-  return SessionInteractionResponseSchema.parse({
-    deck: result.deck,
-    session: result.session,
-    interruption: result.interruption,
-    turnDecision: result.turnDecision,
-    resumePlan: result.resumePlan,
-    assistantMessage: result.assistantMessage,
-    narration: result.narration,
-    provider: appContext.llmProvider.name,
-  });
-};
 
 export const selectSlide = async (input: {
   sessionId: string;
@@ -177,104 +154,6 @@ export const getSessionSnapshot = async (sessionId: string) => {
     narration: result.narration,
     transcripts: result.transcripts,
     provider: appContext.llmProvider.name,
-  });
-};
-
-export const listSavedPresentations = async (input?: {
-  limit?: number;
-  offset?: number;
-  readyOnly?: boolean;
-}) => {
-  const normalizedLimit =
-    input?.limit !== undefined && Number.isFinite(input.limit) ? input.limit : 12;
-  const normalizedOffset =
-    input?.offset !== undefined && Number.isFinite(input.offset) ? input.offset : 0;
-  const limit = Math.max(1, Math.min(normalizedLimit, 50));
-  const offset = Math.max(0, normalizedOffset);
-  const readyOnly = input?.readyOnly ?? true;
-  const [sessions, decks] = await Promise.all([
-    appContext.sessionRepository.list(),
-    appContext.deckRepository.list(),
-  ]);
-  const deckById = new Map(decks.map((deck) => [deck.id, deck]));
-
-  const items = sessions
-    .map((session) => {
-      const deck = deckById.get(session.deckId);
-
-      if (!deck) {
-        return null;
-      }
-
-      const ready = deckIsReadyForReuse(deck);
-
-      if (readyOnly && !ready) {
-        return null;
-      }
-
-      return {
-        sessionId: session.id,
-        deckId: deck.id,
-        title: deck.title,
-        summary: deck.summary,
-        topic: deck.topic,
-        slideCount: deck.slides.length,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-        sourceType: deck.source.type,
-        generation: deck.metadata.generation,
-        validation: deck.metadata.validation,
-        evaluation: deck.metadata.evaluation,
-        ready,
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-
-  return ListSavedPresentationsResponseSchema.parse({
-    items: items.slice(offset, offset + limit),
-    total: items.length,
-    limit,
-    offset,
-    readyOnly,
-    hasMore: offset + limit < items.length,
-  });
-};
-
-export const deleteSavedPresentation = async (sessionId: string) => {
-  const session = await appContext.sessionRepository.getById(sessionId);
-
-  if (!session) {
-    throw new Error(`Session ${sessionId} was not found.`);
-  }
-
-  const deck = await appContext.deckRepository.getById(session.deckId);
-
-  if (!deck) {
-    throw new Error(`Deck ${session.deckId} was not found.`);
-  }
-
-  if (!deckIsReadyForReuse(deck)) {
-    throw new Error(
-      "Only fully prepared presentations can be deleted from the library.",
-    );
-  }
-
-  const allSessions = await appContext.sessionRepository.list();
-  const deckStillReferencedByOtherSessions = allSessions.some(
-    (candidate) => candidate.id !== sessionId && candidate.deckId === session.deckId,
-  );
-
-  await appContext.transcriptRepository.deleteBySessionId(sessionId);
-  await appContext.sessionRepository.delete(sessionId);
-
-  if (!deckStillReferencedByOtherSessions) {
-    await appContext.deckRepository.delete(session.deckId);
-  }
-
-  return DeletePresentationResponseSchema.parse({
-    deletedSessionId: sessionId,
-    ...(deckStillReferencedByOtherSessions ? {} : { deletedDeckId: session.deckId }),
   });
 };
 

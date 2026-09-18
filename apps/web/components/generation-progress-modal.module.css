@@ -1,0 +1,45 @@
+.dialog { width: min(660px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); margin: auto; overflow-y: auto; box-sizing: border-box; border: 1px solid #cdd4cc; border-radius: 10px; padding: 30px 36px 26px; background: #fffefa; color: #293331; box-shadow: 0 28px 100px #101c2840; font-family: "Avenir Next", "Avenir", "Trebuchet MS", sans-serif; }
+.dialog::backdrop { background: #182420a6; backdrop-filter: blur(3px); }
+.header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 28px; }
+.header > p, .timing > div > p { font-size: 10px; letter-spacing: 1.4px; font-weight: 600; margin: 0; color: #626b68; }
+.dialog button, .dialog a { font: inherit; cursor: pointer; }
+.dialog :is(button, a, summary):focus-visible { outline: 3px solid #567c6a; outline-offset: 4px; }
+.hide { display: flex; align-items: center; gap: 14px; color: #626b68; font-size: 12px !important; border: 0; background: none; padding: 6px 0 6px 10px; }
+.hide span { font-size: 23px; font-weight: 400; line-height: 1; }
+.current h2 { position: relative; font-size: clamp(22px, 4vw, 27px); line-height: 1.3; font-weight: 600; letter-spacing: -.6px; margin: 0 0 12px; }
+.current > p { margin: 0; color: #626b68; font-size: 14px; line-height: 1.65; }
+.activity { display: inline-block; width: 9px; height: 9px; margin-right: 12px; vertical-align: middle; border-radius: 50%; background: #ad4e34; animation: breathe 1.8s ease-in-out infinite; }
+.current .units, .current .revision { margin-top: 12px; color: #3f6552; font-size: 13px; }
+.timing { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 24px; padding: 24px 0 20px; margin-top: 22px; border-block: 1px solid #dce0dd; }
+.timing strong { display: block; margin-top: 7px; font-size: 26px; line-height: 1.2; font-weight: 500; letter-spacing: -.7px; font-variant-numeric: tabular-nums; }
+.timing .elapsed { text-align: right; }
+.elapsed strong { color: #626b68; }
+.timingNote { grid-column: 1 / -1; margin: 0; color: #626b68; font-size: 11px; line-height: 1.65; }
+.phases { list-style: none; padding: 0; margin: 18px 0 24px; }
+.phases li { display: flex; align-items: center; gap: 14px; padding: 9px 0; color: #7b827e; font-size: 13px; }
+.phases li > span:first-child { width: 24px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.phases small { margin-left: auto; font-size: 11px; }
+.phases li[data-state=current] { color: #293331; font-weight: 600; }
+.phases li[data-state=current] > span:first-child { color: #ad4e34; }
+.phases li[data-state=done] { color: #3f6552; }
+.footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; border-top: 1px solid #dce0dd; padding-top: 20px; }
+.footer > p { margin: 0; max-width: 310px; color: #626b68; font-size: 11px; line-height: 1.7; }
+.cancel, .secondary, .primary { padding: 10px 15px; border-radius: 5px; border: 1px solid #c9d0c9; background: transparent; color: #293331; font-size: 12px !important; text-decoration: none; text-align: center; }
+.cancel { flex-shrink: 0; color: #8c3e2c; border-color: #d8bbae; }
+.cancel:disabled { cursor: wait; opacity: .6; }
+.primary { background: #293331; border-color: #293331; color: white; display: inline-flex; align-items: center; gap: 24px; }
+.error { font-size: 12px; line-height: 1.6; color: #9a3828; margin-bottom: 20px; overflow-wrap: anywhere; white-space: pre-line; }
+.error summary { cursor: pointer; }
+@keyframes breathe { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .activity { animation: none; } }
+@media (max-width: 480px) {
+  .dialog { padding: 22px; max-height: calc(100dvh - 24px); }
+  .header { margin-bottom: 22px; }
+  .header > p { font-size: 9px; }
+  .timing { gap: 14px; }
+  .timing strong { font-size: 22px; }
+  .timing > div > p { font-size: 9px; letter-spacing: .8px; }
+  .footer { flex-wrap: wrap; }
+  .footer > p { width: 100%; max-width: none; }
+  .footer > :is(button, a) { flex: 1; }
+}

@@ -349,7 +349,7 @@ export interface AudioChunk {
 export interface SpeechToTextProvider {
   readonly name: string;
   healthCheck(): Promise<ProviderHealthStatus>;
-  transcribe(audioChunk: AudioChunk): Promise<DomainSpeechToTextResult>;
+  transcribe(audioChunk: AudioChunk, options?: { signal?: AbortSignal }): Promise<DomainSpeechToTextResult>;
   transcribeStream?(streamId: string): AsyncIterable<DomainSpeechToTextResult>;
 }
 

@@ -545,48 +545,6 @@ export type SessionSnapshotResponse = z.infer<
   typeof SessionSnapshotResponseSchema
 >;
 
-export const SavedPresentationSummarySchema = z.object({
-  sessionId: z.string(),
-  deckId: z.string(),
-  title: z.string(),
-  summary: z.string(),
-  topic: z.string(),
-  slideCount: z.number().int().nonnegative(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  sourceType: z.enum(["topic", "document", "pptx", "mixed"]),
-  generation: DeckGenerationStatusSchema.optional(),
-  validation: DeckSchema.shape.metadata.shape.validation.optional(),
-  evaluation: DeckEvaluationSchema.optional(),
-  ready: z.boolean(),
-});
-
-export type SavedPresentationSummary = z.infer<
-  typeof SavedPresentationSummarySchema
->;
-
-export const ListSavedPresentationsResponseSchema = z.object({
-  items: z.array(SavedPresentationSummarySchema),
-  total: z.number().int().nonnegative(),
-  limit: z.number().int().positive(),
-  offset: z.number().int().nonnegative(),
-  readyOnly: z.boolean(),
-  hasMore: z.boolean(),
-});
-
-export type ListSavedPresentationsResponse = z.infer<
-  typeof ListSavedPresentationsResponseSchema
->;
-
-export const DeletePresentationResponseSchema = z.object({
-  deletedSessionId: z.string(),
-  deletedDeckId: z.string().optional(),
-});
-
-export type DeletePresentationResponse = z.infer<
-  typeof DeletePresentationResponseSchema
->;
-
 export const SlideIllustrationAssetSchema = z.object({
   slideId: z.string(),
   slotId: z.string(),
@@ -679,7 +637,7 @@ export type VoiceActivityEvent = z.infer<typeof VoiceActivityEventSchema>;
 
 export const SpeechToTextResultSchema = z.object({
   text: z.string(),
-  confidence: z.number().min(0).max(1),
+  confidence: z.number().min(0).max(1).nullable(),
   isFinal: z.boolean(),
 });
 

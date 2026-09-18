@@ -7,20 +7,27 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "patch-package --error-on-fail",
     "predev": "npm run setup:tts",
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev --workspace @slidespeech/api\" \"npm run dev --workspace @slidespeech/web\"",
     "predev:api": "npm run setup:tts",
     "dev:api": "npm run dev --workspace @slidespeech/api",
     "dev:web": "npm run dev --workspace @slidespeech/web",
+    "share:private": "node --import tsx scripts/start_private_tunnel.ts",
     "setup:tts": "node --import tsx scripts/setup_piper_voices.ts",
     "verify:api": "./scripts/verify_api_fixed_port.sh",
     "verify:llm": "REQUIRE_LLM_HEALTH=1 ./scripts/verify_api_fixed_port.sh",
+    "eval:generation-v2-phase4": "tsx scripts/eval_generation_v2_phase4.ts",
     "arch:graph": "tsx scripts/generate_architecture_graph.ts",
     "arch:check": "tsx scripts/check_generation_architecture.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "tsx --test tests/**/*.test.ts"
   },
+  "dependencies": {
+    "patch-package": "8.0.1"
+  },
   "devDependencies": {
+    "@fontsource/source-sans-3": "5.3.0",
     "@types/node": "^22.14.1",
     "concurrently": "^9.1.2",
     "tsx": "^4.19.3",

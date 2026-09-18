@@ -24,18 +24,12 @@ export const GroundedAnswerSchema = GenerationArtifactIdentitySchema.extend({
 
 export type GroundedAnswer = z.infer<typeof GroundedAnswerSchema>;
 
-export const PresentationResumePlanV2Schema = GenerationArtifactIdentitySchema.extend({
-  action: z.enum([
-    "resume-same-point",
-    "resume-next-point",
-    "resume-next-slide",
-    "restart-current-slide",
-    "remain-paused",
-  ]),
-  slideId: GenerationArtifactIdSchema,
-  narrationSegmentIndex: z.number().int().nonnegative(),
-  bridgeText: z.string().min(1).max(3_000),
-  rationale: z.string().min(1).max(2_000),
+// Playback owns navigation. Return to the start of the interrupted approved passage.
+export const PresentationResumePlanV2Schema = z.object({
+  slideIndex: z.number().int().nonnegative(),
+  passageIndex: z.number().int().nonnegative(),
+  playbackSeconds: z.literal(0),
+  bridgeText: z.string().min(1).max(2_000),
 }).strict();
 
 export type PresentationResumePlanV2 = z.infer<

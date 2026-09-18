@@ -1,5 +1,5 @@
-import { PresentationLaunchpad } from "../components/presentation-launchpad";
+import { PresentationStudio } from "../components/presentation-studio";
 
 export default function HomePage() {
-  return <PresentationLaunchpad />;
+  return <PresentationStudio />;
 }

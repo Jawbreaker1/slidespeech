@@ -5,9 +5,13 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
-    "@slidespeech/types": "0.1.0"
+    "@slidespeech/types": "0.1.0",
+    "linkify-it": "^5.0.2"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/linkify-it": "^5.0.0"
   }
 }

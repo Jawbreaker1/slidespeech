@@ -1,7 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 
 import {
-  LLMConversationTurnEngine,
   PresentationSessionService,
 } from "@slidespeech/core";
 import {
@@ -103,7 +102,6 @@ const transcriptRepository = new FileTranscriptRepository({
   rootDir: storageRoot,
 });
 const deckExporter = new PptxGenJSDeckExporter();
-const conversationTurnEngine = new LLMConversationTurnEngine(llmProvider);
 
 export const appContext = {
   llmProvider,
@@ -123,8 +121,5 @@ export const appContext = {
     deckRepository,
     sessionRepository,
     transcriptRepository,
-    conversationTurnEngine,
-    undefined,
-    webResearchProvider,
   ),
 };

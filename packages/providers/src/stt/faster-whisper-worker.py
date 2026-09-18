@@ -1,5 +1,6 @@
 import json
 import sys
+import wave
 from pathlib import Path
 
 from faster_whisper import WhisperModel
@@ -55,10 +56,13 @@ def main():
             audio_file = Path(audio_path)
             if not audio_file.exists():
                 raise FileNotFoundError(f"Audio file not found: {audio_path}")
+            with wave.open(str(audio_file), "rb") as audio:
+                if audio.getnframes() / audio.getframerate() > 90:
+                    raise ValueError("Recorded questions must be no longer than 90 seconds.")
 
             transcribe_kwargs = {
                 "beam_size": beam_size,
-                "vad_filter": False,
+                "vad_filter": True,
                 "word_timestamps": False,
                 "condition_on_previous_text": False,
             }
@@ -72,15 +76,10 @@ def main():
             )
 
             text = " ".join(segment.text.strip() for segment in segments).strip()
-            confidence = 0.0
-            if getattr(info, "language_probability", None) is not None:
-                confidence = float(info.language_probability)
-            elif text:
-                confidence = 0.8
-
             payload = {
                 "text": text,
-                "confidence": max(0.0, min(confidence, 1.0)),
+                # Language probability is not transcription accuracy.
+                "confidence": None,
                 "isFinal": True,
                 "language": getattr(
                     info,

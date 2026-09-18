@@ -1060,13 +1060,6 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           },
         ],
         toolChoice: "required",
-        extraBody: this.isLmStudioProvider()
-          ? {
-              chat_template_kwargs: {
-                enable_thinking: false,
-              },
-            }
-          : undefined,
       });
 
       const choice = json.choices?.[0];
@@ -1128,17 +1121,9 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
       timeoutMs?: number | undefined;
       tools?: unknown;
       toolChoice?: string | undefined;
-      extraBody?: Record<string, unknown> | undefined;
     },
   ): Promise<ChatCompletionResponse> {
     let response: Response;
-    const lmStudioNoThinkingBody = this.isLmStudioProvider()
-      ? {
-          chat_template_kwargs: {
-            enable_thinking: false,
-          },
-        }
-      : {};
 
     try {
       response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -1151,8 +1136,7 @@ export class OpenAICompatibleLLMProvider implements LLMProvider {
           ...(options?.maxTokens ? { max_tokens: options.maxTokens } : {}),
           ...(options?.tools ? { tools: options.tools } : {}),
           ...(options?.toolChoice ? { tool_choice: options.toolChoice } : {}),
-          ...lmStudioNoThinkingBody,
-          ...(options?.extraBody ?? {}),
+          ...(this.isLmStudioProvider() ? { reasoning_effort: "low" } : {}),
         }),
         signal: AbortSignal.timeout(options?.timeoutMs ?? this.timeoutMs),
       });

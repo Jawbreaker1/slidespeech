@@ -19,11 +19,14 @@ export type GenerationArtifactIdentity = z.infer<
 >;
 
 export const GenerationStageNameSchema = z.enum([
+  "request-capture",
   "prompt-classification",
   "research-planning",
   "research-execution",
+  "evidence-selection",
   "fact-curation",
   "research-review",
+  "outline-review",
   "deck-strategy",
   "slide-allocation",
   "design-selection",
@@ -63,6 +66,60 @@ export const GenerationDiagnosticSchema = z
 
 export type GenerationDiagnostic = z.infer<typeof GenerationDiagnosticSchema>;
 
+export const GenerationStageTelemetrySchema = z
+  .object({
+    provider: z.string().min(1).max(120),
+    model: z.string().min(1).max(255),
+    promptTokens: z.number().int().nonnegative().optional(),
+    completionTokens: z.number().int().nonnegative().optional(),
+    reasoningTokens: z.number().int().nonnegative().optional(),
+    totalTokens: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+export type GenerationStageTelemetry = z.infer<
+  typeof GenerationStageTelemetrySchema
+>;
+
+export const GenerationStageProgressEventSchema = z
+  .object({
+    runId: GenerationArtifactIdSchema,
+    stage: GenerationStageNameSchema,
+    attempt: z.number().int().positive(),
+    status: z.enum([
+      "started",
+      "working",
+      "succeeded",
+      "rejected",
+      "failed",
+    ]),
+    occurredAt: z.string().datetime(),
+    completedUnits: z.number().int().nonnegative().optional(),
+    totalUnits: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((event, context) => {
+    if (
+      event.completedUnits !== undefined &&
+      event.totalUnits !== undefined &&
+      event.completedUnits > event.totalUnits
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Completed progress units cannot exceed total units.",
+        path: ["completedUnits"],
+      });
+    }
+  });
+
+export type GenerationStageProgressEvent = z.infer<
+  typeof GenerationStageProgressEventSchema
+>;
+
+export type GenerationStageProgressListener = (
+  event: GenerationStageProgressEvent,
+) => void;
+
 const GenerationStageResultBaseSchema = z
   .object({
     runId: GenerationArtifactIdSchema,
@@ -73,6 +130,7 @@ const GenerationStageResultBaseSchema = z
     durationMs: z.number().int().nonnegative(),
     inputArtifactIds: z.array(GenerationArtifactIdSchema),
     sourceIds: z.array(GenerationArtifactIdSchema),
+    telemetry: GenerationStageTelemetrySchema.optional(),
   })
   .strict();
 

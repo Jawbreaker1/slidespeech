@@ -1,0 +1,23 @@
+/** Supported composition contracts, independent of theme selection. */
+export const SLIDE_LAYOUTS = [
+  { id: "editorial-opening", family: "hero", contentKind: "statement", maximumItems: 1, image: false, cover: true, purpose: "Opening with a large statement and a separate supporting column." },
+  { id: "editorial-statement", family: "editorial", contentKind: "statement", maximumItems: 1, image: false, cover: false, purpose: "An argument with a supporting aside." },
+  { id: "split-comparison", family: "comparison", contentKind: "comparison", maximumItems: 4, image: false, cover: false, purpose: "Two equally important perspectives side by side." },
+  { id: "numbered-process", family: "process", contentKind: "process", maximumItems: 4, image: false, cover: false, purpose: "A short numbered sequence, composed as columns, rows or a step grid by the selected design system." },
+  { id: "editorial-quote", family: "evidence", contentKind: "quote", maximumItems: 1, image: false, cover: false, purpose: "A supported quotation with visible attribution." },
+  { id: "closing-question", family: "closing", contentKind: "question", maximumItems: 1, image: false, cover: true, purpose: "A large audience question and closing guidance." },
+  { id: "image-opening", family: "hero", contentKind: "statement", maximumItems: 1, image: true, cover: true, purpose: "Image-led cover with a whole source image and a theme-specific text/image hierarchy." },
+  { id: "image-editorial", family: "editorial", contentKind: "statement", maximumItems: 1, image: true, cover: false, purpose: "An explanation beside a source image." },
+  { id: "title-banner", family: "hero", contentKind: "statement", maximumItems: 1, image: false, cover: true, purpose: "Oversized title across the upper half, concise introduction below." },
+  { id: "title-minimal", family: "hero", contentKind: "statement", maximumItems: 1, image: false, cover: false, purpose: "Minimal cover with generous whitespace and a small orientation line." },
+  { id: "statement-band", family: "editorial", contentKind: "statement", maximumItems: 1, image: false, cover: true, purpose: "One emphatic statement across the canvas with a supporting footnote." },
+  { id: "statement-sidebar", family: "editorial", contentKind: "statement", maximumItems: 1, image: false, cover: false, purpose: "Compact title in the margin, main explanation on the right." },
+  { id: "comparison-bands", family: "comparison", contentKind: "comparison", maximumItems: 3, image: false, cover: false, purpose: "Two horizontal sections for perspectives needing wide lines." },
+  { id: "comparison-ledger", family: "comparison", contentKind: "comparison", maximumItems: 4, image: false, cover: false, purpose: "Row-aligned columns for paired comparable points, without card boxes." },
+  { id: "process-vertical", family: "process", contentKind: "process", maximumItems: 4, image: false, cover: false, purpose: "Vertical sequence with distinct labels and explanations." },
+  { id: "process-timeline", family: "timeline", contentKind: "process", maximumItems: 4, image: false, cover: false, purpose: "Ordered milestones along one horizontal axis. Labels may contain grounded dates." },
+  { id: "quote-spotlight", family: "evidence", contentKind: "quote", maximumItems: 1, image: false, cover: true, purpose: "A quotation takes visual priority, with separate title and attribution." },
+  { id: "closing-split", family: "closing", contentKind: "question", maximumItems: 1, image: false, cover: false, purpose: "Separate regions for a closing invitation and concise recap guidance." },
+  { id: "image-left", family: "editorial", contentKind: "statement", maximumItems: 1, image: true, cover: false, purpose: "Large whole image on the left, commentary on the right." },
+  { id: "image-caption", family: "editorial", contentKind: "statement", maximumItems: 1, image: true, cover: false, purpose: "Dominant landscape image with a concise caption below or in the margin, depending on the design system." },
+] as const;

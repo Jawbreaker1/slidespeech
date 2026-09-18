@@ -4,6 +4,7 @@ dist
 coverage
 .env
 .env.local
+.local/
 .venv-stt
 .venv-tts
 *.log
@@ -14,6 +15,9 @@ data/decks/*.json
 data/evaluations/*.json
 data/exports/*.pptx
 data/generation-runs/
+data/generation-evals/
+data/legacy-archive/
+data/published-v2/
 data/research-cache/*.json
 data/sessions/*.json
 data/transcripts/*.json

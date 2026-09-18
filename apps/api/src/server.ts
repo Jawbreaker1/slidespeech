@@ -1,13 +1,14 @@
-import cors from "cors";
 import express from "express";
 
 import { env } from "./config/env";
 import { presentationsRouter } from "./routes/presentations";
 import { researchRouter } from "./routes/research";
+import { generationV2Router } from "./routes/generation-v2";
+import { requireSameOriginWrite } from "./lib/browser-request-origin";
 
 const app = express();
 
-app.use(cors());
+app.use(requireSameOriginWrite);
 app.use(express.json({ limit: "8mb" }));
 
 app.get("/health", (_request, response) => {
@@ -19,6 +20,7 @@ app.get("/health", (_request, response) => {
 
 app.use("/api/presentations", presentationsRouter);
 app.use("/api/research", researchRouter);
+app.use("/api/generation-v2", generationV2Router);
 
 app.use(
   (
@@ -34,9 +36,9 @@ app.use(
   },
 );
 
-const server = app.listen(env.API_PORT, () => {
+const server = app.listen(env.API_PORT, env.API_HOST, () => {
   console.log(
-    `[slidespeech-api] listening on http://localhost:${env.API_PORT} with LLM provider ${env.LLM_PROVIDER}`,
+    `[slidespeech-api] listening on http://${env.API_HOST}:${env.API_PORT} with LLM provider ${env.LLM_PROVIDER}`,
   );
 });
 

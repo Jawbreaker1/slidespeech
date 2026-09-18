@@ -11,198 +11,468 @@ flowchart LR
 
   N1["apps/api/src/services/generation-context-service.ts"]
   N2["apps/api/src/services/generation-queue.ts"]
-  N3["apps/api/src/services/grounding-fact-stage.ts"]
-  N4["apps/api/src/services/grounding-selection.ts"]
-  N5["apps/api/src/services/grounding-source-analysis.ts"]
-  N6["apps/api/src/services/presentation-context.ts"]
-  N7["apps/api/src/services/presentation-intent.ts"]
-  N8["apps/api/src/services/presentation-readiness.ts"]
-  N9["apps/api/src/services/presentation-service.ts"]
-  N10["apps/api/src/services/research-plan-coverage.ts"]
-  N11["apps/api/src/services/research-plan-stage.ts"]
-  N12["apps/api/src/services/research-plan-subject.ts"]
-  N13["apps/api/src/services/research-policy.ts"]
-  N14["apps/api/src/services/research-source-coverage.ts"]
-  N15["apps/api/src/services/research-source-stage.ts"]
-  N16["apps/api/src/services/research-subject-resolution.ts"]
-  N17["apps/api/src/services/research-text-utils.ts"]
-  N18["apps/api/src/services/research-topic-classification.ts"]
-  N19["apps/api/src/services/web-research-cache.ts"]
-  N20["apps/api/src/services/web-research-service.ts"]
-  N21["apps/api/src/services/web-research-source-hygiene.ts"]
-  N22["packages/core/src/evaluation.ts"]
-  N23["packages/core/src/generation/generation-orchestrator.ts"]
-  N24["packages/core/src/generation/v2/index.ts"]
-  N25["packages/core/src/generation/v2/stage-runner.ts"]
-  N26["packages/core/src/question-answer-service.ts"]
-  N27["packages/core/src/session-deck-quality.ts"]
-  N28["packages/core/src/session-service.ts"]
-  N29["packages/core/src/validation.ts"]
-  N30["packages/providers/src/generation-v2/file-generation-trace-recorder.ts"]
-  N31["packages/providers/src/generation-v2/index.ts"]
-  N32["packages/providers/src/llm/content-language.ts"]
-  N33["packages/providers/src/llm/conversation-plan-normalization.ts"]
-  N34["packages/providers/src/llm/deck-semantic-review-normalization.ts"]
-  N35["packages/providers/src/llm/deck-shape-text.ts"]
-  N36["packages/providers/src/llm/grounding-normalization.ts"]
-  N37["packages/providers/src/llm/lmstudio-llm-provider.ts"]
-  N38["packages/providers/src/llm/lmstudio-structured-output.ts"]
-  N39["packages/providers/src/llm/mock-llm-provider.ts"]
-  N40["packages/providers/src/llm/narration-review-normalization.ts"]
-  N41["packages/providers/src/llm/openai-compatible-deck-semantic-review.ts"]
-  N42["packages/providers/src/llm/openai-compatible-grounding-classification.ts"]
-  N43["packages/providers/src/llm/openai-compatible-narration-generation.ts"]
-  N44["packages/providers/src/llm/openai-compatible-presentation-plan.ts"]
-  N45["packages/providers/src/llm/openai-compatible-presentation-review.ts"]
-  N46["packages/providers/src/llm/openai-compatible-prompt-context.ts"]
-  N47["packages/providers/src/llm/openai-compatible.ts"]
-  N48["packages/providers/src/llm/pedagogical-profile-normalization.ts"]
-  N49["packages/providers/src/llm/presentation-plan-normalization.ts"]
-  N50["packages/providers/src/llm/prompt-shaping.ts"]
-  N51["packages/providers/src/llm/research-planning.ts"]
-  N52["packages/providers/src/llm/resilient-llm-provider.ts"]
-  N53["packages/providers/src/llm/slide-arc-policy.ts"]
-  N54["packages/providers/src/llm/structured-normalization.ts"]
-  N55["packages/types/src/generation-v2/common.ts"]
-  N56["packages/types/src/generation-v2/index.ts"]
-  N57["packages/types/src/generation-v2/presentation.ts"]
-  N58["packages/types/src/generation-v2/research.ts"]
-  N59["packages/types/src/generation-v2/runtime.ts"]
+  N3["apps/api/src/services/generation-v2/context.ts"]
+  N4["apps/api/src/services/generation-v2/jobs.ts"]
+  N5["apps/api/src/services/generation-v2/presentation-speech.ts"]
+  N6["apps/api/src/services/generation-v2/question-transcription.ts"]
+  N7["apps/api/src/services/generation-v2/timing-history.ts"]
+  N8["apps/api/src/services/generation-v2/work-queue.ts"]
+  N9["apps/api/src/services/grounding-fact-stage.ts"]
+  N10["apps/api/src/services/grounding-selection.ts"]
+  N11["apps/api/src/services/grounding-source-analysis.ts"]
+  N12["apps/api/src/services/presentation-context.ts"]
+  N13["apps/api/src/services/presentation-intent.ts"]
+  N14["apps/api/src/services/presentation-readiness.ts"]
+  N15["apps/api/src/services/presentation-service.ts"]
+  N16["apps/api/src/services/research-plan-coverage.ts"]
+  N17["apps/api/src/services/research-plan-stage.ts"]
+  N18["apps/api/src/services/research-plan-subject.ts"]
+  N19["apps/api/src/services/research-policy.ts"]
+  N20["apps/api/src/services/research-source-coverage.ts"]
+  N21["apps/api/src/services/research-source-stage.ts"]
+  N22["apps/api/src/services/research-subject-resolution.ts"]
+  N23["apps/api/src/services/research-text-utils.ts"]
+  N24["apps/api/src/services/research-topic-classification.ts"]
+  N25["apps/api/src/services/web-research-cache.ts"]
+  N26["apps/api/src/services/web-research-service.ts"]
+  N27["apps/api/src/services/web-research-source-hygiene.ts"]
+  N28["packages/core/src/evaluation.ts"]
+  N29["packages/core/src/generation/generation-orchestrator.ts"]
+  N30["packages/core/src/generation/v2/artifact-factory.ts"]
+  N31["packages/core/src/generation/v2/evidence-selection-stage.ts"]
+  N32["packages/core/src/generation/v2/execution-deadline.ts"]
+  N33["packages/core/src/generation/v2/fact-curation-stage.ts"]
+  N34["packages/core/src/generation/v2/index.ts"]
+  N35["packages/core/src/generation/v2/narration-stages.ts"]
+  N36["packages/core/src/generation/v2/outline-stages.ts"]
+  N37["packages/core/src/generation/v2/pipeline.ts"]
+  N38["packages/core/src/generation/v2/prompt-classification-stage.ts"]
+  N39["packages/core/src/generation/v2/publication-stages.ts"]
+  N40["packages/core/src/generation/v2/question-pipeline.ts"]
+  N41["packages/core/src/generation/v2/request-capture-stage.ts"]
+  N42["packages/core/src/generation/v2/research-execution-stage.ts"]
+  N43["packages/core/src/generation/v2/research-pipeline.ts"]
+  N44["packages/core/src/generation/v2/research-plan-stage.ts"]
+  N45["packages/core/src/generation/v2/research-review-stage.ts"]
+  N46["packages/core/src/generation/v2/slide-stages.ts"]
+  N47["packages/core/src/generation/v2/stage-runner.ts"]
+  N48["packages/core/src/session-deck-quality.ts"]
+  N49["packages/core/src/session-service.ts"]
+  N50["packages/core/src/validation.ts"]
+  N51["packages/providers/src/generation-v2/completion-capacity.ts"]
+  N52["packages/providers/src/generation-v2/file-generation-trace-recorder.ts"]
+  N53["packages/providers/src/generation-v2/generation-document-parser.ts"]
+  N54["packages/providers/src/generation-v2/grounded-authoring-policy.ts"]
+  N55["packages/providers/src/generation-v2/hosted-generation-research-provider.ts"]
+  N56["packages/providers/src/generation-v2/index.ts"]
+  N57["packages/providers/src/generation-v2/linebreak.d.ts"]
+  N58["packages/providers/src/generation-v2/narration-generation-agent.ts"]
+  N59["packages/providers/src/generation-v2/openai-compatible-generation-agent.ts"]
+  N60["packages/providers/src/generation-v2/public-research-transport.ts"]
+  N61["packages/providers/src/generation-v2/publication-review-agent.ts"]
+  N62["packages/providers/src/generation-v2/published-presentation-store.ts"]
+  N63["packages/providers/src/generation-v2/question-agent.ts"]
+  N64["packages/providers/src/generation-v2/rendered-research-document.ts"]
+  N65["packages/providers/src/generation-v2/slide-generation-agent.ts"]
+  N66["packages/providers/src/generation-v2/slide-image-provider.ts"]
+  N67["packages/providers/src/generation-v2/slide-preview-renderer.ts"]
+  N68["packages/providers/src/generation-v2/slide-scene-pptx.ts"]
+  N69["packages/providers/src/generation-v2/slide-text-layout.ts"]
+  N70["packages/providers/src/generation-v2/structured-generation-client.ts"]
+  N71["packages/providers/src/llm/content-language.ts"]
+  N72["packages/providers/src/llm/conversation-plan-normalization.ts"]
+  N73["packages/providers/src/llm/deck-semantic-review-normalization.ts"]
+  N74["packages/providers/src/llm/deck-shape-text.ts"]
+  N75["packages/providers/src/llm/grounding-normalization.ts"]
+  N76["packages/providers/src/llm/lmstudio-llm-provider.ts"]
+  N77["packages/providers/src/llm/lmstudio-structured-output.ts"]
+  N78["packages/providers/src/llm/mock-llm-provider.ts"]
+  N79["packages/providers/src/llm/narration-review-normalization.ts"]
+  N80["packages/providers/src/llm/openai-compatible-deck-semantic-review.ts"]
+  N81["packages/providers/src/llm/openai-compatible-grounding-classification.ts"]
+  N82["packages/providers/src/llm/openai-compatible-narration-generation.ts"]
+  N83["packages/providers/src/llm/openai-compatible-presentation-plan.ts"]
+  N84["packages/providers/src/llm/openai-compatible-presentation-review.ts"]
+  N85["packages/providers/src/llm/openai-compatible-prompt-context.ts"]
+  N86["packages/providers/src/llm/openai-compatible.ts"]
+  N87["packages/providers/src/llm/pedagogical-profile-normalization.ts"]
+  N88["packages/providers/src/llm/presentation-plan-normalization.ts"]
+  N89["packages/providers/src/llm/prompt-shaping.ts"]
+  N90["packages/providers/src/llm/research-planning.ts"]
+  N91["packages/providers/src/llm/resilient-llm-provider.ts"]
+  N92["packages/providers/src/llm/slide-arc-policy.ts"]
+  N93["packages/providers/src/llm/structured-normalization.ts"]
+  N94["packages/types/src/generation-v2/agent-provider.ts"]
+  N95["packages/types/src/generation-v2/common.ts"]
+  N96["packages/types/src/generation-v2/evidence-selection.ts"]
+  N97["packages/types/src/generation-v2/index.ts"]
+  N98["packages/types/src/generation-v2/job.ts"]
+  N99["packages/types/src/generation-v2/narration.ts"]
+  N100["packages/types/src/generation-v2/outline.ts"]
+  N101["packages/types/src/generation-v2/presentation.ts"]
+  N102["packages/types/src/generation-v2/publication.ts"]
+  N103["packages/types/src/generation-v2/question-audio.ts"]
+  N104["packages/types/src/generation-v2/question.ts"]
+  N105["packages/types/src/generation-v2/research-images.ts"]
+  N106["packages/types/src/generation-v2/research-provider.ts"]
+  N107["packages/types/src/generation-v2/research-review.ts"]
+  N108["packages/types/src/generation-v2/research-selection.ts"]
+  N109["packages/types/src/generation-v2/research.ts"]
+  N110["packages/types/src/generation-v2/review.ts"]
+  N111["packages/types/src/generation-v2/runtime-presentation.ts"]
+  N112["packages/types/src/generation-v2/runtime.ts"]
+  N113["packages/types/src/generation-v2/slide-editorial-layouts.ts"]
+  N114["packages/types/src/generation-v2/slide-frame-painter.ts"]
+  N115["packages/types/src/generation-v2/slide-generation.ts"]
+  N116["packages/types/src/generation-v2/slide-images.ts"]
+  N117["packages/types/src/generation-v2/slide-layout-catalog.ts"]
+  N118["packages/types/src/generation-v2/slide-layout-frames.ts"]
+  N119["packages/types/src/generation-v2/slide-scene.ts"]
+  N120["packages/types/src/generation-v2/slide-signal-layouts.ts"]
+  N121["packages/types/src/generation-v2/slide-text-layout.ts"]
+  N122["packages/types/src/generation-v2/slide-themes.ts"]
+  N123["packages/types/src/generation-v2/structured-output.ts"]
 
-  N1 --> N11
-  N1 --> N13
-  N1 --> N15
-  N1 --> N3
-  N1 --> N6
-  N10 --> N17
-  N11 --> N13
-  N12 --> N7
-  N13 --> N10
-  N13 --> N12
-  N13 --> N17
-  N13 --> N18
-  N13 --> N7
-  N15 --> N13
+  N1 --> N12
+  N1 --> N17
+  N1 --> N19
+  N1 --> N21
+  N1 --> N9
+  N10 --> N11
+  N10 --> N12
+  N100 --> N101
+  N100 --> N109
+  N100 --> N110
+  N100 --> N94
+  N101 --> N107
+  N101 --> N109
+  N101 --> N110
+  N101 --> N116
+  N101 --> N95
+  N102 --> N101
+  N102 --> N110
+  N102 --> N94
+  N102 --> N95
+  N104 --> N101
+  N104 --> N110
+  N104 --> N112
+  N104 --> N94
+  N104 --> N95
+  N105 --> N95
+  N106 --> N105
+  N107 --> N110
+  N107 --> N95
+  N109 --> N105
+  N109 --> N95
+  N110 --> N95
+  N111 --> N101
+  N111 --> N121
+  N111 --> N95
+  N112 --> N95
+  N113 --> N114
+  N114 --> N101
+  N114 --> N117
+  N114 --> N119
+  N114 --> N122
+  N115 --> N100
+  N115 --> N101
+  N115 --> N109
+  N115 --> N110
+  N115 --> N116
+  N115 --> N119
+  N115 --> N94
+  N116 --> N109
+  N116 --> N115
+  N116 --> N95
+  N118 --> N101
+  N118 --> N113
+  N118 --> N114
+  N118 --> N119
+  N118 --> N120
+  N119 --> N101
+  N119 --> N116
+  N119 --> N117
+  N119 --> N118
+  N120 --> N114
+  N121 --> N119
+  N123 --> N109
+  N123 --> N110
+  N123 --> N96
+  N15 --> N1
   N15 --> N14
-  N15 --> N16
-  N15 --> N17
-  N15 --> N20
-  N16 --> N13
-  N18 --> N7
-  N2 --> N9
-  N20 --> N19
-  N20 --> N21
-  N23 --> N27
-  N27 --> N29
-  N28 --> N23
-  N28 --> N26
-  N28 --> N27
-  N28 --> N29
-  N3 --> N13
-  N3 --> N15
+  N16 --> N23
+  N17 --> N19
+  N18 --> N13
+  N19 --> N13
+  N19 --> N16
+  N19 --> N18
+  N19 --> N23
+  N19 --> N24
+  N2 --> N15
+  N21 --> N19
+  N21 --> N20
+  N21 --> N22
+  N21 --> N23
+  N21 --> N26
+  N22 --> N19
+  N24 --> N13
+  N26 --> N25
+  N26 --> N27
+  N29 --> N48
   N3 --> N4
-  N32 --> N35
-  N33 --> N54
+  N3 --> N7
+  N31 --> N30
+  N31 --> N32
+  N31 --> N47
+  N33 --> N30
+  N33 --> N47
+  N35 --> N30
+  N35 --> N47
+  N36 --> N30
+  N36 --> N47
+  N37 --> N30
+  N37 --> N32
+  N37 --> N35
+  N37 --> N36
+  N37 --> N39
+  N37 --> N43
+  N37 --> N46
   N37 --> N47
-  N38 --> N54
-  N4 --> N5
-  N4 --> N6
-  N40 --> N54
-  N41 --> N34
-  N41 --> N40
-  N42 --> N35
-  N42 --> N36
-  N42 --> N46
-  N42 --> N54
-  N43 --> N40
-  N43 --> N54
-  N44 --> N46
-  N44 --> N49
-  N44 --> N50
-  N44 --> N53
-  N45 --> N40
+  N38 --> N30
+  N38 --> N47
+  N39 --> N30
+  N39 --> N47
+  N40 --> N30
+  N40 --> N47
+  N41 --> N30
+  N41 --> N47
+  N42 --> N30
+  N42 --> N47
+  N43 --> N30
+  N43 --> N31
+  N43 --> N32
+  N43 --> N33
+  N43 --> N38
+  N43 --> N41
+  N43 --> N42
+  N43 --> N44
+  N43 --> N45
+  N43 --> N47
+  N44 --> N30
+  N44 --> N47
+  N45 --> N30
+  N45 --> N47
+  N46 --> N30
   N46 --> N32
-  N46 --> N35
-  N47 --> N33
-  N47 --> N38
-  N47 --> N41
-  N47 --> N42
-  N47 --> N43
-  N47 --> N44
-  N47 --> N45
-  N47 --> N46
-  N47 --> N51
-  N47 --> N53
-  N49 --> N32
-  N49 --> N35
+  N46 --> N47
+  N47 --> N32
+  N48 --> N50
+  N49 --> N29
   N49 --> N48
-  N49 --> N53
-  N49 --> N54
-  N50 --> N35
-  N53 --> N35
-  N57 --> N55
-  N57 --> N58
-  N58 --> N55
-  N59 --> N55
-  N9 --> N1
-  N9 --> N8
+  N49 --> N50
+  N55 --> N53
+  N55 --> N60
+  N55 --> N64
+  N58 --> N51
+  N58 --> N54
+  N58 --> N70
+  N59 --> N51
+  N59 --> N58
+  N59 --> N61
+  N59 --> N65
+  N59 --> N66
+  N59 --> N70
+  N6 --> N8
+  N61 --> N51
+  N61 --> N70
+  N63 --> N51
+  N63 --> N70
+  N64 --> N60
+  N65 --> N51
+  N65 --> N54
+  N65 --> N70
+  N66 --> N51
+  N66 --> N60
+  N66 --> N70
+  N67 --> N69
+  N71 --> N74
+  N72 --> N93
+  N76 --> N86
+  N77 --> N93
+  N79 --> N93
+  N80 --> N73
+  N80 --> N79
+  N81 --> N74
+  N81 --> N75
+  N81 --> N85
+  N81 --> N93
+  N82 --> N79
+  N82 --> N93
+  N83 --> N85
+  N83 --> N88
+  N83 --> N89
+  N83 --> N92
+  N84 --> N79
+  N85 --> N71
+  N85 --> N74
+  N86 --> N72
+  N86 --> N77
+  N86 --> N80
+  N86 --> N81
+  N86 --> N82
+  N86 --> N83
+  N86 --> N84
+  N86 --> N85
+  N86 --> N90
+  N86 --> N92
+  N88 --> N71
+  N88 --> N74
+  N88 --> N87
+  N88 --> N92
+  N88 --> N93
+  N89 --> N74
+  N9 --> N10
+  N9 --> N19
+  N9 --> N21
+  N92 --> N74
+  N94 --> N107
+  N94 --> N108
+  N94 --> N109
+  N94 --> N110
+  N94 --> N95
+  N94 --> N96
+  N98 --> N101
+  N98 --> N109
+  N98 --> N110
+  N98 --> N121
+  N98 --> N95
+  N98 --> N99
+  N99 --> N100
+  N99 --> N101
+  N99 --> N109
+  N99 --> N110
+  N99 --> N94
 
   class N1 legacy;
   class N2 provider;
-  class N3 research;
-  class N4 research;
-  class N5 research;
-  class N6 research;
-  class N7 legacy;
-  class N8 provider;
-  class N9 provider;
+  class N3 v2;
+  class N4 v2;
+  class N5 v2;
+  class N6 v2;
+  class N7 v2;
+  class N8 v2;
+  class N9 research;
   class N10 research;
   class N11 research;
   class N12 research;
   class N13 legacy;
-  class N14 research;
-  class N15 research;
+  class N14 provider;
+  class N15 provider;
   class N16 research;
   class N17 research;
   class N18 research;
-  class N19 research;
+  class N19 legacy;
   class N20 research;
   class N21 research;
-  class N22 provider;
-  class N23 legacy;
-  class N24 v2;
-  class N25 v2;
-  class N26 runtime;
-  class N27 gate;
+  class N22 research;
+  class N23 research;
+  class N24 research;
+  class N25 research;
+  class N26 research;
+  class N27 research;
   class N28 provider;
-  class N29 gate;
+  class N29 legacy;
   class N30 v2;
   class N31 v2;
-  class N32 provider;
-  class N33 runtime;
-  class N34 provider;
-  class N35 adapter;
-  class N36 research;
-  class N37 provider;
-  class N38 provider;
-  class N39 provider;
-  class N40 gate;
-  class N41 provider;
-  class N42 research;
-  class N43 provider;
-  class N44 legacy;
-  class N45 provider;
-  class N46 provider;
-  class N47 provider;
-  class N48 provider;
-  class N49 legacy;
-  class N50 provider;
-  class N51 research;
-  class N52 provider;
-  class N53 legacy;
-  class N54 provider;
+  class N32 v2;
+  class N33 v2;
+  class N34 v2;
+  class N35 v2;
+  class N36 v2;
+  class N37 v2;
+  class N38 v2;
+  class N39 v2;
+  class N40 v2;
+  class N41 v2;
+  class N42 v2;
+  class N43 v2;
+  class N44 v2;
+  class N45 v2;
+  class N46 v2;
+  class N47 v2;
+  class N48 gate;
+  class N49 provider;
+  class N50 gate;
+  class N51 v2;
+  class N52 v2;
+  class N53 v2;
+  class N54 v2;
   class N55 v2;
   class N56 v2;
   class N57 v2;
   class N58 v2;
   class N59 v2;
+  class N60 v2;
+  class N61 v2;
+  class N62 v2;
+  class N63 v2;
+  class N64 v2;
+  class N65 v2;
+  class N66 v2;
+  class N67 v2;
+  class N68 v2;
+  class N69 v2;
+  class N70 v2;
+  class N71 provider;
+  class N72 runtime;
+  class N73 provider;
+  class N74 adapter;
+  class N75 research;
+  class N76 provider;
+  class N77 provider;
+  class N78 provider;
+  class N79 gate;
+  class N80 provider;
+  class N81 research;
+  class N82 provider;
+  class N83 legacy;
+  class N84 provider;
+  class N85 provider;
+  class N86 provider;
+  class N87 provider;
+  class N88 legacy;
+  class N89 provider;
+  class N90 research;
+  class N91 provider;
+  class N92 legacy;
+  class N93 provider;
+  class N94 v2;
+  class N95 v2;
+  class N96 v2;
+  class N97 v2;
+  class N98 v2;
+  class N99 v2;
+  class N100 v2;
+  class N101 v2;
+  class N102 v2;
+  class N103 v2;
+  class N104 v2;
+  class N105 v2;
+  class N106 v2;
+  class N107 v2;
+  class N108 v2;
+  class N109 v2;
+  class N110 v2;
+  class N111 v2;
+  class N112 v2;
+  class N113 v2;
+  class N114 v2;
+  class N115 v2;
+  class N116 v2;
+  class N117 v2;
+  class N118 v2;
+  class N119 v2;
+  class N120 v2;
+  class N121 v2;
+  class N122 v2;
+  class N123 v2;

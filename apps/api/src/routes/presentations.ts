@@ -6,26 +6,20 @@ import {
   PresentationGenerationJobStatusResponseSchema,
   SpeechSynthesisRequestSchema,
   SelectSlideRequestSchema,
-  SessionInteractionRequestSchema,
-  VoiceTurnRequestSchema,
 } from "@slidespeech/types";
 
 import { appContext } from "../lib/context";
 import {
   createPresentation,
-  deleteSavedPresentation,
   exportPresentationPptx,
   getSlideIllustration,
   getSlideNarration,
   getSessionSnapshot,
-  interactWithSession,
-  listSavedPresentations,
   selectSlide,
   updateNarrationProgress,
 } from "../services/presentation-service";
 import { presentationGenerationQueue } from "../services/generation-queue";
 import { synthesizeSessionSpeech } from "../services/tts-service";
-import { processVoiceTurn } from "../services/voice-service";
 
 export const presentationsRouter = Router();
 
@@ -105,30 +99,8 @@ presentationsRouter.get("/generate-jobs/:jobId", async (request, response, next)
   }
 });
 
-presentationsRouter.get("/", async (request, response, next) => {
-  try {
-    const limitRaw = Array.isArray(request.query.limit)
-      ? request.query.limit[0]
-      : request.query.limit;
-    const offsetRaw = Array.isArray(request.query.offset)
-      ? request.query.offset[0]
-      : request.query.offset;
-    const readyOnlyRaw = Array.isArray(request.query.readyOnly)
-      ? request.query.readyOnly[0]
-      : request.query.readyOnly;
-
-    const result = await listSavedPresentations({
-      ...(limitRaw !== undefined ? { limit: Number.parseInt(String(limitRaw), 10) } : {}),
-      ...(offsetRaw !== undefined ? { offset: Number.parseInt(String(offsetRaw), 10) } : {}),
-      ...(readyOnlyRaw !== undefined
-        ? { readyOnly: String(readyOnlyRaw).toLowerCase() !== "false" }
-        : {}),
-    });
-
-    response.json(result);
-  } catch (error) {
-    next(error);
-  }
+presentationsRouter.get("/", (_request, response) => {
+  response.status(410).json({ error: "The old library has been retired. Use the V2 presentation library." });
 });
 
 presentationsRouter.get("/health", async (_request, response) => {
@@ -167,13 +139,8 @@ presentationsRouter.get("/:sessionId", async (request, response, next) => {
   }
 });
 
-presentationsRouter.delete("/:sessionId", async (request, response, next) => {
-  try {
-    const result = await deleteSavedPresentation(request.params.sessionId);
-    response.json(result);
-  } catch (error) {
-    next(error);
-  }
+presentationsRouter.delete("/:sessionId", (_request, response) => {
+  response.status(410).json({ error: "The old library has been retired. Archive presentations in the V2 library." });
 });
 
 presentationsRouter.get("/:sessionId/export/pptx", async (request, response, next) => {
@@ -217,33 +184,8 @@ presentationsRouter.get(
   },
 );
 
-presentationsRouter.post("/:sessionId/interact", async (request, response, next) => {
-  try {
-    const payload = SessionInteractionRequestSchema.parse(request.body);
-    const result = await interactWithSession({
-      sessionId: request.params.sessionId,
-      text: payload.text,
-    });
-
-    response.json(result);
-  } catch (error) {
-    next(error);
-  }
-});
-
-presentationsRouter.post("/:sessionId/voice-turn", async (request, response, next) => {
-  try {
-    const payload = VoiceTurnRequestSchema.parse(request.body);
-    const result = await processVoiceTurn({
-      sessionId: request.params.sessionId,
-      mimeType: payload.audio.mimeType,
-      dataBase64: payload.audio.dataBase64,
-    });
-
-    response.json(result);
-  } catch (error) {
-    next(error);
-  }
+presentationsRouter.post(["/:sessionId/interact", "/:sessionId/voice-turn"], (_request, response) => {
+  response.status(410).json({ error: "Legacy questions have been retired. Generate and open a V2 presentation to use the new Q&A flow." });
 });
 
 presentationsRouter.post("/:sessionId/speech", async (request, response, next) => {

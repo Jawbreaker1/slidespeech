@@ -1,566 +1,304 @@
 # SlideSpeech
 
-SlideSpeech is an interactive AI presenter and AI teacher.
+**Turn a brief into a presentation you can have a conversation with.**
 
-The product is not "generate slides and stop there". It is an orchestration runtime that can:
+SlideSpeech researches a subject, designs the slides, writes a spoken story,
+and presents it in your browser. Ask a question by text or recorded voice,
+hear the answer, and return to the presentation with a contextual transition.
+The goal is more than a generated deck: a presenter that can explain its material.
 
-- turn a topic or source material into a teachable deck
-- present it step by step
-- let the learner interrupt naturally
-- answer in context
-- adapt the teaching style
-- and resume from the right place
+**Current status: working Pipeline 2.0 prototype for small, trusted test groups.**
+Generation, saved presentations, server-side speech and reviewed Q&A are connected.
+Quality and reliability still need broader validation. This is not a public,
+multi-tenant production service. Status below reflects **September 18, 2026**.
 
-The ambition is simple:
+![SlideSpeech Studio with a presentation brief and generation steps](docs/screenshots/studio.jpg)
 
-- generate a usable presentation quickly
-- keep it grounded in real source material when grounding matters
-- present it like a teacher, not like a static slide deck
-- let the audience interrupt without breaking the flow
+## Classification First, Then Generation
 
-The architecture is intentionally modular so LLM, vision, STT, TTS, VAD, storage, and research backends can be swapped without rewriting the core product logic.
+The model first identifies the subject, audience, language, goal, deck mode,
+research needs and explicit coverage requirements. The original request preserves
+URLs and user settings independently so later stages cannot silently discard them.
 
-Active implementation tracking lives in [tasks.md](/Users/johanengwall/github_repos/slidespeech/tasks.md).
-This README is the product and status narrative, not the canonical task list.
-Competitive and product-reference notes live in [docs/product-landscape.md](/Users/johanengwall/github_repos/slidespeech/docs/product-landscape.md).
-The canonical target generation architecture lives in [docs/generation-pipeline-v2.md](/Users/johanengwall/github_repos/slidespeech/docs/generation-pipeline-v2.md).
-Deck-mode and slide-role inventory/mapping lives in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
-
-## What makes SlideSpeech interesting
-
-Most AI slide tools stop after deck generation.
-SlideSpeech treats generation as the first step in a longer teaching loop:
-
-1. classify the prompt into a structured presentation intent
-2. build a grounded plan and deck
-3. present the material progressively
-4. classify interruptions and questions at runtime
-5. answer in context
-6. resume from the right point
-
-That is the real product shape:
-
-- a generation system
-- a presentation runtime
-- a conversational teaching layer on top
-
-## Classification and pipeline
-
-Classification is central to the system.
-SlideSpeech tries to make explicit decisions early instead of relying on one giant prompt.
-
-The target Pipeline 2.0 artifacts are defined in [docs/generation-pipeline-v2.md](/Users/johanengwall/github_repos/slidespeech/docs/generation-pipeline-v2.md). Deck-mode and slide-role mapping lives in [docs/deck-and-slide-types.md](/Users/johanengwall/github_repos/slidespeech/docs/deck-and-slide-types.md).
-
-At generation time, the system classifies things like:
-
-- `presentationFrame`
-  - `subject`
-  - `organization`
-  - `mixed`
-- `deliveryFormat`
-  - `presentation`
-  - `workshop`
-- `contentMode`
-  - `descriptive`
-  - `procedural`
-- whether live web grounding is required
-
-At runtime, the system classifies learner turns into a small number of response modes so it can build only the context it actually needs.
-
-### End-to-end product flow
+Pipeline 2.0 passes typed, traceable artifacts between stages, rather than asking
+one large prompt to research, design, write and judge everything at once.
 
 ```mermaid
 flowchart TD
-    A["Prompt or source-aware request"] --> B["Intent classification"]
-    B --> C["Research planning"]
-    C --> D["Grounded evidence bundle"]
-    D --> E["Presentation plan"]
-    E --> F["Deck generation"]
-    F --> G["Slide enrichment and visuals"]
-    G --> H["Narration and review"]
-    H --> I["Interactive presenter runtime"]
-    I --> J["Learner interruption"]
-    J --> K["Turn classification"]
-    K --> L["Context-aware answer"]
-    L --> M["Resume from the right point"]
+    Request["Brief, URLs and optional settings"] --> Intent["Classify intent and coverage"]
+    Intent --> Research["Plan research and acquire sources"]
+    Research --> Facts["Select evidence, curate facts, review research"]
+    Facts --> Outline["Plan the story and allocate material per slide"]
+    Outline --> OutlineReview["Review the outline"]
+    OutlineReview --> Design["Select layouts and vision-check source images"]
+    Design --> Slides["Write slides, measure text fit, review"]
+    Slides --> Narration["Write the spoken story and humanizer review"]
+    Narration --> Publish["Final review and immutable publication"]
+    Publish --> Presenter["Browser presenter and server-side speech"]
+    Presenter --> Question["Text or confirmed voice question"]
+    Question --> Answer["Classify, answer and independently review"]
+    Answer --> Return["Speak the answer and contextual bridge"]
+    Return --> Presenter
 ```
 
-This is the core idea behind the codebase:
-
-- classify first
-- build the right context for that class of task
-- answer or generate once
-- validate locally
-- keep the runtime fast and recoverable
-
-## Current generation status
-
-SlideSpeech is not meant to be "one prompt in, one static deck out".
-The product goal is a grounded teaching pipeline with two modes:
-
-- a generation pipeline that turns a topic or source bundle into a teachable presentation
-- a runtime pipeline that presents, answers questions, adapts, and resumes in context
-
-### Pipeline 2.0 migration state
-
-The old generation path is intentionally being dismantled before V2 generation
-is rebuilt. Production deck generation is fail-closed until the typed V2 stages
-exist.
-
-The target runtime will do this:
-
-1. Classify the prompt into `PromptClassification`.
-2. Plan and execute research only when it is needed.
-3. Curate a traceable `FactBank`.
-4. Plan `DeckStrategy` and `SlidePlan[]` before any visible slide copy is
-   written.
-5. Select `SlideDesignSpec[]` from content needs.
-6. Generate `SlideDraft[]` from allocated facts and design specs.
-7. Generate presenter-style `NarrationScript[]`.
-8. Review each stage and fail closed when material or quality is insufficient.
-
-```mermaid
-flowchart TD
-    A["Prompt or source-aware request"] --> B["PromptClassification"]
-    B --> C["ResearchPlan"]
-    C --> D["ResearchBundle"]
-    D --> E["FactBank"]
-    E --> F["DeckStrategy"]
-    F --> G["SlidePlan[]"]
-    G --> H["SlideDesignSpec[]"]
-    H --> I["SlideDraft[]"]
-    I --> J["NarrationScript[]"]
-    I --> K["Stage reviews"]
-    J --> L["Publication review"]
-    K --> L
-```
-
-The critical rule is that validation protects publication. It must not repair a
-bad deck into something that merely looks publishable.
-
-## Current implementation reality
-
-The legacy semantic generator, recovery builders, and static fallback decks have
-been removed. Production deck generation is intentionally fail-closed while the
-typed Pipeline 2.0 stages are implemented.
-
-What currently works independently of new deck generation:
-
-- the web application and saved-presentation runtime
-- session state, interruption handling, and typed Q&A infrastructure
-- backend Faster Whisper STT and Piper TTS provider boundaries
-- hosted image resolution with renderer-safe visual fallback
-- PowerPoint export infrastructure
-
-What is being built now:
-
-- explicit V2 artifact schemas and stage diagnostics
-- agentic prompt classification, research planning, and fact curation
-- deck strategy and per-slide fact allocation before prose generation
-- layout-specific slide drafts and coherent deck-level narration
-
-The application must not claim successful generation until a complete
-`PublishablePresentation` has passed all V2 review gates.
-
-## Experimental note: Qwen3-TTS on Apple Silicon
-
-We tested `Qwen3-TTS` on Apple Silicon through an `MLX` runtime because voice quality was promising.
-On this Mac-based setup, that path was not stable enough to keep:
-
-- repeated Python crashes during `libmlx` / Metal device initialization
-- at least one kernel panic and full machine reboot during benchmarking
-
-For that reason, the local Mac workflow intentionally stays on `Piper` for now.
-If we revisit `Qwen3-TTS`, it should happen on a separate machine or with a different runtime stack rather than this current Apple Silicon + MLX combination.
-
-### Target pipeline
-
-The target architecture is faster, cleaner, and stage-driven.
-The goal is to generate a good deck from the right facts and plan, not to
-recover a weak deck after the fact.
-
-In plain terms, the target system should do this:
-
-1. Turn the prompt into a clean classification artifact.
-2. Build a fact bank from trusted sources when grounding is needed.
-3. Allocate facts and slide jobs before prose generation.
-4. Generate visible slides from allocated material and design specs.
-5. Generate presenter narration after slide drafts are stable.
-6. Keep question answering, STT, and TTS on a separate fast runtime path.
-
-```mermaid
-flowchart TD
-    A["Prompt or source bundle"] --> B["PromptClassification"]
-    B --> C["ResearchPlan"]
-    C --> D["FactBank"]
-    D --> E["DeckStrategy + SlidePlan[]"]
-    E --> F["SlideDesignSpec[]"]
-    F --> G["SlideDraft[]"]
-    G --> H["NarrationScript[]"]
-    G --> I["Review gates"]
-    H --> J["Publishable presentation"]
-    I --> J
-    J --> K["Fast interactive runtime"]
-    K --> L["Speech-to-text"]
-    K --> M["Grounded Q&A"]
-    K --> N["Text-to-speech"]
-```
-
-### What this means in practice
-
-- The current system is already architected around provider boundaries and grounded runtime behavior.
-- The target system keeps those boundaries, but removes hidden semantic fallback and post-hoc content repair.
-- We are not there yet. Generation should be treated as an unfinished subsystem until Pipeline 2.0 is implemented and validated.
-
-## Runtime Q&A pipeline
-
-Question answering should behave like a small agent runtime, not like a bag of presentation-specific special cases.
-
-### Target Q&A pipeline
-
-The intended runtime path is:
-
-1. Classify the learner turn with the LLM.
-2. Route the turn into a small set of answer modes.
-3. Build only the context that mode actually needs.
-4. Answer once.
-5. Resume from the right point after the answer.
-
-```mermaid
-flowchart TD
-    A["Learner question"] --> B["LLM turn classification"]
-    B --> C["Answer mode"]
-    C --> D["Current slide context"]
-    C --> E["Broader deck context"]
-    C --> F["Grounded source fetch when needed"]
-    D --> G["Single answer step"]
-    E --> G
-    F --> G
-    G --> H["Resume planning"]
-    H --> I["Continue presentation"]
-```
-
-The important design rule is that context-building follows classification, not the other way around.
-That keeps the runtime simpler, reduces unnecessary fetches, and makes the system easier to extend to more languages later.
-
-### Current answer modes
-
-The runtime is moving toward these modes:
-
-- `summarize_current_slide`
-- `general_contextual`
-- `grounded_factual`
-- `simplify`
-- `deepen`
-- `example`
-- `repeat`
-
-In practice this means:
-
-- current-slide summary questions should be answered from the current slide
-- broader conceptual questions should use current slide plus deck context
-- factual grounded questions may fetch source material before answering
-- resume planning should happen after the answer is known, not as a separate competing path
-
-This runtime is still under active refinement.
-The architecture is now moving toward a real classify -> route -> answer -> resume pipeline, but question quality and latency are not yet at the final bar.
-
-### Structured output findings
-
-Recent benchmarking against LM Studio with `qwen/qwen3.6-35b-a3b` showed a clear split between two structured-output strategies:
-
-- free JSON-in-text prompting was unreliable for small planner-style calls
-- the model often produced only `reasoning_content` and hit `finish_reason = "length"` without final `message.content`
-- this stayed true even when we tried:
-  - higher token budgets
-  - explicit thinking enabled
-  - explicit thinking disabled
-  - `/no_think`-style prompt prefixes
-
-- tool/function-style output was materially more reliable for the same planner task
-- with a required tool call, LM Studio returned structured tool arguments consistently enough to parse and validate
-
-In practice this means:
-
-- planner-like runtime classification should not rely on `chatText -> extract JSON -> parse`
-- answer generation can still remain free-text
-- critical structured runtime steps should move toward tool/function output when the serving layer supports it
-
-This matters for multilingual support too:
-
-- tool/function routing is more language-neutral than regex-heavy or prompt-fragile string parsing
-- it reduces the need for English-specific after-the-fact output repair
-
-## Current status
-
-Active implementation tracking now lives in [tasks.md](/Users/johanengwall/github_repos/slidespeech/tasks.md). This README is a product/status narrative, not the canonical task list.
-
-Available infrastructure:
-
-- web presenter runtime
-- per-slide narration generation
-- segmented narration with per-slide progress tracking
-- text-based conversational interruption flow
-- browser-native speech recognition when available, with backend audio upload as fallback
-- browser playback through a backend TTS provider for narration points and answers
-- server-side Piper TTS assets for browser-accessible narration and answers
-- structured visual slides with layouts, cards, callouts, flow blocks, and local illustration slots
-- provider-driven slide illustration pipeline with mock-local rendering and hosted web-image lookup
-- session state machine and narration-aware resume planning
-- LM Studio integration behind an `LLMProvider`
-- explicit external web research API and UI panel
-- file-based persistence for decks, sessions, and transcripts
-
-Temporarily disabled or pending under Pipeline 2.0:
-
-- user-facing topic/source to publishable deck generation
-- automatic web-grounded deck generation for time-sensitive topics
-- production `PromptClassification` -> `ResearchPlan` -> `FactBank` -> `SlidePlan[]` -> `SlideDraft[]`
-- publication of generated decks before V2 stage review passes
-
-Not implemented yet:
-
-- realtime voice runtime
-- document and PPTX ingestion
-- visual slide analysis
-- provenance-aware runtime use of external research
-- real backend STT provider beyond browser-native recognition and the mock server adapter
-
-## Product principles
-
-- provider interfaces first
-- no vendor logic in core orchestration
-- internal deck JSON is the runtime presentation state; Pipeline 2.0 documents define generation architecture
-- simple, testable modules over clever but fragile abstractions
-- explicit state transitions
-- explicit provenance when external knowledge is used
-
-## Current-topic grounding
-
-Current-topic grounding is a target behavior for Pipeline 2.0, not an active
-publishable-deck path while generation is fail-closed.
-
-- examples: `latest`, `current`, `today`, `recent`, year-based topics like `2026`
-- hosted web research should run before generation when grounding is required
-- curated facts and source URLs should be passed into V2 fact curation and slide planning
-- resulting decks should preserve explicit source provenance
-
-If hosted web research is required but unavailable, generation should fail
-instead of silently pretending the model has fresh facts.
-
-## Architecture
-
-```text
-apps/
-  api/        HTTP API, provider wiring, session orchestration
-  web/        Next.js UI for generation, presenting, and debugging
-
-packages/
-  core/       state machine, planners, conversation runtime, resume logic
-  providers/  LLM, web research, storage, export, mock speech/vision adapters
-  types/      domain models, zod schemas, provider contracts
-  ui/         shared UI components
-```
-
-Core product IP lives in `packages/core`.
-Stable contracts live in `packages/types`.
-
-This is what keeps migrations cheap:
-
-- LM Studio now, vLLM later
-- local speech stack now, hosted speech later
-- file storage now, SQLite/Postgres later
-
-without changing the teaching runtime itself.
-
-## Conversation-first runtime
-
-The runtime is designed so learner input is treated as conversation first, command second.
-
-A user turn can produce:
-
-- a natural assistant response
-- inferred learner needs such as confusion, example, deepen, repeat
-- runtime effects such as pause, back, restart slide, adapt detail level
-- a resume plan
-
-That lets turns like:
-
-`I do not get why the processing step matters here`
-
-behave like a real teaching interruption instead of a hardcoded button command.
-
-## Provider model
-
-Main interfaces live in [`packages/types/src/providers.ts`](packages/types/src/providers.ts).
-
-Key interfaces:
-
-- `LLMProvider`
-- `VisionProvider`
-- `SpeechToTextProvider`
-- `TextToSpeechProvider`
-- `VoiceActivityProvider`
-- `WebResearchProvider`
-- `DeckExporter`
-- `DeckIngestionProvider`
-- `DeckRepository`
-- `SessionRepository`
-- `TranscriptRepository`
-
-Main domain models live in [`packages/types/src/domain.ts`](packages/types/src/domain.ts).
-
-Key models:
-
-- `Deck`
-- `Slide`
-- `SlideNarration`
-- `Session`
-- `UserInterruption`
-- `ResumePlan`
-- `PedagogicalProfile`
-- `TranscriptTurn`
-
-## Web research
-
-Web augmentation is implemented as an explicit capability, not a hidden side effect.
-
-Available endpoints:
-
-- `GET /api/research/health`
-- `POST /api/research/query`
-- `POST /api/research/fetch`
-
-Current behavior:
-
-- search for external sources
-- fetch selected pages
-- summarize findings
-- keep this separate from deck-grounded teaching
-
-This is deliberate. The runtime should know when it is using:
-
-- deck-grounded knowledge
-- document-grounded knowledge
-- externally augmented knowledge
-
-instead of blending them invisibly.
-
-## Local development
-
-1. Install dependencies:
+- **Meaning belongs to the model.** Relevance, factual coverage, narrative planning
+  and semantic review are model decisions, not topic-specific regex rules.
+- **Integrity belongs to code.** Schemas, source references, layout geometry,
+  deadlines, queue limits and cancellation are deterministic.
+- **No generic recovery deck.** Unsupported, malformed or rejected output stops
+  at an explicit failed stage. V2 generation and Q&A do not switch to mock content.
+- **Bounded revision, not endless repair.** Actionable feedback returns to the
+  responsible stage within its attempt budget. Reviews do not secretly rewrite copy.
+- **A story, not a bullet reading.** Every deck has an introduction and conclusion;
+  narration is written and reviewed as a connected presentation before publication.
+
+The [pipeline specification](docs/generation-pipeline-v2.md) is canonical.
+The [architecture map](docs/generation-architecture-map.md) shows implemented paths;
+[tasks.md](tasks.md) tracks completed work and outstanding acceptance checks.
+
+## What You Can Do
+
+| Capability | Current behavior |
+| --- | --- |
+| Create a presentation | Start with a subject, audience and optional source URLs. The connected run includes slides, narration and publication review. |
+| Control the result | Advanced settings offer Paper, Editorial or Signal, a slide-count target, speaking-time target and required web research. |
+| Follow generation | See actual stages, attempts, queue position, elapsed time and an approximate range when comparable successful runs exist. Cancel explicitly; errors stay visible. |
+| Present in the browser | Play server-generated narration, navigate slides, inspect the script and use fullscreen. Audio is prepared on first playback. |
+| Ask questions | Type a question or record one, edit and confirm its transcript, then use the same grounded Q&A pipeline. |
+| See answer progress | A cancellable dialog shows elapsed time and real Understand, Answer and Review stages, not fabricated percentages. |
+| Return naturally | Hear a reviewed answer and bridge; when continuation is enabled, restart at the interrupted passage boundary rather than mid-word. |
+| Reuse your work | Search, reopen and archive saved presentations in the shared Library without generating them again. |
+
+### Slides With Structure And Source Images
+
+The renderer supports **20 layout roles across three design systems**. Paper,
+Editorial and Signal differ in composition, typography, hierarchy and image
+placement, not just palette. The agent chooses layouts for the material and writes
+to measured text areas. The layouts are code-defined; the story, copy, narration
+and content-driven layout selection are model-generated. This is not arbitrary
+model-generated HTML or slide code.
+
+Research discovers image candidates alongside source text. The model selects
+promising images and inspects their actual pixels before inclusion. Publisher
+logos and decorative filler are not substitutes for relevant subject images.
+The current image pass selects at most four images per deck; it does not promise
+an image on every slide. Image relevance review does not establish reuse rights.
+
+![An actual generated SpongeBob creation-history presentation with a source image](docs/screenshots/presenter.jpg)
+
+### Questions Stay Connected To The Presentation
+
+Q&A keeps the published request, evidence, facts, slides and narration available.
+The model classifies relevance and evidence sufficiency, writes an answer and
+return transition, then independently reviews them. It can also ask for
+clarification, explain an evidence gap or redirect an off-topic question.
+Rejected answers remain errors, not generic text read from a slide.
+
+Recording pauses playback immediately. Rolling backend transcripts can be edited
+before submission. Piper speaks approved answers for every browser user; this
+does not depend on a voice installed on the listener's computer. The answer stays
+readable after the temporary working dialog closes.
+
+![Live question processing with elapsed time, stage feedback and cancellation](docs/screenshots/question-progress.jpg)
+
+### A Library You Can Return To
+
+Saved V2 publications include their scenes, sources and approved spoken scripts.
+Archiving removes a presentation from the active collection without permanently
+deleting its stored file. The Library does not mix in the retired V1 collection.
+
+![The Library filtered to two saved educational presentations](docs/screenshots/library.jpg)
+
+These are screenshots of the running application, not design mockups. The slides
+shown are saved generated examples, not a guarantee of factual accuracy on every
+topic. Capture details are in [docs/screenshots](docs/screenshots/README.md).
+
+## Current Limits
+
+- **Generation remains model- and source-dependent.** Difficult research and
+  lengthy structured responses can still fail. A successful stage probe is not
+  the same as a complete, factually accepted presentation. Review important claims
+  before presenting them to an audience.
+- **English is the primary validation language.** The contracts are language-aware,
+  but equivalent multilingual quality and speech support are not yet established.
+- **Hands-free Live Voice is not connected.** Recorded questions are implemented;
+  physical-microphone, noise/echo and mobile-browser acceptance remain incomplete.
+- **Q&A does not yet perform fresh web research.** It uses the published material
+  and permitted model knowledge, with explicit handling of missing evidence.
+- **V2 PowerPoint download is not connected in the user journey.** An editable
+  PPTX renderer and developer proof scripts exist, but the current V2 player does
+  not offer a working download. Some Studio copy still mentions download; this is
+  ahead of the implementation. The legacy export route is not a V2 substitute.
+- **Shared library, not private accounts.** Trusted testers share the same saved
+  presentations and archive controls. Jobs and queues are process-local; an API
+  restart loses active jobs, while saved publications and traces remain on disk.
+- **Not production-hardened.** Broader end-to-end acceptance, dependency/security
+  maintenance and deployment hardening are still required before public access.
+
+## Run Locally
+
+### Prerequisites
+
+- Node.js 22 and npm workspaces (the current local setup uses Node 22.16).
+- An OpenAI-compatible model server with structured-output and vision support.
+- Python virtual environments for Piper and Faster Whisper if you want speech.
+- Internet access for web research and initial model/browser downloads.
+
+The current live setup uses **`qwen/qwen3.8-27b` through LM Studio**, with roughly
+50k context and two concurrent inference slots. V2 explicitly requests **low
+reasoning effort**. Model ID, context capacity and concurrency must match the
+model actually loaded in your server; a different model requires validation.
+
+### Install And Configure
 
 ```bash
-npm install
-```
-
-2. Copy environment defaults if needed:
-
-```bash
+npm ci
+npx playwright install chromium --only-shell
 cp .env.example .env
 ```
 
-3. Start the app:
+Keep install scripts enabled: `postinstall` applies a pinned PptxGenJS package
+serialization correction. See [dependency corrections](patches/README.md).
+Chromium is used by source acquisition and measured slide rendering.
+
+Set the actual model and speech providers in `.env`:
+
+```dotenv
+LLM_PROVIDER=lmstudio
+LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+LMSTUDIO_MODEL=qwen/qwen3.8-27b
+LLM_TIMEOUT_MS=180000
+LLM_FALLBACK_TO_MOCK_ON_ERROR=false
+WEB_RESEARCH_PROVIDER=hosted
+STT_PROVIDER=faster-whisper
+TTS_PROVIDER=piper
+```
+
+`.env.example` leaves speech providers at `mock` for scaffolding; copying it alone
+does not configure real audio. The V2 image pass uses the configured generation
+model's vision capability, not the legacy illustration/vision mock settings.
+V2 does not use the legacy mock-LLM fallback switch to recover failed generations.
+
+### Install Speech
+
+The following versions match the current working local speech environments:
+
+```bash
+python3.11 -m venv .venv-tts
+.venv-tts/bin/python -m pip install piper-tts==1.4.2
+
+python3.12 -m venv .venv-stt
+.venv-stt/bin/python -m pip install faster-whisper==1.2.1
+
+npm run setup:tts
+```
+
+The default Piper voice is `en_US-hfc_male-medium`; setup also downloads Bryce and
+Lessac medium. Voice assets live under `models/tts/`. The setup script downloads
+voices, not the Python runtime. Faster Whisper defaults to `base` with `int8`
+compute and downloads its model on first use. Both run on the server; listeners
+only need a browser. Use the Python/model paths in `.env.example` to override them.
+
+The earlier experimental Qwen3-TTS/MLX path is not active. It was removed from the
+local Mac workflow following repeated crashes during testing; Piper remains the
+supported connected TTS provider.
+
+### Start
 
 ```bash
 npm run dev
 ```
 
-`npm run dev` and `npm run dev:api` automatically bootstrap the default server-side Piper voice if it is missing, so browser users of that backend hear the same narration without needing local browser TTS setup.
+Open [Studio](http://localhost:3000), then generate a presentation or visit
+[Your library](http://localhost:3000/library). `npm run dev` checks/downloads Piper
+voice assets before starting. Separate commands are `npm run dev:api` and
+`npm run dev:web`.
 
-If you want to prefetch the Piper assets explicitly:
+The web app uses port **3000**, the API **4000**, and the example model server
+**1234**. Web and API bind to loopback. Browser requests use same-origin `/api`;
+the web server proxies to the API. Do not set a browser-facing localhost API URL
+for remote visitors. `SLIDESPEECH_API_ORIGIN` is an optional server-side override.
 
-```bash
-npm run setup:tts
-```
-
-4. Open:
-
-- web: [http://localhost:3000](http://localhost:3000)
-- api: [http://localhost:4000](http://localhost:4000)
-
-## Stable local ports
-
-Use fixed ports during development:
-
-- web: `3000`
-- api: `4000`
-- LM Studio: `1234`
-
-For a fixed-port API smoke test:
+For the built web app, keep the API running separately:
 
 ```bash
-npm run verify:api
+npm run build --workspace @slidespeech/web
+npm run start --workspace @slidespeech/web
 ```
 
-## LM Studio
+## Share With A Few Friends
 
-LM Studio is supported as an OpenAI-compatible backend, but it is not treated as the center of the architecture.
-
-Example config:
+After configuring ngrok on the host and starting the app:
 
 ```bash
-LLM_PROVIDER=lmstudio
-ILLUSTRATION_PROVIDER=mock
-LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-LMSTUDIO_MODEL=your-loaded-model
-LLM_TIMEOUT_MS=180000
-LLM_FALLBACK_TO_MOCK_ON_ERROR=false
+npm run share:private
 ```
 
-The LM Studio adapter lives in [`packages/providers/src/llm/lmstudio-llm-provider.ts`](packages/providers/src/llm/lmstudio-llm-provider.ts).
+The launcher requires password protection on every path, including API and audio.
+It creates local credentials in the Git-ignored `.local/ngrok/access.json`; share
+the HTTPS address and credentials separately. The app itself has no account/login
+system, so keep local services loopback-only. See [private sharing](docs/private-sharing.md)
+for setup, credential rotation, privacy implications and acceptance checks.
 
-## Web research provider
+One generation and one Q&A request may run concurrently, with separate bounded
+queues of four waiting requests each. Transcription is also serialized and
+cancellable. This fits the current two-slot model setup and protects a small
+shared server from overlapping work; it is not distributed multi-user scaling.
 
-The project supports both mock and hosted web research providers.
-
-Example config:
-
-```bash
-WEB_RESEARCH_PROVIDER=mock
-WEB_RESEARCH_TIMEOUT_MS=15000
-```
-
-or
-
-```bash
-WEB_RESEARCH_PROVIDER=hosted
-WEB_RESEARCH_TIMEOUT_MS=15000
-```
-
-## Testing
-
-Useful commands:
+## Development And Validation
 
 ```bash
 npm run typecheck
 npm test
 npm run build --workspace @slidespeech/web
-npm run verify:api
+npm run arch:graph
+npm run arch:check
+git diff --check
 ```
 
-## Roadmap
+The current regression suite contains **518 tests**. Automated checks cover
+artifact boundaries, rejection and cancellation, bounded revisions, research
+transport, image handling, text fit, publication, speech, queues and streamed
+question progress. They do not prove factual or conversational quality; live
+model runs and listening checks are tracked separately in [tasks.md](tasks.md).
 
-### Next
+Generation traces are written under `data/generation-runs/`; saved publications
+are under `data/published-v2/`. Both are local, Git-ignored data. Preserve them if
+you need reproducible investigations, and avoid sharing traces containing private
+briefs or source material.
 
-- document and PPTX ingestion
-- real backend STT provider
+For a controlled downstream evaluation against recorded artifacts:
 
-### After that
+```bash
+node --import tsx scripts/eval_generation_v2_recorded.ts outline data/generation-runs/<run-id>
+node --import tsx scripts/eval_generation_v2_recorded.ts slides data/generation-runs/<run-id>
+```
 
-- provenance-aware runtime use of external research
-- stronger pedagogy engine
-- visual slide analysis
+These reuse recorded upstream material; they are not fresh end-to-end research
+tests. Additional stage-specific evaluation scripts live in `scripts/`.
 
-## Recommended files to read first
+## Code Map
 
-- [`docs/architecture-plan.md`](docs/architecture-plan.md)
-- [`packages/core/src/session-service.ts`](packages/core/src/session-service.ts)
-- [`packages/core/src/conversation-turn-engine.ts`](packages/core/src/conversation-turn-engine.ts)
-- [`packages/core/src/resume-planner.ts`](packages/core/src/resume-planner.ts)
-- [`apps/api/src/server.ts`](apps/api/src/server.ts)
-- [`apps/web/components/presentation-workbench.tsx`](apps/web/components/presentation-workbench.tsx)
+| Location | Responsibility |
+| --- | --- |
+| `apps/web` | Studio, Library, presenter, recording and visible job/question progress. |
+| `apps/api/src/services/generation-v2` | Runtime wiring, queues, persisted publications, speech and transcription. |
+| `packages/core/src/generation/v2` | Named pipeline stages, artifact handoffs, bounded review/revision and Q&A. |
+| `packages/providers/src/generation-v2` | Structured model calls, research acquisition, source images, rendering and storage. |
+| `packages/types/src/generation-v2` | Artifact schemas, provider contracts, slide layout catalogue and shared scene geometry. |
+| `packages/ui` | Shared slide-scene rendering. |
 
-## License
+Start with the [canonical pipeline](docs/generation-pipeline-v2.md),
+[implementation map](docs/generation-architecture-map.md),
+[deck/slide inventory](docs/deck-and-slide-types.md) and [task tracker](tasks.md).
+[Product landscape notes](docs/product-landscape.md) record inspiration and
+comparisons, not current product commitments. Some retained infrastructure serves
+legacy saved sessions; it is not an alternative V2 generation path.
 
-No license has been added yet.
+## License And Assets
+
+No project license has been added. Third-party dependencies, models and images
+have their own terms. Bundled Source Sans 3 and Source Serif 4 font licenses are
+included in [the font directory](packages/providers/assets/fonts/README.md).
+Source-image provenance is retained, but image rights remain unverified; do not
+treat a generated presentation or screenshot as a license to redistribute them.
