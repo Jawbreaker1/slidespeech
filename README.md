@@ -1,4 +1,9 @@
-# SlideSpeech
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/slidespeech-dark.svg">
+    <img src="docs/brand/slidespeech.svg" alt="SlideSpeech" width="360">
+  </picture>
+</h1>
 
 **Turn a brief into a presentation you can have a conversation with.**
 
