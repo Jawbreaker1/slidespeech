@@ -12,17 +12,19 @@ and presents it in your browser. Ask a question by text or recorded voice,
 hear the answer, and return to the presentation with a contextual transition.
 The goal is more than a generated deck: a presenter that can explain its material.
 
-[![Watch the SlideSpeech promo — 35 seconds, sound on](docs/media/slidespeech-promo.jpg)](docs/media/slidespeech-promo.mp4)
+**See SlideSpeech in action · 35 seconds · Sound on.**
 
-**[Watch the 35-second promo](docs/media/slidespeech-promo.mp4)** · Sound on.
+https://github.com/user-attachments/assets/fae13c1c-2513-4020-8aee-b7ec92d831fa
+
+[Download the video](https://raw.githubusercontent.com/Jawbreaker1/slidespeech/main/docs/media/slidespeech-promo.mp4)
 
 <details>
 <summary>Music credit</summary>
 
-Callin’ by Peyruis | https://soundcloud.com/peyruis  
-Royalty Free Music by https://www.free-stock-music.com  
-Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)  
-https://creativecommons.org/licenses/by/3.0/deed.en_US  
+Callin’ by Peyruis | https://soundcloud.com/peyruis<br>
+Royalty Free Music by https://www.free-stock-music.com<br>
+Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)<br>
+https://creativecommons.org/licenses/by/3.0/deed.en_US<br>
 Music excerpted, rearranged and mixed with speech for this SlideSpeech film.
 
 </details>
