@@ -12,6 +12,21 @@ and presents it in your browser. Ask a question by text or recorded voice,
 hear the answer, and return to the presentation with a contextual transition.
 The goal is more than a generated deck: a presenter that can explain its material.
 
+[![Watch the SlideSpeech promo — 35 seconds, sound on](docs/media/slidespeech-promo.jpg)](docs/media/slidespeech-promo.mp4)
+
+**[Watch the 35-second promo](docs/media/slidespeech-promo.mp4)** · Sound on.
+
+<details>
+<summary>Music credit</summary>
+
+Callin’ by Peyruis | https://soundcloud.com/peyruis  
+Royalty Free Music by https://www.free-stock-music.com  
+Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)  
+https://creativecommons.org/licenses/by/3.0/deed.en_US  
+Music excerpted, rearranged and mixed with speech for this SlideSpeech film.
+
+</details>
+
 **Current status: working Pipeline 2.0 prototype for small, trusted test groups.**
 Generation, saved presentations, server-side speech and reviewed Q&A are connected.
 Quality and reliability still need broader validation. This is not a public,
